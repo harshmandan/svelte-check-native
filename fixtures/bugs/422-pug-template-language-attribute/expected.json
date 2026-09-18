@@ -1,0 +1,29 @@
+{
+    "errors": [
+        {
+            "file": "src/HtmlString.svelte",
+            "line": 1,
+            "column": 8,
+            "code": 2322
+        },
+        {
+            "file": "src/HtmlString.svelte",
+            "line": 1,
+            "column": 8,
+            "code": 6133
+        },
+        {
+            "file": "src/HtmlString.svelte",
+            "line": 4,
+            "column": 6,
+            "code": 2304
+        },
+        {
+            "file": "src/TypeAttribute.svelte",
+            "line": 2,
+            "column": 8,
+            "code": 2322
+        }
+    ],
+    "_note": "Pug mode follows svelte-check's language lookup on the first top-level <template> tag: `lang`, else `type`, with `text/` stripped, so type=\"text/pug\" drops the diagnostics inside the tag's content and the file's unused-name diagnostics, while a <template lang=\"pug\"> spelled inside an {@html} string does not switch the file to pug. The start tag lies outside the content range, so its attributes still check (svelte-check --tsgo with svelte 5.55 reports a TS2353 on `type` there through the real element typings)."
+}

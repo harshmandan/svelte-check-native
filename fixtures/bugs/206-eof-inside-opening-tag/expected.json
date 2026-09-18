@@ -1,11 +1,4 @@
 {
-    "errors": [
-        {
-            "file": "input.svelte",
-            "line": 4,
-            "column": 33,
-            "code": "unexpected-eof"
-        }
-    ],
-    "_note": "A file truncated inside an opening tag (`<div class=\"x\"` at EOF) must surface a parse error — upstream's compiler fires `unexpected_eof` (\"Unexpected end of input\") and svelte-check reports it as a svelte-source error. finish_opening_tag used to propagate None at EOF without recording anything, so the truncated element silently vanished and the file checked clean (exit 0) while upstream exits 1."
+    "errors": [],
+    "_note": "The file ends inside an opening tag, so the Svelte compiler's parse() throws. svelte-check --tsgo leaves a component whose parse fails out of the run entirely (svelte2tsx runs in strict mode), so nothing is reported for it."
 }

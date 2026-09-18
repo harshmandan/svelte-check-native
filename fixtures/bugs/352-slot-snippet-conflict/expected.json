@@ -1,0 +1,11 @@
+{
+    "errors": [
+        { "file": "src/AfterMixedHandlers.svelte", "line": 4, "column": 28, "code": "mixed_event_handler_syntaxes" },
+        { "file": "src/Basic.svelte", "line": 3, "column": 0, "code": "slot_snippet_conflict" },
+        { "file": "src/CustomElementDollarSlots.svelte", "line": 4, "column": 13, "code": "slot_snippet_conflict" },
+        { "file": "src/DollarSlots.svelte", "line": 2, "column": 16, "code": "slot_snippet_conflict" },
+        { "file": "src/LatestOfFirstName.svelte", "line": 6, "column": 0, "code": "slot_snippet_conflict" },
+        { "file": "src/Nested.svelte", "line": 4, "column": 13, "code": "slot_snippet_conflict" }
+    ],
+    "_note": "Once the walks are done, a component with a {@render} tag may not also use slots: a <slot> element (not counted for customElement components) or a $$slots reference (counted everywhere). The error points at the latest <slot> of the first slot name seen, else at the first `$$slot` in the source, and comes after mixed_event_handler_syntaxes. Verified against svelte-check 4.4.6."
+}

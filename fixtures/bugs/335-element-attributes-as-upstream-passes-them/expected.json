@@ -1,0 +1,66 @@
+{
+    "errors": [
+        {
+            "file": "src/s2-08/A.svelte",
+            "line": 1,
+            "column": 6,
+            "code": 2561
+        },
+        {
+            "file": "src/s2-07/A.svelte",
+            "line": 1,
+            "column": 5,
+            "code": "attribute_invalid_name"
+        },
+        {
+            "file": "src/s2-07/A.svelte",
+            "line": 1,
+            "column": 5,
+            "code": 2353
+        },
+        {
+            "file": "src/s2-07/A.svelte",
+            "line": 1,
+            "column": 15,
+            "code": 2552
+        },
+        {
+            "file": "src/s2-07/A.svelte",
+            "line": 2,
+            "column": 5,
+            "code": 2353
+        },
+        {
+            "file": "src/s2-25/A.svelte",
+            "line": 1,
+            "column": 10,
+            "code": "slot_attribute_invalid"
+        },
+        {
+            "file": "src/s2-25/A.svelte",
+            "line": 2,
+            "column": 5,
+            "code": 2353
+        },
+        {
+            "file": "src/s2-21/A.svelte",
+            "line": 2,
+            "column": 13,
+            "code": 2353
+        },
+        {
+            "file": "src/s2-20/A.svelte",
+            "line": 1,
+            "column": 29,
+            "code": 2353
+        }
+    ],
+    "warnings": [
+        {
+            "file": "src/s2-20/A.svelte",
+            "line": 1,
+            "column": 16,
+            "code": "svelte_element_invalid_this"
+        }
+    ]
+}

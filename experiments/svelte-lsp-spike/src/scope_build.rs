@@ -45,7 +45,7 @@ pub fn prepare(
         .map_err(|e| format!("writing narrow tsconfig: {e}"))?;
     let t_session = std::time::Instant::now();
     let layout = svn_typecheck::CacheLayout::for_workspace(&project.workspace);
-    let session = svn_typecheck::CheckSession::new(&project.workspace, None)
+    let session = svn_typecheck::CheckSession::new(&project.workspace)
         .map_err(|e| format!("cache setup: {e}"))?;
     let session_ms = t_session.elapsed();
     let mut emit_ms = std::time::Duration::ZERO;

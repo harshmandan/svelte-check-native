@@ -62,6 +62,14 @@ declare function __sveltets_2_store_get<Store extends __SvnStore<any> | undefine
 ): Store extends __SvnStore<infer T> ? T : Store;
 
 /**
+ * `$$slots`: one `boolean` per slot the template declares, keyed by the
+ * slot names passed in (`{ name: '' }`), as upstream's
+ * `__sveltets_2_slotsType`.
+ */
+declare function __svn_slots_type<Slots, Key extends keyof Slots>(slots: Slots): Record<Key, boolean>;
+declare function __sveltets_2_slotsType<Slots, Key extends keyof Slots>(slots: Slots): Record<Key, boolean>;
+
+/**
  * Surface a type-only template reference inside the type-check function
  * so TS6196 doesn't fire on `import type { Foo }` that's only used in a
  * `<Component prop={value as Foo} />`-style assertion. The body is a
@@ -69,62 +77,46 @@ declare function __sveltets_2_store_get<Store extends __SvnStore<any> | undefine
  */
 declare function __svn_type_ref<T>(): T;
 
-// SVELTE-4-COMPAT: the `ConstructorOfATypedSvelteComponent` type is a
-// Svelte-4 typing convention from upstream svelte-check's shims. User
-// code in mid-migration codebases types props that hold component
-// constructors as `export let icon: ConstructorOfATypedSvelteComponent;`
-// — the prop receives the class-form component, which consumers
-// render via `<svelte:component this={icon} />`. Svelte 5 replaces the
-// pattern with `Component<Props>` typing, but until the migration is
-// complete we mirror upstream's declaration so tsgo resolves the name
-// at the use site rather than firing TS2304.
-//
-// The shape mirrors upstream verbatim — `$$prop_def`, `$$events_def`,
-// `$$slot_def` are compile-time-only fields that never exist at
-// runtime; they carry per-component Props / Events / Slots types for
-// the Svelte-4 class-form component world. Projects can inspect the
-// property types via `ComponentProps<typeof X>` / `ComponentEvents<…>`
-// etc. without pulling DOM / browser bindings.
+// SVELTE-4-COMPAT: `ConstructorOfATypedSvelteComponent` is the ambient
+// name upstream's shims give "any class-form Svelte component". User
+// code in mid-migration codebases types props with it
+// (`export let icon: ConstructorOfATypedSvelteComponent;`), and it is
+// the class-form half of `__svn_ensure_component`'s constraint. Both
+// declarations are upstream's, verbatim: the `$$prop_def` /
+// `$$events_def` / `$$slot_def` fields are compile-time-only carriers
+// of a class component's Props / Events / Slots.
 /**
- * @internal This is for type checking capabilities only and does not
- * exist at runtime. Don't use this property.
+ * Ambient type only used for intellisense, DO NOT USE IN YOUR PROJECT
  */
 declare type ATypedSvelteComponent = {
-    /** @internal */
+    /**
+     * @internal This is for type checking capabilities only
+     * and does not exist at runtime. Don't use this property.
+     */
     $$prop_def: any;
-    /** @internal */
+    /**
+     * @internal This is for type checking capabilities only
+     * and does not exist at runtime. Don't use this property.
+     */
     $$events_def: any;
-    /** @internal */
+    /**
+     * @internal This is for type checking capabilities only
+     * and does not exist at runtime. Don't use this property.
+     */
     $$slot_def: any;
-    $set(props?: any): void;
-    $on(event: string, handler: ((e: any) => any) | null | undefined): () => void;
-    $destroy(): void;
-    $capture_state(): void;
-    $inject_state(): void;
+
+    $on(event: string, handler: any): () => void;
 };
 
 /**
- * Constructor type for Svelte-4-style class-form components. Users
- * type props as `ConstructorOfATypedSvelteComponent` when the prop
- * carries a `<Component />` to dynamically render.
+ * Ambient type only used for intellisense, DO NOT USE IN YOUR PROJECT.
  *
- * The strict Svelte-4 shape (`new (args: { target, props? }) =>
- * ATypedSvelteComponent`) doesn't accept Svelte-5-compiled component
- * imports (tabler-icons, lucide-svelte, phosphor-svelte, etc.)
- * because those declare `Component<Props>` function types. Keeping
- * the strict shape fires dozens of false-positive TS2322 assignment
- * errors on any Svelte-4 codebase that imports a Svelte-5 icon
- * library.
- *
- * Widening to a broad "any component constructor" shape matches
- * upstream svelte-check's effective behavior (where the type only
- * surfaces inside `__sveltets_2_ensureComponent`'s union, which
- * accepts both forms). Users still get the name resolved at the use
- * site; the more specific type check was a false-positive
- * generator, not a real safety net — real type errors come from the
- * component's own props declaration, not from this top-level holder.
+ * If you're looking for the type of a Svelte Component, use `SvelteComponent` and `ComponentType` instead.
  */
-declare type ConstructorOfATypedSvelteComponent = any;
+declare type ConstructorOfATypedSvelteComponent = new (args: {
+    target: any;
+    props?: any;
+}) => ATypedSvelteComponent;
 
 // SVELTE-4-COMPAT: additive props-type widening for Svelte-4 components.
 // A parent's `<Foo on:close={fn}>` is rewritten by our analyze pass to
@@ -236,6 +228,56 @@ declare type __SvnAllProps = { [index: string]: any };
 // users of Svelte 4 components to not pass undeclared attrs — same
 // strictness as upstream.
 
+/**
+ * Default export of a component that is not a plain Svelte 5
+ * `Component`: constructible like a Svelte 4 class and callable like a
+ * Svelte 5 function component. Upstream's
+ * `__sveltets_2_IsomorphicComponent`, verbatim. The call signature
+ * takes the props plus the `$$events` / `$$slots` carriers — only
+ * those two when the component declares no props at all.
+ */
+interface __SvnIsomorphicComponent<
+    Props extends Record<string, any> = any,
+    Events extends Record<string, any> = any,
+    Slots extends Record<string, any> = any,
+    Exports = {},
+    Bindings = string,
+> {
+    new (
+        options: import('svelte').ComponentConstructorOptions<Props>,
+    ): import('svelte').SvelteComponent<Props, Events, Slots> & { $$bindings?: Bindings } & Exports;
+    (
+        internal: unknown,
+        props: Props extends Record<string, never>
+            ? { $$events?: Events; $$slots?: Slots }
+            : Props & { $$events?: Events; $$slots?: Slots },
+    ): Exports & { $set?: any; $on?: any };
+    z_$$bindings?: Bindings;
+}
+type __sveltets_2_IsomorphicComponent<
+    Props extends Record<string, any> = any,
+    Events extends Record<string, any> = any,
+    Slots extends Record<string, any> = any,
+    Exports = {},
+    Bindings = string,
+> = __SvnIsomorphicComponent<Props, Events, Slots, Exports, Bindings>;
+
+/**
+ * Props / slots of a legacy JavaScript component as consumers see them.
+ * An untyped `export let x = undefined` has type `undefined`, which
+ * upstream (`SveltePropsAnyFallback` / `SvelteSlotsAnyFallback`,
+ * applied by `__sveltets_2_partial`) widens to `any` so any value can
+ * be passed. `__SvnExpand` is upstream's `Expand`, which flattens the
+ * result into a plain object type.
+ */
+type __SvnExpand<T> = T extends infer O ? { [K in keyof O]: O[K] } : never;
+type __SvnPropsAnyFallback<Props> = {
+    [K in keyof Props]: Props[K] extends never ? never : Props[K] extends undefined ? any : Props[K];
+};
+type __SvnSlotsAnyFallback<Slots> = {
+    [K in keyof Slots]: { [S in keyof Slots[K]]: Slots[K][S] extends undefined ? any : Slots[K][S] };
+};
+
 // SVELTE-4-COMPAT: `$$Generic<T>` is Svelte 4's pre-Svelte-5-generics-attr
 // syntax for declaring a generic type parameter on a component — written
 // as `type T = $$Generic<any>`. The syntax has no Svelte 5 equivalent;
@@ -265,15 +307,11 @@ declare type $$Generic<T = any> = T;
 declare function __svn_invalidate<T>(fn: () => T): T;
 
 // @@STATE_AMBIENTS_BEGIN@@
-// `$state` ambient declarations. Stripped when real Svelte 5 is
-// installed because its globals declare the same base overloads and
-// namespace members. Keeping both sets poisons overload resolution:
-// a mismatch reports TS2769 "No overload matches this call" instead
-// of the direct assignability diagnostic. Other rune ambients
-// ($derived, $effect, etc.) aren't stripped because either their
-// single-overload forms are immune to the duplication or our shim
-// carries extra overloads (e.g. `$props<T = any>()`) that Svelte's
-// simpler declarations don't provide.
+// Rune ambient declarations. Stripped when real Svelte 5 is installed,
+// whose own globals declare them: upstream relies on those alone, and
+// keeping both turns every rune into a two-overload set, so a mismatch
+// reports TS2769 "No overload matches this call" instead of the direct
+// assignability diagnostic.
 /** `$state<T>(initial?)` declares reactive state. Macro.
  *
  * Two overloads:
@@ -311,7 +349,6 @@ declare namespace $state {
     function raw<T>(): T | undefined;
     function snapshot<T>(value: T): T;
 }
-// @@STATE_AMBIENTS_END@@
 
 /** `$derived(expression)` re-evaluates whenever its dependencies change. */
 declare function $derived<T>(expression: T): T;
@@ -357,6 +394,7 @@ declare namespace $inspect {
  * Constraint matches real svelte: the parameter must extend `HTMLElement`.
  */
 declare function $host<El extends HTMLElement = HTMLElement>(): El;
+// @@STATE_AMBIENTS_END@@
 
 // Internal helpers emitted by svelte-check-native into generated `.svelte.ts`
 // files. Declared here so the generated code type-checks. The `__svn_*`
@@ -387,20 +425,24 @@ type __SvnEachItem<T> = 0 extends 1 & T
 
 /**
  * Value-level item of an `{#each}` source, used to resolve a binding
- * exposed through a `<slot>`. Mirrors upstream's
- * `__sveltets_2_unwrapArr<T>(arr: ArrayLike<T>): T`, widened to the
- * iterables Svelte 5 accepts; both names are declared so overlay-diff
- * tooling resolves either side.
+ * exposed through a `<slot>`. Same signature as upstream's
+ * `__sveltets_2_unwrapArr`: only an array-like source yields its item
+ * type; any other source (a `Set`, a `Map`) infers `unknown`, so the
+ * slot binding a consumer receives is `unknown` too.
  */
-declare function __svn_unwrap_arr<T extends ArrayLike<unknown> | Iterable<unknown>>(
-    value: T | undefined | null,
-): __SvnEachItem<T>;
-declare function __sveltets_2_unwrapArr<T extends ArrayLike<unknown> | Iterable<unknown>>(
-    value: T | undefined | null,
-): __SvnEachItem<T>;
+declare function __svn_unwrap_arr<T>(arr: ArrayLike<T>): T;
+declare function __sveltets_2_unwrapArr<T>(arr: ArrayLike<T>): T;
 /** Value-level result of an `{#await}` source (`__sveltets_2_unwrapPromiseLike`). */
 declare function __svn_unwrap_promise_like<T>(promise: PromiseLike<T> | T): T;
 declare function __sveltets_2_unwrapPromiseLike<T>(promise: PromiseLike<T> | T): T;
+/**
+ * The instance a component constructor creates. A slot `let:` name
+ * resolves to `__svn_instance_of(Comp).$$slot_def['slot'].name`
+ * (`__sveltets_2_instanceOf`); a component that is not a constructor
+ * fails the argument check and resolves to `any`, as upstream's does.
+ */
+declare function __svn_instance_of<T = any>(type: new (...args: any[]) => T): T;
+declare function __sveltets_2_instanceOf<T = any>(type: new (...args: any[]) => T): T;
 
 /**
  * Reviewer follow-up #2: extract a child component's events surface
@@ -656,237 +698,89 @@ declare function __svn_$$bindings<Bindings extends string[]>(
 ): Bindings[number];
 
 /**
- * Normalize any component shape to a constructible so one emission
- * works uniformly across the shapes a real Svelte codebase mixes:
- *
- *   - Svelte 5 callable (our overlay defaults, bare `Component<Props>`
- *     values from user-typed contexts) — wrapped in a synthesized
- *     construct signature whose props slot carries the original Props.
- *   - Svelte-4-style class (lucide-svelte, phosphor-svelte, bits-ui,
- *     any `extends SvelteComponent` export) — passthrough; the class
- *     already is constructible, and its generic parameters stay on
- *     the return type so `new $$_C<T>(...)` infers T from props.
- *
- * Per-call-site emission form:
+ * Normalize a component value to a constructor, so every instantiation
+ * is emitted the same way:
  *
  *     { const $$_CN = __svn_ensure_component(Comp);
  *       new $$_CN({ target: __svn_any(), props: { ... } }); }
  *
- * The intermediate local is what makes generic inference work: TS
- * binds the construct signature's generics at the `new` site (seeing
- * the concrete prop values) rather than at the `__svn_ensure_component`
- * site (where only the component type is visible). Dropping the local
- * collapses `T` to `unknown` for generic components, firing
- * implicit-any on snippet arrows over the generic.
+ * Same declaration as upstream's `__sveltets_2_ensureComponent`:
  *
- * Overload order matters: TS picks the first match. `Component<P>` has
- * to come before the generic `(anchor, props: P)` overload — a value
- * typed `Component<P>` structurally matches `(anchor, props)` too
- * (both have call signatures), and matching the latter first binds
- * P to `any` and kills contextual typing. Component first forces TS
- * to read P out of the Component's generic slot.
+ *   - A class-form component (anything constructible into a value with
+ *     the `$$prop_def` / `$$events_def` / `$$slot_def` carriers — our
+ *     own `$$IsomorphicComponent` defaults included) passes through, so
+ *     a generic class keeps its type parameters for the `new` site.
+ *   - A Svelte 5 `Component<Props, Exports, Bindings>` becomes a
+ *     constructor whose instance is `SvelteComponent<Props,
+ *     Props['$$events'], Props['$$slots']>`. Props that do not declare
+ *     `$$events` / `$$slots` leave the instance's events and slots
+ *     `unknown`, so `on:` handlers, `slot="…"` children and `let:`
+ *     bindings on such a component are not typed.
+ *   - Anything else fails the constraint (a plain class: TS2345 at the
+ *     component name) or, when it is callable like a `Component` (a
+ *     helper function, `Date`), maps to `never`, which the `new`
+ *     reports (TS2351).
  *
- * `props?: Partial<P>` on the synthesized constructor keeps required
- * props optional at the `new $$_C({...})` call site — real components
- * routinely receive props via bind: directives, spreads, or implicit
- * `children` snippets (none of which show up in our emitted object
- * literal). Partial preserves the excess-property check (typo'd prop
- * names still fire TS2353) and contextual-typing flow (callback
- * destructures, snippet params).
+ * The intermediate local is what makes generic inference work: TS binds
+ * the construct signature's generics at the `new` site, where the
+ * concrete prop values are visible.
  */
-// SVELTE-4-COMPAT — v0.3 Item 3: typed-events overload.
-//
-// When a child component declares `interface $$Events { ... }` (or
-// `type $$Events = ...`), the child's emit intersects its default
-// export with `& { readonly __svn_events: $$Events }`. That property
-// presence is what this overload keys on: it matches ONLY typed
-// children, binds E out of `__svn_events`, and returns an
-// `__SvnInstanceTyped<P, E>` whose `$on<K extends keyof E>` narrows
-// handler signatures per declared event.
-//
-// Untyped children (no `$$Events` declaration — the common case
-// including all Svelte-5 runes-mode children) fall through to the
-// lax overload below and get `__SvnInstance<P>` whose `$on(event:
-// string, handler: (...args: any[]) => any)` contextually types
-// destructures like `({detail}) => …` to `any` — critical to avoid
-// TS7031 at workspace scale (the regression that sunk the reverted
-// conditional-dispatch attempt in v0.2.5).
-//
-// Overload order MATTERS: typed must come first so it's preferred
-// when the intersection is present. Validated end-to-end via
-// /tmp/svn-item3-fixture/real_component.ts.
-//
-// The Component-arm uses conditional-type distribution (via
-// `T extends … ? … : never`) instead of a plain generic binding
-// `<P extends Record<string, any>>(c: Component<P, any, any>)`. When
-// the input is a UNION of `Component<P1> | Component<P2> | …`
-// (the dynamic-component pattern
-// `{@const X = fieldType.component}` seen on a CMS-style bench),
-// the conditional distributes: each union member produces
-// its own ctor type, and the union of ctors intersects their
-// contravariant arg positions — the resulting `options.props?` slot
-// becomes `P1 & P2 & … & Pn`. Consumer prop literals must satisfy
-// that intersection (TS2322 on structural mismatches), matching
-// upstream svelte2tsx byte-for-byte on PageFieldField.svelte /
-// SiteField.svelte.
-//
-// Without the conditional, TS's overload resolver falls through to
-// the `c: unknown` fallback when T is a union, giving `props?: any`
-// and silently accepting any prop literal.
-// 2026-04-25: unified with upstream's single-overload conditional-
-// return pattern (svelte-shims-v4.d.ts:224-251). Produces instance
-// shapes identical to what the default-export emit's
-// `$$IsomorphicComponent` pattern yields — so consumer-side
-// `bind:this={ref}` against a user-declared `let ref: MyComp`
-// target matches structurally.
-//
-// Branch order matters. TS tries each conditional in turn:
-//
-// 1. Typed-events marker: the child's emit intersects
-//    `& { readonly __svn_events: $$Events }` onto its default-export
-//    VALUE when `interface $$Events` / `type $$Events` is declared.
-//    We match that first so narrowed event-handler typing fires
-//    even when the input ALSO has a `new` signature (which
-//    `$$IsomorphicComponent` does). The events shape is wrapped in
-//    `CustomEvent<>` here so user handlers written as
-//    `(e: CustomEvent<{id:number}>) => …` match
-//    `SvelteComponent.$on<K>(cb: (e: Events[K]) => void)` where
-//    Events[K] = CustomEvent<{id:number}>.
-//
-// 2. Constructor passthrough: Svelte-4 legacy class components
-//    (extending `SvelteComponent` directly) pass through unchanged
-//    — `new C({…})` on the returned type already produces the
-//    right `InstanceType<C>` shape.
-//
-// 3. `Component<P, Exports, Bindings>` — Svelte-5 component shape
-//    without typed-events marker. Returns a ctor whose instance
-//    matches what the default-export's `$$IsomorphicComponent` new
-//    signature yields.
-//
-// 4. Function-component fallback: `(anchor, props: P) => any`
-//    shape. Mostly covers user-authored raw functions; rare.
-//
-// 5. Fallback `any`-prop ctor for unknown shapes (union types, etc.)
-//    that fall through the above.
 declare function __svn_ensure_component<
     T extends
-        | (new (...args: any[]) => any)
-        | import('svelte').Component<any, any, any>
-        | ((anchor: any, props: any) => any)
-        | { readonly __svn_events: any }
+        | ConstructorOfATypedSvelteComponent
+        | (typeof import('svelte') extends { mount: any }
+              ? // @ts-ignore svelte.Component doesn't exist in Svelte 4
+                import('svelte').Component<any, any, any>
+              : never)
         | null
         | undefined,
 >(
-    c: T,
+    type: T,
 ): NonNullable<
-    // Branch order: the new (...args) passthrough comes FIRST so a
-    // generic IsomorphicComponent (which carries `new <T>(opts): ...`
-    // and a structurally-Component-matching call sig) preserves its
-    // generic at the consumer site. Pre-2026-05-01 the events-marker
-    // branch was first; that worked because the OLD Component shape
-    // returned a metadata-bag `{props, exports, bindings}` which DID
-    // NOT structurally match the iso shape's call return. Once
-    // Component was aligned with real svelte's `Exports & {$set?,
-    // $on?}` shape (D-ii bindings cluster), the iso shape started
-    // matching the events branch and the wrapper return type lost
-    // the generic — `<Generic a={await a} b={await c}>` stopped
-    // firing TS2322 because `T` collapsed to `unknown`. Putting
-    // passthrough first keeps the iso ctor intact; the events branch
-    // remains for the rare bare-Component+events-marker shape.
-    T extends new (...args: any[]) => any
+    T extends ConstructorOfATypedSvelteComponent
         ? T
-        : T extends { readonly __svn_events: infer E extends Record<string, any> } & import('svelte').Component<
-              infer P extends Record<string, any>,
-              infer X extends Record<string, any>,
-              infer B extends string
-          >
-          ? new (options: { target?: any; props?: P }) => import('svelte').SvelteComponent<
-                P,
-                E,
-                Record<string, any>
-            > &
-                X & { $$bindings?: B }
-          : T extends import('svelte').Component<
-                  infer P extends Record<string, any>,
-                  infer X extends Record<string, any>,
-                  infer B extends string
-              >
-            ? new (options: { target?: any; props?: P }) => import('svelte').SvelteComponent<
-                  P,
-                  Record<string, CustomEvent<any>>,
-                  Record<string, any>
-              > &
-                  X & { $$bindings?: B }
-            : T extends (anchor: any, props: infer P) => any
-              ? P extends Record<string, any>
-                  ? new (options: {
-                        target?: any;
-                        props?: P;
-                    }) => import('svelte').SvelteComponent<P>
-                  : new (options: {
-                        target?: any;
-                        props?: any;
-                    }) => import('svelte').SvelteComponent<Record<string, any>>
-              : new (options: {
-                    target?: any;
-                    props?: any;
-                }) => import('svelte').SvelteComponent<Record<string, any>>
+        : typeof import('svelte') extends { mount: any }
+          ? // @ts-ignore svelte.Component doesn't exist in Svelte 4
+            T extends import('svelte').Component<
+                infer Props extends Record<string, any>,
+                infer Exports extends Record<string, any>,
+                infer Bindings extends string
+            >
+              ? new (
+                    options: import('svelte').ComponentConstructorOptions<Props>,
+                ) => import('svelte').SvelteComponent<Props, Props['$$events'], Props['$$slots']> &
+                    Exports & { $$bindings: Bindings }
+              : never
+          : never
 >;
-
-/**
- * Shape returned by a `new __svn_ensure_component(C)({target, props})`
- * call. `$$prop_def` is the compile-time-only carrier used elsewhere
- * in the shim chain; `$on` accepts the SVELTE-4-COMPAT
- * `$inst.$on("event", handler)` pattern the emit uses for `on:event`
- * directives on components.
- *
- * `handler` is typed as a callable `(...args: any[]) => any` rather
- * than bare `any` so the arrow function the user passes gets
- * contextual typing from the callable shape. With bare `any`, the
- * arrow's `({detail}) => ...` parameter destructure falls back to
- * TS's fresh inference — no context — and fires TS7031 under
- * `noImplicitAny`. The callable form pushes `any` into each
- * positional param, which is what makes the destructure fine.
- */
-type __SvnInstance<P> = {
-    $$prop_def: P;
-    $on(event: string, handler: (...args: any[]) => any): () => void;
-};
-
-/**
- * SVELTE-4-COMPAT — v0.3 Item 3. Typed-events counterpart to
- * `__SvnInstance<P>`. `$on` dispatches against the declared events
- * map `E`: the event name must be `keyof E`, and the handler sees a
- * `CustomEvent<E[K]>` with the declared payload — so `e.detail`
- * narrows to the right shape in the handler body.
- *
- * Selected by the typed overload of `__svn_ensure_component` when
- * the child component's default export carries
- * `{ readonly __svn_events: E }` (emit intersects this in when a
- * `$$Events` interface/type is declared in the child). For children
- * without that marker, `__SvnInstance<P>` is selected instead and
- * `$on` stays lax.
- *
- * Mirrors upstream svelte2tsx's `hasStrictEvents`-branching shape
- * (see `_events(strictEvents, renderStr)` in
- * `language-tools/packages/svelte2tsx/src/svelte2tsx/addComponentExport.ts`).
- * Upstream's non-strict branch INTERSECTS Events with `{[evt:
- * string]: CustomEvent<any>}`; ours does the same implicitly by
- * selecting the lax `__SvnInstance<P>` at the overload level
- * instead of typing it up through an intersection. Equivalent
- * observed semantics, simpler shim.
- */
-type __SvnInstanceTyped<P, E> = {
-    $$prop_def: P;
-    // E carries the FINAL `$on` event-object map (matches upstream
-    // convention: user's `interface $$Events { click: MouseEvent }`
-    // means `$on('click', cb)`'s cb is `(e: MouseEvent)`. If user
-    // wants `CustomEvent<…>`, they wrap explicitly in their
-    // interface). The synthesized typed-dispatcher case is wrapped
-    // ONCE at synthesis (`type $$Events = { [K]: CustomEvent<T[K]> }`)
-    // so this type is final regardless of source.
-    $on<K extends keyof E>(event: K, handler: (e: E[K]) => any): () => void;
-};
+declare function __sveltets_2_ensureComponent<
+    T extends
+        | ConstructorOfATypedSvelteComponent
+        | (typeof import('svelte') extends { mount: any }
+              ? // @ts-ignore svelte.Component doesn't exist in Svelte 4
+                import('svelte').Component<any, any, any>
+              : never)
+        | null
+        | undefined,
+>(
+    type: T,
+): NonNullable<
+    T extends ConstructorOfATypedSvelteComponent
+        ? T
+        : typeof import('svelte') extends { mount: any }
+          ? // @ts-ignore svelte.Component doesn't exist in Svelte 4
+            T extends import('svelte').Component<
+                infer Props extends Record<string, any>,
+                infer Exports extends Record<string, any>,
+                infer Bindings extends string
+            >
+              ? new (
+                    options: import('svelte').ComponentConstructorOptions<Props>,
+                ) => import('svelte').SvelteComponent<Props, Props['$$events'], Props['$$slots']> &
+                    Exports & { $$bindings: Bindings }
+              : never
+          : never
+>;
 
 /**
  * Partial<> variant that widens each prop with `| null`. Required
@@ -1043,21 +937,21 @@ declare function __svn_union<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>(
 /**
  * Map an HTML/SVG tag name back to the real element type so action
  * directives emit `action(__svn_map_element_tag('form'), params)` with
- * a proper `HTMLFormElement` in the first slot rather than `unknown`
- * or `any`. Actions that declare a specific element type (e.g.
- * `Action<HTMLFormElement, P>`) will TS2345 against the concrete type
- * if the tag doesn't match.
+ * a proper `HTMLFormElement` in the first slot. Actions that declare a
+ * specific element type (e.g. `Action<HTMLFormElement, P>`) are checked
+ * against the concrete type.
  *
- * Unknown tags fall through to `HTMLElement` — matching upstream
- * svelte2tsx's `svelteHTML.mapElementTag` behavior.
+ * Same overloads as upstream's `svelteHTML.mapElementTag`: any other
+ * tag — a custom element, `svelte:window`, `svelte:element` — maps to
+ * `any`, so the directive's element parameter is unconstrained there.
  */
-declare function __svn_map_element_tag<K extends keyof HTMLElementTagNameMap>(
+declare function __svn_map_element_tag<K extends keyof ElementTagNameMap>(
     tag: K,
-): HTMLElementTagNameMap[K];
+): ElementTagNameMap[K];
 declare function __svn_map_element_tag<K extends keyof SVGElementTagNameMap>(
     tag: K,
 ): SVGElementTagNameMap[K];
-declare function __svn_map_element_tag(tag: string): HTMLElement;
+declare function __svn_map_element_tag(tag: any): any;
 
 /**
  * Phantom value used as the second argument to animate-directive call
@@ -1071,6 +965,39 @@ declare function __svn_map_element_tag(tag: string): HTMLElement;
  * (`crates/emit/src/nodes/animation.rs`).
  */
 declare const __svn_AnimationMove: { from: DOMRect; to: DOMRect };
+declare var __sveltets_2_AnimationMove: { from: DOMRect; to: DOMRect };
+
+/**
+ * Result shape an `animate:` function must return. Mirrors upstream's
+ * `__sveltets_2_SvelteAnimationReturnType`: an all-optional object
+ * type, so a function returning anything with no property in common
+ * (a cleanup thunk, a number) fails as a weak-type mismatch (TS2559).
+ */
+type __SvnAnimationReturnType = {
+    delay?: number;
+    duration?: number;
+    easing?: (t: number) => number;
+    css?: (t: number, u: number) => string;
+    tick?: (t: number, u: number) => void;
+};
+type __sveltets_2_SvelteAnimationReturnType = __SvnAnimationReturnType;
+/** Wraps an `animate:NAME(...)` call so its result is checked as an animation config. */
+declare function __svn_ensure_animation(animationCall: __SvnAnimationReturnType): {};
+declare function __sveltets_2_ensureAnimation(animationCall: __SvnAnimationReturnType): {};
+
+/**
+ * Wraps the call of a `{@render EXPR}` tag. The parameter is the value
+ * a Svelte snippet returns — a branded type no ordinary function
+ * produces — so rendering something that is not a snippet (a function
+ * returning `void` or `string`) fails the argument check (TS2345).
+ * `undefined` / `null` pass, for optional-chained `{@render s?.()}`.
+ */
+declare function __svn_ensure_snippet(
+    val: ReturnType<import('svelte').Snippet> | undefined | null,
+): any;
+declare function __sveltets_2_ensureSnippet(
+    val: ReturnType<import('svelte').Snippet> | undefined | null,
+): any;
 
 /**
  * Validate that a style-directive value expression type-checks
@@ -1343,36 +1270,10 @@ declare namespace svelteHTML {
         'svelte:fragment': { slot?: string };
         'svelte:options': { [name: string]: any };
         'svelte:head': { [name: string]: any };
-        // `<svelte:boundary onerror={…} />` (Svelte 5.3+). Mirrors
-        // svelte/elements' `'svelte:boundary'` shape so the boundary's
-        // callback signatures and snippet shapes type-check at use.
-        'svelte:boundary': {
-            onerror?: (error: unknown, reset: () => void) => void;
-            failed?: import('svelte').Snippet<[error: unknown, reset: () => void]>;
-            pending?: import('svelte').Snippet;
-        };
 
         [name: string]: { [name: string]: any };
     }
 }
-
-/**
- * Extract the NON-optional Props type from any supported component
- * shape (class or callable). Declared for future bind:prop pair
- * emission — the helper recovers the raw Props type so a
- * local-assignment pair can type-check against the unwrapped slot
- * shape even when __svn_ensure_component wraps it in `Partial<>` for
- * call-site ergonomics.
- *
- * Order matters here too: the class branch has to come first so
- * `new (...) => { $$prop_def: P }` binds before the callable branch
- * reinterprets the class's constructor signature as a plain callable.
- */
-type __SvnProps<C> =
-    C extends new (...args: any[]) => { $$prop_def: infer P } ? P :
-    C extends (anchor: any, props: infer P) => any
-        ? (P extends Partial<infer Q> ? Q : P)
-        : never;
 
 // ---------- asset side-effect imports ----------
 //
@@ -1527,9 +1428,19 @@ declare module 'svelte' {
         z_$$bindings?: Bindings;
     }
 
-    export type Snippet<Parameters extends any[] = []> = {
-        (...args: Parameters): any;
-    };
+    // Mirrors real svelte's `Snippet`: calling one yields a branded
+    // value no ordinary function returns, which is what lets
+    // `{@render x()}` reject a plain function and lets a snippet be
+    // told apart from other callbacks.
+    const SnippetReturn: unique symbol;
+    export interface Snippet<Parameters extends unknown[] = []> {
+        (
+            this: void,
+            ...args: number extends Parameters['length'] ? never : Parameters
+        ): {
+            '{@render ...} must be called with a Snippet': "import type { Snippet } from 'svelte'";
+        } & typeof SnippetReturn;
+    }
 
     // Mirrors svelte's real `ComponentProps<T>` shape closely enough
     // that `satisfies Partial<ComponentProps<typeof X>>` flows the
@@ -1562,9 +1473,22 @@ declare module 'svelte' {
     export function setContext<T>(key: any, value: T): T;
     export function hasContext(key: any): boolean;
     export function getAllContexts<T extends Map<any, any> = Map<any, any>>(): T;
+    // Svelte's own dispatcher declarations.
+    interface DispatchOptions {
+        cancelable?: boolean;
+    }
+    export interface EventDispatcher<EventMap extends Record<string, any>> {
+        <Type extends keyof EventMap>(
+            ...args: null extends EventMap[Type]
+                ? [type: Type, parameter?: EventMap[Type] | null | undefined, options?: DispatchOptions]
+                : undefined extends EventMap[Type]
+                  ? [type: Type, parameter?: EventMap[Type] | null | undefined, options?: DispatchOptions]
+                  : [type: Type, parameter: EventMap[Type], options?: DispatchOptions]
+        ): boolean;
+    }
     export function createEventDispatcher<
-        Events extends Record<string, any> = Record<string, any>,
-    >(): <K extends Extract<keyof Events, string>>(type: K, detail?: Events[K]) => boolean;
+        EventMap extends Record<string, any> = any,
+    >(): EventDispatcher<EventMap>;
 }
 
 declare module 'svelte/store' {

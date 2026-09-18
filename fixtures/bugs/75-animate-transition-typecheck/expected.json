@@ -9,6 +9,12 @@
         {
             "file": "input.svelte",
             "line": 5,
+            "column": 5,
+            "code": "animation_invalid_placement"
+        },
+        {
+            "file": "input.svelte",
+            "line": 5,
             "column": 13,
             "code": 2552
         }

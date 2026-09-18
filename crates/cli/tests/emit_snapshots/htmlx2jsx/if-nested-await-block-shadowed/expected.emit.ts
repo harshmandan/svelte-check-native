@@ -4,156 +4,138 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         if ((hello)) {
-            void [hello];
-            { const $$_promise = (aPromise);
-                const $$_await = await $$_promise; const hello = $$_await;
-                (hello);
-                void hello;
-            }
-            (hello);
-            { const $$_promise = (aPromise);
-                const $$_await = await $$_promise; const foo = $$_await;
-                const hello = foo;
-                void hello;
-                (hello);
-                void foo;
-            }
-            (hello);
-            { const $$_promise = (aPromise);
-                const $$_await = await $$_promise; const hi = $$_await;
-                (hello);
-                void hi;
+            {
+                try { const $$_value = await (aPromise);
+                { const hello = $$_value;
+                hello;
+                }
+                } catch ($$_e) {
+                hello;
+                }
             }
             {
-                const hello = __svn_any();
-                (hello);
-                void hello;
+                try { const $$_value = await (aPromise);
+                { const foo = $$_value;
+                const hello = foo;
+                hello;
+                }
+                } catch ($$_e) {
+                hello;
+                }
             }
-            { const $$_promise = (hello);
-                const $$_await = await $$_promise; const hello = $$_await;
-                (hello);
+            {
+                try { const $$_value = await (aPromise);
+                { const hi = $$_value;
+                hello;
+                }
+                } catch ($$_e) { const hello = __svn_any();
+                hello;
+                }
+            }
+            {
+                const $$_value = await (hello);
+                { const hello = $$_value;
+                hello;
                 if ((hello)) {
-                    void [hello];
-                    (hello);
-                    { const $$_promise = (aPromise);
-                        const $$_await = await $$_promise; void $$_await;
-                    }
-                    (hello);
-                    { const $$_promise = (aPromise);
-                        const $$_await = await $$_promise; void $$_await;
+                    {
+                        hello;
+                        await (aPromise);
                     }
                     {
-                        const hello = __svn_any();
-                        (hello);
-                        void hello;
-                    }
-                    { const $$_promise = (x);
-                        const $$_await = await $$_promise; const hello = $$_await;
-                        if ((hello)) {
-                            void [hello];
-                            (hello);
+                        hello;
+                        try { await (aPromise);
+                        } catch ($$_e) { const hello = __svn_any();
+                        hello;
                         }
-                        void hello;
                     }
-                    { const $$_promise = (x);
-                        const $$_await = await $$_promise; const foo = $$_await;
+                    {
+                        const $$_value = await (x);
+                        { const hello = $$_value;
+                        if ((hello)) {
+                            hello;
+                        }
+                        }
+                    }
+                    {
+                        const $$_value = await (x);
+                        { const foo = $$_value;
                         const hello = foo;
-                        void hello;
                         if ((hello)) {
-                            void [hello];
-                            (hello);
+                            hello;
                         }
-                        void foo;
+                        }
                     }
                 }
-                void hello;
+                }
             }
             if ((hi && bye)) {
-                void [hi, bye];
-                { const $$_promise = (x);
-                    const $$_await = await $$_promise; const bye = $$_await;
-                    (bye);
-                    void bye;
-                }
                 {
-                    const hello = __svn_any();
-                    if ((hello)) {
-                        void [hello];
-                        (hello);
+                    try { const $$_value = await (x);
+                    { const bye = $$_value;
+                    bye;
                     }
-                    void hello;
+                    } catch ($$_e) { const hello = __svn_any();
+                    if ((hello)) {
+                        hello;
+                    }
+                    }
                 }
             } else if ((cool)) {
-                void [cool];
-                { const $$_promise = (cool);
-                    const $$_await = await $$_promise; const cool = $$_await;
+                {
+                    try { const $$_value = await (cool);
+                    { const cool = $$_value;
                     if ((cool)) {
-                        void [cool];
-                        (cool);
+                        cool;
                     }
-                    void cool;
+                    }
+                    } catch ($$_e) { const cool = __svn_any();
+                    }
                 }
                 {
-                    const cool = __svn_any();
-                    void cool;
-                }
-                { const $$_promise = (aPromise);
-                    const $$_await = await $$_promise; const cool = $$_await;
-                    (cool);
-                    void cool;
+                    const $$_value = await (aPromise);
+                    { const cool = $$_value;
+                    cool;
+                    }
                 }
             } else {
-                { const $$_promise = (x);
-                    const $$_await = await $$_promise; const hello = $$_await;
+                {
+                    const $$_value = await (x);
+                    { const hello = $$_value;
                     if ((hello)) {
-                        void [hello];
-                        (hello);
+                        hello;
                     }
-                    void hello;
+                    }
                 }
             }
         }
-        if ((cool)) {
-            void [cool];
-            (cool);
-        } else if ((hello)) {
-            void [hello];
-            (hello);
-        }
-        { const $$_promise = (cool);
-            const $$_await = await $$_promise; const cool = $$_await;
-            if ((cool)) {
-                void [cool];
-                (cool);
-            } else if ((hello)) {
-                void [hello];
-                (hello);
-            }
-            void cool;
-        }
         {
-            const cool = __svn_any();
             if ((cool)) {
-                void [cool];
-                (cool);
+                cool;
             } else if ((hello)) {
-                void [hello];
-                (hello);
+                hello;
             }
-            void cool;
+            try { const $$_value = await (cool);
+            { const cool = $$_value;
+            if ((cool)) {
+                cool;
+            } else if ((hello)) {
+                hello;
+            }
+            }
+            } catch ($$_e) { const cool = __svn_any();
+            if ((cool)) {
+                cool;
+            } else if ((hello)) {
+                hello;
+            }
+            }
         }
     });
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
- */
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
- */
-/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
+/** @type {__SvnIsomorphicComponent<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */
 export const __svn_component_default = /** @type {any} */ (null);
-/** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
+/** @typedef {InstanceType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;
 

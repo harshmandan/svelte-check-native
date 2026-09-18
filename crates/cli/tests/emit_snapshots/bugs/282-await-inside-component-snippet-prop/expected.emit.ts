@@ -8,7 +8,7 @@ function $$render_d33db870() {
     let { row }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     ;(async () => {
         // template type-check body (incremental)
-        (row('a'));
+        __svn_ensure_snippet(row('a'));
     });
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
@@ -31,7 +31,7 @@ function $$render_74f92bad() {
     let { children }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     ;(async () => {
         // template type-check body (incremental)
-        (children());
+        __svn_ensure_snippet(children());
     });
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
@@ -58,27 +58,28 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         {
             const __svn_C_a5 = __svn_ensure_component(Wrapper);
-            new __svn_C_a5({
+            const __svn_inst_a5 = new __svn_C_a5({
                 target: __svn_any(),
                 props: {
                     children: () => { async () => {
-                        { const $$_promise = (page);
-                            const $$_await = await $$_promise; const text = $$_await;
-                            { svelteHTML.createElement("p", {});                                 (text.length);
-                            }
-                            void text;
-                        }
                         {
-                            const err = __svn_any();
-                            { svelteHTML.createElement("p", {});                                 (err);
+                            try { const $$_value = await (page);
+                            { const text = $$_value;
+                            { svelteHTML.createElement("p", {});                                 text.length;
                             }
-                            void err;
+                            }
+                            } catch ($$_e) { const err = __svn_any();
+                            { svelteHTML.createElement("p", {});                                 err;
+                            }
+                            }
                         }
                         };
                         return __svn_snippet_return();
                     },
                 },
             });
+            /*svn:ignore_start*/const { children } = __svn_inst_a5.$$prop_def;/*svn:ignore_end*/
+            /*svn:ignore_start*/void children;/*svn:ignore_end*/
         }
         {
             const __svn_C_164 = __svn_ensure_component(Row);
@@ -86,15 +87,15 @@ function $$render_e40e2c10() {
                 target: __svn_any(),
                 props: {
                     row: (label) => { async () => {
-                        { const $$_promise = (page);
-                            const $$_await = await $$_promise; const text = $$_await;
-                            { svelteHTML.createElement("p", {});                                 (label.toUpperCase());
-                                (text);
+                        {
+                            const $$_value = await (page);
+                            { const text = $$_value;
+                            { svelteHTML.createElement("p", {});                                 label.toUpperCase();
+                                text;
                             }
-                            void text;
+                            }
                         }
                         };
-                        void label;
                         return __svn_snippet_return();
                     },
                 },
@@ -108,7 +109,7 @@ function $$render_e40e2c10() {
 $$render_e40e2c10;
 interface $$IsomorphicComponent {
     new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings'] } & Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'];
-    (internal: unknown, props: Awaited<ReturnType<typeof $$render_e40e2c10>>['props']): Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'] & { $set?: any; $on?: any };
+    (internal: unknown, props: Awaited<ReturnType<typeof $$render_e40e2c10>>['props'] extends Record<string, never> ? { $$events?: Awaited<ReturnType<typeof $$render_e40e2c10>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_e40e2c10>>['slots'] } : Awaited<ReturnType<typeof $$render_e40e2c10>>['props'] & { $$events?: Awaited<ReturnType<typeof $$render_e40e2c10>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_e40e2c10>>['slots'] }): Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;

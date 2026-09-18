@@ -78,9 +78,6 @@ pub enum ParseError {
     #[error("unknown script context {value:?}; expected \"module\" or nothing")]
     UnknownScriptContext { value: String, range: Range },
 
-    #[error("unknown script lang {value:?}; expected \"ts\", \"typescript\", \"js\", or nothing")]
-    UnknownScriptLang { value: String, range: Range },
-
     #[error("unterminated HTML comment")]
     UnterminatedComment { range: Range },
 
@@ -120,7 +117,6 @@ impl ParseError {
             Self::DuplicateStyle { range, .. } => *range,
             Self::MalformedOpenTag { range } => *range,
             Self::UnknownScriptContext { range, .. } => *range,
-            Self::UnknownScriptLang { range, .. } => *range,
             Self::UnterminatedComment { range } => *range,
             Self::UnterminatedMustache { range } => *range,
             Self::UnexpectedEof { range } => *range,
@@ -146,6 +142,16 @@ impl ParseError {
         !matches!(self, Self::UnsupportedBlock { .. })
     }
 
+    /// Whether the Svelte compiler's `parse()` throws on the input this
+    /// error describes. svelte-check converts components with
+    /// svelte2tsx in strict mode, so such a component is left out of
+    /// the run entirely. Every variant qualifies: a block keyword other
+    /// than `if` / `each` / `await` / `key` / `snippet` is the
+    /// compiler's `expected_block_type`.
+    pub fn compiler_rejects(&self) -> bool {
+        true
+    }
+
     /// A stable kebab-case slug per variant, used as the diagnostic
     /// `code`. Best-effort identifiers for our native reimplementation;
     /// `bridge` mode emits upstream's exact compiler codes instead.
@@ -156,7 +162,6 @@ impl ParseError {
             Self::DuplicateStyle { .. } => "duplicate-style",
             Self::MalformedOpenTag { .. } => "malformed-open-tag",
             Self::UnknownScriptContext { .. } => "unknown-script-context",
-            Self::UnknownScriptLang { .. } => "unknown-script-lang",
             Self::UnterminatedComment { .. } => "unterminated-comment",
             Self::UnterminatedMustache { .. } => "unterminated-mustache",
             Self::UnexpectedEof { .. } => "unexpected-eof",

@@ -11,6 +11,9 @@
 
 //! Message-text builders for each warning code.
 
+mod template_errors;
+pub use template_errors::*;
+
 /// Avoid using accesskey
 pub fn a11y_accesskey() -> String {
     format!("Avoid using accesskey\nhttps://svelte.dev/e/a11y_accesskey")
@@ -666,6 +669,32 @@ pub fn global_reference_invalid(name: &str) -> String {
     )
 }
 
+/// Cannot assign to %thing%
+pub fn constant_assignment(thing: &str) -> String {
+    format!("Cannot assign to {thing}\nhttps://svelte.dev/e/constant_assignment")
+}
+
+/// Cannot bind to %thing%
+pub fn constant_binding(thing: &str) -> String {
+    format!("Cannot bind to {thing}\nhttps://svelte.dev/e/constant_binding")
+}
+
+/// Cannot reassign or bind to each block argument in runes mode. …
+pub fn each_item_invalid_assignment() -> String {
+    "Cannot reassign or bind to each block argument in runes mode. Use the array and index variables instead (e.g. `array[i] = value` instead of `entry = value`, or `bind:value={array[i]}` instead of `bind:value={entry}`)\nhttps://svelte.dev/e/each_item_invalid_assignment".to_string()
+}
+
+/// Cannot reassign or bind to snippet parameter
+pub fn snippet_parameter_assignment() -> String {
+    "Cannot reassign or bind to snippet parameter\nhttps://svelte.dev/e/snippet_parameter_assignment"
+        .to_string()
+}
+
+/// Event attribute must be a JavaScript expression, not a string
+pub fn attribute_invalid_event_handler() -> String {
+    "Event attribute must be a JavaScript expression, not a string\nhttps://svelte.dev/e/attribute_invalid_event_handler".to_string()
+}
+
 /// `bind:%name%` is not a valid binding. %explanation%
 pub fn bind_invalid_name(name: &str, explanation: Option<&str>) -> String {
     match explanation {
@@ -683,4 +712,369 @@ pub fn bind_invalid_target(name: &str, elements: &str) -> String {
     format!(
         "`bind:{name}` can only be used with {elements}\nhttps://svelte.dev/e/bind_invalid_target"
     )
+}
+
+/// Cannot use `%rune%()` more than once
+pub fn props_duplicate(rune: &str) -> String {
+    format!("Cannot use `{rune}()` more than once\nhttps://svelte.dev/e/props_duplicate")
+}
+
+/// Invalid compiler option: %details%
+pub fn options_invalid_value(details: &str) -> String {
+    format!("Invalid compiler option: {details}\nhttps://svelte.dev/e/options_invalid_value")
+}
+
+/// Invalid compiler option: %details%
+pub fn options_removed(details: &str) -> String {
+    format!("Invalid compiler option: {details}\nhttps://svelte.dev/e/options_removed")
+}
+
+/// Unrecognised compiler option %keypath%
+pub fn options_unrecognised(keypath: &str) -> String {
+    format!("Unrecognised compiler option {keypath}\nhttps://svelte.dev/e/options_unrecognised")
+}
+
+/// Cyclical dependency detected: %cycle%
+pub fn reactive_declaration_cycle(cycle: &str) -> String {
+    format!(
+        "Cyclical dependency detected: {cycle}\nhttps://svelte.dev/e/reactive_declaration_cycle"
+    )
+}
+
+/// A component can have a single top-level `<script>` element and/or a single top-level `<script module>` element
+pub fn script_duplicate() -> String {
+    "A component can have a single top-level `<script>` element and/or a single top-level `<script module>` element\nhttps://svelte.dev/e/script_duplicate".to_string()
+}
+
+/// If the `%name%` attribute is supplied, it must be a boolean attribute
+pub fn script_invalid_attribute_value(name: &str) -> String {
+    format!(
+        "If the `{name}` attribute is supplied, it must be a boolean attribute\nhttps://svelte.dev/e/script_invalid_attribute_value"
+    )
+}
+
+/// If the context attribute is supplied, its value must be "module"
+pub fn script_invalid_context() -> String {
+    "If the context attribute is supplied, its value must be \"module\"\nhttps://svelte.dev/e/script_invalid_context".to_string()
+}
+
+/// The `%name%` attribute is reserved and cannot be used
+pub fn script_reserved_attribute(name: &str) -> String {
+    format!(
+        "The `{name}` attribute is reserved and cannot be used\nhttps://svelte.dev/e/script_reserved_attribute"
+    )
+}
+
+/// `%name%` has already been declared
+pub fn declaration_duplicate(name: &str) -> String {
+    format!("`{name}` has already been declared\nhttps://svelte.dev/e/declaration_duplicate")
+}
+
+/// Cannot declare a variable with the same name as an import from `<script module>`
+pub fn declaration_duplicate_module_import() -> String {
+    "Cannot declare a variable with the same name as an import from `<script module>`\nhttps://svelte.dev/e/declaration_duplicate_module_import".to_string()
+}
+
+/// `$effect()` can only be used as an expression statement
+pub fn effect_invalid_placement() -> String {
+    "`$effect()` can only be used as an expression statement\nhttps://svelte.dev/e/effect_invalid_placement".to_string()
+}
+
+/// `$host()` can only be used inside custom element component instances
+pub fn host_invalid_placement() -> String {
+    "`$host()` can only be used inside custom element component instances\nhttps://svelte.dev/e/host_invalid_placement".to_string()
+}
+
+/// `$inspect.trace(...)` cannot be used inside a generator function
+pub fn inspect_trace_generator() -> String {
+    "`$inspect.trace(...)` cannot be used inside a generator function\nhttps://svelte.dev/e/inspect_trace_generator".to_string()
+}
+
+/// `$inspect.trace(...)` must be the first statement of a function body
+pub fn inspect_trace_invalid_placement() -> String {
+    "`$inspect.trace(...)` must be the first statement of a function body\nhttps://svelte.dev/e/inspect_trace_invalid_placement".to_string()
+}
+
+/// The arguments keyword cannot be used within the template or at the top level of a component
+pub fn invalid_arguments_usage() -> String {
+    "The arguments keyword cannot be used within the template or at the top level of a component\nhttps://svelte.dev/e/invalid_arguments_usage".to_string()
+}
+
+/// `$props.id()` can only be used at the top level of components as a variable declaration initializer
+pub fn props_id_invalid_placement() -> String {
+    "`$props.id()` can only be used at the top level of components as a variable declaration initializer\nhttps://svelte.dev/e/props_id_invalid_placement".to_string()
+}
+
+/// Declaring or accessing a prop starting with `$$` is illegal (they are reserved for Svelte internals)
+pub fn props_illegal_name() -> String {
+    "Declaring or accessing a prop starting with `$$` is illegal (they are reserved for Svelte internals)\nhttps://svelte.dev/e/props_illegal_name".to_string()
+}
+
+/// `$props()` can only be used with an object destructuring pattern
+pub fn props_invalid_identifier() -> String {
+    "`$props()` can only be used with an object destructuring pattern\nhttps://svelte.dev/e/props_invalid_identifier".to_string()
+}
+
+/// `$props()` assignment must not contain nested properties or computed keys
+pub fn props_invalid_pattern() -> String {
+    "`$props()` assignment must not contain nested properties or computed keys\nhttps://svelte.dev/e/props_invalid_pattern".to_string()
+}
+
+/// `%rune%` cannot be called with arguments
+pub fn rune_invalid_arguments(rune: &str) -> String {
+    format!("`{rune}` cannot be called with arguments\nhttps://svelte.dev/e/rune_invalid_arguments")
+}
+
+/// `%rune%` must be called with %args%
+pub fn rune_invalid_arguments_length(rune: &str, args: &str) -> String {
+    format!(
+        "`{rune}` must be called with {args}\nhttps://svelte.dev/e/rune_invalid_arguments_length"
+    )
+}
+
+/// Cannot access a computed property of a rune
+pub fn rune_invalid_computed_property() -> String {
+    "Cannot access a computed property of a rune\nhttps://svelte.dev/e/rune_invalid_computed_property".to_string()
+}
+
+/// `%name%` is not a valid rune
+pub fn rune_invalid_name(name: &str) -> String {
+    format!("`{name}` is not a valid rune\nhttps://svelte.dev/e/rune_invalid_name")
+}
+
+/// `%rune%` cannot be called with a spread argument
+pub fn rune_invalid_spread(rune: &str) -> String {
+    format!(
+        "`{rune}` cannot be called with a spread argument\nhttps://svelte.dev/e/rune_invalid_spread"
+    )
+}
+
+/// Cannot use `%rune%` rune in non-runes mode
+pub fn rune_invalid_usage(rune: &str) -> String {
+    format!("Cannot use `{rune}` rune in non-runes mode\nhttps://svelte.dev/e/rune_invalid_usage")
+}
+
+/// Cannot use rune without parentheses
+pub fn rune_missing_parentheses() -> String {
+    "Cannot use rune without parentheses\nhttps://svelte.dev/e/rune_missing_parentheses".to_string()
+}
+
+/// The `%name%` rune has been removed
+pub fn rune_removed(name: &str) -> String {
+    format!("The `{name}` rune has been removed\nhttps://svelte.dev/e/rune_removed")
+}
+
+/// `%name%` is now `%replacement%`
+pub fn rune_renamed(name: &str, replacement: &str) -> String {
+    format!("`{name}` is now `{replacement}`\nhttps://svelte.dev/e/rune_renamed")
+}
+
+/// `%rune%(...)` can only be used as a variable declaration initializer, a class field declaration, or the first assignment to a class field at the top level of the constructor.
+pub fn state_invalid_placement(rune: &str) -> String {
+    format!(
+        "`{rune}(...)` can only be used as a variable declaration initializer, a class field declaration, or the first assignment to a class field at the top level of the constructor.\nhttps://svelte.dev/e/state_invalid_placement"
+    )
+}
+
+/// Cannot subscribe to stores that are not declared at the top level of the component
+pub fn store_invalid_scoped_subscription() -> String {
+    "Cannot subscribe to stores that are not declared at the top level of the component\nhttps://svelte.dev/e/store_invalid_scoped_subscription".to_string()
+}
+
+/// Cannot reference store value inside `<script module>`
+pub fn store_invalid_subscription() -> String {
+    "Cannot reference store value inside `<script module>`\nhttps://svelte.dev/e/store_invalid_subscription".to_string()
+}
+
+/// Cannot export derived state from a module. To expose the current derived value, export a function returning its value
+pub fn derived_invalid_export() -> String {
+    "Cannot export derived state from a module. To expose the current derived value, export a function returning its value\nhttps://svelte.dev/e/derived_invalid_export".to_string()
+}
+
+/// `%name%` is not defined
+pub fn export_undefined(name: &str) -> String {
+    format!("`{name}` is not defined\nhttps://svelte.dev/e/export_undefined")
+}
+
+/// Imports of `svelte/internal/*` are forbidden. It contains private runtime code which is subject to change without notice. If you're importing from `svelte/internal/*` to work around a limitation of Svelte, please open an issue at https://github.com/sveltejs/svelte and explain your use case
+pub fn import_svelte_internal_forbidden() -> String {
+    "Imports of `svelte/internal/*` are forbidden. It contains private runtime code which is subject to change without notice. If you're importing from `svelte/internal/*` to work around a limitation of Svelte, please open an issue at https://github.com/sveltejs/svelte and explain your use case\nhttps://svelte.dev/e/import_svelte_internal_forbidden".to_string()
+}
+
+/// Cannot use `$$props` in runes mode
+pub fn legacy_props_invalid() -> String {
+    "Cannot use `$$props` in runes mode\nhttps://svelte.dev/e/legacy_props_invalid".to_string()
+}
+
+/// Cannot use `$$restProps` in runes mode
+pub fn legacy_rest_props_invalid() -> String {
+    "Cannot use `$$restProps` in runes mode\nhttps://svelte.dev/e/legacy_rest_props_invalid"
+        .to_string()
+}
+
+/// %name% cannot be used in runes mode
+pub fn runes_mode_invalid_import(name: &str) -> String {
+    format!("{name} cannot be used in runes mode\nhttps://svelte.dev/e/runes_mode_invalid_import")
+}
+
+/// An exported snippet can only reference things declared in a `<script module>`, or other exportable snippets
+pub fn snippet_invalid_export() -> String {
+    "An exported snippet can only reference things declared in a `<script module>`, or other exportable snippets\nhttps://svelte.dev/e/snippet_invalid_export".to_string()
+}
+
+/// This snippet is shadowing the prop `%prop%` with the same name
+pub fn snippet_shadowing_prop(prop: &str) -> String {
+    format!(
+        "This snippet is shadowing the prop `{prop}` with the same name\nhttps://svelte.dev/e/snippet_shadowing_prop"
+    )
+}
+
+/// Cannot export state from a module if it is reassigned. Either export a function returning the state value or only mutate the state value's properties
+pub fn state_invalid_export() -> String {
+    "Cannot export state from a module if it is reassigned. Either export a function returning the state value or only mutate the state value's properties\nhttps://svelte.dev/e/state_invalid_export".to_string()
+}
+
+/// `%name%` has already been declared
+pub fn duplicate_class_field(name: &str) -> String {
+    format!("`{name}` has already been declared\nhttps://svelte.dev/e/duplicate_class_field")
+}
+
+/// `%name%` has already been declared on this class
+pub fn state_field_duplicate(name: &str) -> String {
+    format!(
+        "`{name}` has already been declared on this class\nhttps://svelte.dev/e/state_field_duplicate"
+    )
+}
+
+/// Cannot assign to a state field before its declaration
+pub fn state_field_invalid_assignment() -> String {
+    "Cannot assign to a state field before its declaration\nhttps://svelte.dev/e/state_field_invalid_assignment".to_string()
+}
+
+/// `$bindable()` can only be used inside a `$props()` declaration
+pub fn bindable_invalid_location() -> String {
+    "`$bindable()` can only be used inside a `$props()` declaration\nhttps://svelte.dev/e/bindable_invalid_location".to_string()
+}
+
+/// The $ prefix is reserved, and cannot be used for variables and imports
+pub fn dollar_prefix_invalid() -> String {
+    "The $ prefix is reserved, and cannot be used for variables and imports\nhttps://svelte.dev/e/dollar_prefix_invalid".to_string()
+}
+
+/// The $ name is reserved, and cannot be used for variables and imports
+pub fn dollar_binding_invalid() -> String {
+    "The $ name is reserved, and cannot be used for variables and imports\nhttps://svelte.dev/e/dollar_binding_invalid".to_string()
+}
+
+/// A component cannot have a default export
+pub fn module_illegal_default_export() -> String {
+    "A component cannot have a default export\nhttps://svelte.dev/e/module_illegal_default_export"
+        .to_string()
+}
+
+/// Cannot use `await` in deriveds and template expressions, or at the top level of a component, unless the `experimental.async` compiler option is `true`
+pub fn experimental_async() -> String {
+    "Cannot use `await` in deriveds and template expressions, or at the top level of a component, unless the `experimental.async` compiler option is `true`\nhttps://svelte.dev/e/experimental_async".to_string()
+}
+
+/// Cannot use `await` in deriveds and template expressions, or at the top level of a component, unless in runes mode
+pub fn legacy_await_invalid() -> String {
+    "Cannot use `await` in deriveds and template expressions, or at the top level of a component, unless in runes mode\nhttps://svelte.dev/e/legacy_await_invalid".to_string()
+}
+
+/// Cannot use `export let` in runes mode — use `$props()` instead
+pub fn legacy_export_invalid() -> String {
+    "Cannot use `export let` in runes mode — use `$props()` instead\nhttps://svelte.dev/e/legacy_export_invalid".to_string()
+}
+
+/// Mixing old (on:%name%) and new syntaxes for event handling is not allowed. Use only the on%name% syntax
+pub fn mixed_event_handler_syntaxes(name: &str) -> String {
+    format!(
+        "Mixing old (on:{name}) and new syntaxes for event handling is not allowed. Use only the on{name} syntax\nhttps://svelte.dev/e/mixed_event_handler_syntaxes"
+    )
+}
+
+/// '%name%' is not a valid attribute name
+pub fn attribute_invalid_name(name: &str) -> String {
+    format!("'{name}' is not a valid attribute name\nhttps://svelte.dev/e/attribute_invalid_name")
+}
+
+/// This type of directive is not valid on components
+pub fn component_invalid_directive() -> String {
+    "This type of directive is not valid on components\nhttps://svelte.dev/e/component_invalid_directive".to_string()
+}
+
+/// Event modifiers other than 'once' can only be used on DOM elements
+pub fn event_handler_invalid_component_modifier() -> String {
+    "Event modifiers other than 'once' can only be used on DOM elements\nhttps://svelte.dev/e/event_handler_invalid_component_modifier".to_string()
+}
+
+/// Cannot use `<slot>` syntax and `{@render ...}` tags in the same component. Migrate towards `{@render ...}` tags completely
+pub fn slot_snippet_conflict() -> String {
+    "Cannot use `<slot>` syntax and `{@render ...}` tags in the same component. Migrate towards `{@render ...}` tags completely\nhttps://svelte.dev/e/slot_snippet_conflict".to_string()
+}
+
+/// TypeScript language features like %feature% are not natively supported, ...
+pub fn typescript_invalid_feature(feature: &str) -> String {
+    format!(
+        "TypeScript language features like {feature} are not natively supported, and their use is generally discouraged. Outside of `<script>` tags, these features are not supported. For use within `<script>` tags, you will need to use a preprocessor to convert it to JavaScript before it gets passed to the Svelte compiler. If you are using `vitePreprocess`, make sure to specifically enable preprocessing script tags (`vitePreprocess({{ script: true }})`)\nhttps://svelte.dev/e/typescript_invalid_feature"
+    )
+}
+
+/// slot attribute must be a static value
+pub fn slot_attribute_invalid() -> String {
+    "slot attribute must be a static value\nhttps://svelte.dev/e/slot_attribute_invalid".to_string()
+}
+
+/// Element with a slot='...' attribute must be a child of a component or a descendant of a custom element
+pub fn slot_attribute_invalid_placement() -> String {
+    "Element with a slot='...' attribute must be a child of a component or a descendant of a custom element\nhttps://svelte.dev/e/slot_attribute_invalid_placement".to_string()
+}
+
+/// Cannot use explicit children snippet at the same time as implicit children content. Remove either the non-whitespace content or the children snippet block
+pub fn snippet_conflict() -> String {
+    "Cannot use explicit children snippet at the same time as implicit children content. Remove either the non-whitespace content or the children snippet block\nhttps://svelte.dev/e/snippet_conflict".to_string()
+}
+
+/// slot attribute must be a static value
+pub fn slot_element_invalid_name() -> String {
+    "slot attribute must be a static value\nhttps://svelte.dev/e/slot_element_invalid_name"
+        .to_string()
+}
+
+/// `default` is a reserved word — it cannot be used as a slot name
+pub fn slot_element_invalid_name_default() -> String {
+    "`default` is a reserved word — it cannot be used as a slot name\nhttps://svelte.dev/e/slot_element_invalid_name_default".to_string()
+}
+
+/// `<slot>` can only receive attributes and (optionally) let directives
+pub fn slot_element_invalid_attribute() -> String {
+    "`<slot>` can only receive attributes and (optionally) let directives\nhttps://svelte.dev/e/slot_element_invalid_attribute".to_string()
+}
+
+/// `<svelte:self>` components can only exist inside `{#if}` blocks, `{#each}` blocks, `{#snippet}` blocks or slots passed to components
+pub fn svelte_self_invalid_placement() -> String {
+    "`<svelte:self>` components can only exist inside `{#if}` blocks, `{#each}` blocks, `{#snippet}` blocks or slots passed to components\nhttps://svelte.dev/e/svelte_self_invalid_placement".to_string()
+}
+
+/// %message%. The browser will 'repair' the HTML (by moving, removing, or inserting elements) which breaks Svelte's assumptions about the structure of your components.
+pub fn node_invalid_placement(message: &str) -> String {
+    format!(
+        "{message}. The browser will 'repair' the HTML (by moving, removing, or inserting elements) which breaks Svelte's assumptions about the structure of your components.\nhttps://svelte.dev/e/node_invalid_placement"
+    )
+}
+
+/// `$:` is not allowed in runes mode, use `$derived` or `$effect` instead
+pub fn legacy_reactive_statement_invalid() -> String {
+    "`$:` is not allowed in runes mode, use `$derived` or `$effect` instead\nhttps://svelte.dev/e/legacy_reactive_statement_invalid".to_string()
+}
+
+/// Can only bind to state or props
+pub fn bind_invalid_value() -> String {
+    "Can only bind to state or props\nhttps://svelte.dev/e/bind_invalid_value".to_string()
+}
+
+/// `$props()` can only be used at the top level of components as a variable declaration initializer
+pub fn props_invalid_placement() -> String {
+    "`$props()` can only be used at the top level of components as a variable declaration initializer\nhttps://svelte.dev/e/props_invalid_placement".to_string()
 }

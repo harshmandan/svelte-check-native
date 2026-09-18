@@ -1,0 +1,29 @@
+{
+    "errors": [
+        {
+            "file": "src/A.svelte",
+            "line": 0,
+            "column": 1,
+            "code": 2451
+        },
+        {
+            "file": "src/A.svelte",
+            "line": 1,
+            "column": 4,
+            "code": 2451
+        },
+        {
+            "file": "src/A.svelte",
+            "line": 1,
+            "column": 4,
+            "code": "dollar_prefix_invalid"
+        },
+        {
+            "file": "src/B.svelte",
+            "line": 1,
+            "column": 29,
+            "code": 2552
+        }
+    ],
+    "_note": "A `$$props` declared by the component makes svelte2tsx declare its own `$$props` too, in the text replacing the `<script>` tag, so the duplicate is reported there (0:1) as well as at the user's declaration; a `$$props` used only in the module script declares nothing. Verified against svelte-check --tsgo."
+}

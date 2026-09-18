@@ -1,0 +1,23 @@
+{
+    "errors": [
+        {
+            "file": "src/A.svelte",
+            "line": 1,
+            "column": 20,
+            "code": 2339
+        },
+        {
+            "file": "src/B.svelte",
+            "line": 1,
+            "column": 20,
+            "code": 2339
+        },
+        {
+            "file": "src/C.svelte",
+            "line": 2,
+            "column": 13,
+            "code": 2551
+        }
+    ],
+    "_note": "`$$slots` is typed from the slots the template declares (svelte2tsx's `__sveltets_2_slotsType({'name': ''})`), so reading a slot the component doesn't have is TS2339, or TS2551 with a near-miss suggestion. Verified against svelte-check --tsgo."
+}

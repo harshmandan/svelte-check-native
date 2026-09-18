@@ -1,0 +1,12 @@
+<script lang="ts">import Fwd from './Fwd.svelte';</script>
+<Fwd><div slot="whole" let:item>{item.a.nope}</div></Fwd>
+<Fwd><div slot="alias" let:it>{it.b.nope}</div></Fwd>
+<Fwd><div slot="obj" let:a let:bb>{a.nope}{bb.nope}</div></Fwd>
+<Fwd><div slot="dflt" let:aa>{aa.nope}</div></Fwd>
+<Fwd><div slot="nested" let:first>{first.nope}</div></Fwd>
+<Fwd><div slot="namedfwd" let:v>{v.nope}</div></Fwd>
+<Fwd><div slot="compchild" let:w>{w.nope}</div></Fwd>
+<Fwd><div slot="dyn" let:sc>{sc.nope}</div></Fwd>
+<Fwd><div slot="dotted" let:dot>{dot.nope}</div></Fwd>
+<Fwd><div slot="idx" let:i let:x>{i.nope}{x.nope}</div></Fwd>
+<Fwd><div slot="elem" let:zz>{zz.nope}</div></Fwd>

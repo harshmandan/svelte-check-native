@@ -1,0 +1,24 @@
+{
+    "errors": [
+        {
+            "file": "src/AnnotatedProps.svelte",
+            "line": 1,
+            "column": 25,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/AnnotatedProps.svelte",
+            "line": 1,
+            "column": 27,
+            "code": 8010
+        },
+        {
+            "file": "src/AnnotatedProps.svelte",
+            "line": 2,
+            "column": 23,
+            "code": 8008
+        }
+    ],
+    "warnings": [],
+    "_note": "svelte2tsx reads every script with TypeScript's parser, so a plain-JavaScript component's `$props()` type annotation is moved into `type $$ComponentProps = …` as it is in TypeScript, and the annotation is replaced by the alias name inside ignore markers. The alias is itself type syntax in a JavaScript file: TS8008 on its name, reported where the moved text starts (the space after the `:`), and no TS8010 on the annotation."
+}

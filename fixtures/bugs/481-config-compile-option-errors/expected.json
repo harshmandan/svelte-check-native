@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "src/A.svelte",
+            "line": 0,
+            "column": 0,
+            "code": "options_invalid_value"
+        },
+        {
+            "file": "src/B.svelte",
+            "line": 0,
+            "column": 0,
+            "code": "options_invalid_value"
+        }
+    ],
+    "_note": "compilerOptions.css is read during the analysis; a boolean there makes every component's compile throw options_invalid_value (at the start of the file). Verified against upstream svelte-check."
+}

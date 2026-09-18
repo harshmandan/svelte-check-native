@@ -29,32 +29,41 @@ function $$render_e40e2c10() {
             // trailing comment same line
         });
             __svn_ensure_transition(fade(__svn_map_element_tag('div')));
-            (flip(__svn_map_element_tag('div'), __svn_AnimationMove));
-            element = /** @type {HTMLElementTagNameMap['div']} */ (null);
+            __svn_ensure_animation(flip(__svn_map_element_tag('div'), __svn_AnimationMove));
+            element = svelteHTML.createElement("div", {});
             void __svn_action_0;
         }
         {
             const __svn_C_20b = __svn_ensure_component(Component);
-            const __svn_inst_20b = new __svn_C_20b({ target: __svn_any(), props: {"foo": "bar", "baz": "qux", ...(attachment), "prop": (bound_prop), ...(spread_props), "trailing": true} });
+            const __svn_inst_20b = new __svn_C_20b({ target: __svn_any(), props: {
+// comment
+"foo": "bar", 
+/* another comment */
+"baz": "qux", 
+// attachment comment
+...(attachment), 
+// binding comment
+"prop": (bound_prop), 
+// spread comment
+...(spread_props), "trailing": true
+// trailing comment newline
+} });
             /*svn:ignore_start*/void (() => { bound_prop = __svn_any(null); });/*svn:ignore_end*/
-            __svn_inst_20b.$on("click", (handler));
+            
+// event handler comment
+__svn_inst_20b.$on("click", (handler));
             __svn_inst_20b.$$bindings = 'prop';
             {
-                const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, item } = __svn_inst_20b.$$slot_def.default; $$_$$;
-                void item;
+                const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, 
+// let comment
+item } = __svn_inst_20b.$$slot_def.default; $$_$$;
             }
         }
     });
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
- */
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
- */
-/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
+/** @type {import('svelte').Component<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;

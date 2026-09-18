@@ -1,10 +1,8 @@
 //! `animate:NAME(PARAMS)` animation directive.
 //!
 //! Mirrors upstream svelte2tsx's
-//! `language-tools/packages/svelte2tsx/src/htmlxtojsx_v2/nodes/Animation.ts`.
-//!
-//! Upstream emits a typed call wrapped in
-//! `__sveltets_2_ensureAnimation(...)`:
+//! `language-tools/packages/svelte2tsx/src/htmlxtojsx_v2/nodes/Animation.ts`,
+//! which emits the typed call wrapped in `__sveltets_2_ensureAnimation(...)`:
 //!
 //! ```text
 //!     __sveltets_2_ensureAnimation(
@@ -12,14 +10,10 @@
 //!     );
 //! ```
 //!
-//! We emit the bare call (no `__svn_ensure_animation` wrapper yet —
-//! adding it would constrain the return type to `AnimationConfig`,
-//! catching "you returned a function instead of an animation config"
-//! errors. For the first cut we cover TS2304 / TS2554 / TS2345 by
-//! emitting the call directly; the `ensure` wrapper is a future
-//! refinement).
-
-use std::fmt::Write;
+//! The call checks NAME's signature (missing name, arity, parameter
+//! types); the wrapper checks its result is an animation config, so an
+//! animation function that returns something else (a cleanup thunk, a
+//! number) is rejected.
 
 use crate::emit_buffer::EmitBuffer;
 
@@ -53,37 +47,30 @@ pub(crate) fn emit_animation_directive(
     let name_start = d.range.start + prefix_len;
     let name_end = name_start + name.len() as u32;
     let name_range = svn_core::Range::new(name_start, name_end);
+    // The element and move arguments are ours, not the user's. A
+    // diagnostic on one of them (an animation declaring fewer
+    // parameters, or a narrower element type) lands on the last
+    // character of the directive name, which is where upstream's
+    // source map resolves text inserted right after the name.
+    let synthetic_args = format!("(__svn_map_element_tag({tag_arg}), __svn_AnimationMove");
+    let name_tail = svn_core::Range::new(name_end.saturating_sub(1), name_end);
+    buf.push_str(indent);
+    buf.push_str("__svn_ensure_animation(");
+    buf.append_with_source(name, name_range);
+    buf.append_with_source(&synthetic_args, name_tail);
     match &d.value {
         Some(svn_parser::DirectiveValue::Expression {
             expression_range, ..
         }) => {
-            let Some(params) =
-                source.get(expression_range.start as usize..expression_range.end as usize)
-            else {
-                return;
-            };
-            buf.push_str(indent);
-            buf.push_str("(");
-            buf.append_with_source(name, name_range);
-            let _ = write!(
-                buf,
-                "(__svn_map_element_tag({tag_arg}), __svn_AnimationMove, ("
-            );
+            let params = source
+                .get(expression_range.start as usize..expression_range.end as usize)
+                .unwrap_or("");
+            buf.push_str(", (");
             buf.append_with_source(params, *expression_range);
             buf.push_str(")));\n");
         }
-        _ => {
-            // Bare `animate:flip` (no params expression). Emit
-            // without the third arg; tsgo accepts it because the
-            // params slot is declared optional in Svelte's animation
-            // signature.
-            buf.push_str(indent);
-            buf.push_str("(");
-            buf.append_with_source(name, name_range);
-            let _ = writeln!(
-                buf,
-                "(__svn_map_element_tag({tag_arg}), __svn_AnimationMove));"
-            );
-        }
+        // Bare `animate:flip`: the params slot is optional in Svelte's
+        // animation signature, so the call omits it.
+        _ => buf.push_str("));\n"),
     }
 }

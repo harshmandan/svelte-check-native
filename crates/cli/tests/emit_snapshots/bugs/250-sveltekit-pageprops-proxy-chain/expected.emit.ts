@@ -10,14 +10,13 @@ function $$render_aad4163e() {
     const needsNumber = (n: number) => n;
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("h1", {});             (data.title);
+        { svelteHTML.createElement("h1", {});             data.title;
         }
-        { svelteHTML.createElement("p", {});             (needsNumber(data.count));
+        { svelteHTML.createElement("p", {});             needsNumber(data.count);
         }
-        { svelteHTML.createElement("p", {});             (needsNumber(data.title));
+        { svelteHTML.createElement("p", {});             needsNumber(data.title);
         }
         if ((form?.ok)) {
-            void [form?.ok];
             { svelteHTML.createElement("span", {});             }
         }
     });

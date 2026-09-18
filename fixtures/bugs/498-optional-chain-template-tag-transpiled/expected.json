@@ -1,0 +1,23 @@
+{
+    "errors": [
+        {
+            "file": "src/OptionalTag.svelte",
+            "line": 1,
+            "column": 4,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/OptionalTag.svelte",
+            "line": 1,
+            "column": 0,
+            "code": 2304
+        },
+        {
+            "file": "src/OptionalTag.svelte",
+            "line": 1,
+            "column": 4,
+            "code": 1358
+        }
+    ],
+    "warnings": []
+}

@@ -1,0 +1,102 @@
+{
+    "errors": [
+        {
+            "file": "src/TablePlacement.svelte",
+            "line": 0,
+            "column": 7,
+            "code": "node_invalid_placement"
+        },
+        {
+            "file": "src/ExportLet.svelte",
+            "line": 0,
+            "column": 40,
+            "code": "legacy_export_invalid"
+        },
+        {
+            "file": "src/DollarRunesNested.svelte",
+            "line": 0,
+            "column": 59,
+            "code": "dollar_prefix_invalid"
+        },
+        {
+            "file": "src/TableText.svelte",
+            "line": 0,
+            "column": 7,
+            "code": "node_invalid_placement"
+        },
+        {
+            "file": "src/SelfPlacement.svelte",
+            "line": 0,
+            "column": 0,
+            "code": "svelte_self_invalid_placement"
+        },
+        {
+            "file": "src/DollarBinding.svelte",
+            "line": 0,
+            "column": 22,
+            "code": "dollar_binding_invalid"
+        },
+        {
+            "file": "src/BindableLocation.svelte",
+            "line": 0,
+            "column": 26,
+            "code": "bindable_invalid_location"
+        },
+        {
+            "file": "src/SlotPlacement.svelte",
+            "line": 0,
+            "column": 5,
+            "code": "slot_attribute_invalid_placement"
+        },
+        {
+            "file": "src/BindValue.svelte",
+            "line": 0,
+            "column": 19,
+            "code": "bind_invalid_value"
+        },
+        {
+            "file": "src/ReactiveInRunes.svelte",
+            "line": 0,
+            "column": 40,
+            "code": "legacy_reactive_statement_invalid"
+        },
+        {
+            "file": "src/DefaultExportSpecifier.svelte",
+            "line": 0,
+            "column": 29,
+            "code": "module_illegal_default_export"
+        },
+        {
+            "file": "src/SlotName.svelte",
+            "line": 1,
+            "column": 6,
+            "code": "slot_element_invalid_name"
+        },
+        {
+            "file": "src/MixedEvents.svelte",
+            "line": 1,
+            "column": 8,
+            "code": "mixed_event_handler_syntaxes"
+        },
+        {
+            "file": "src/TopLevelAwait.svelte",
+            "line": 0,
+            "column": 40,
+            "code": "experimental_async"
+        },
+        {
+            "file": "src/DollarPrefix.svelte",
+            "line": 0,
+            "column": 22,
+            "code": "dollar_prefix_invalid"
+        },
+        {
+            "file": "src/SlotName.svelte",
+            "line": 0,
+            "column": 24,
+            "code": 6133
+        }
+    ],
+    "warnings": [],
+    "_note": "Compile errors the Svelte compiler raises during scope creation and analysis, each with its code, position and emission order: dollar_prefix_invalid / dollar_binding_invalid (module/instance declarations, and every declarator in runes mode), bindable_invalid_location, props_duplicate, module_illegal_default_export (default export and `export { x as default }`), legacy_export_invalid, legacy_reactive_statement_invalid, experimental_async (no experimental.async in the config), mixed_event_handler_syntaxes, svelte_self_invalid_placement, slot_element_invalid_name, slot_attribute_invalid_placement, node_invalid_placement (element and text children of <table>) and bind_invalid_value. Verified file by file against svelte-check 4.4.6 / svelte 5.55; without a real svelte install the fixture does not see the TS2304 upstream adds for the unbound `nope`."
+}

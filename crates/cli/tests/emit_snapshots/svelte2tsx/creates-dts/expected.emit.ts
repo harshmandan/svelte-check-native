@@ -13,26 +13,24 @@ function $$render_e40e2c10() {
 
   const dispatch = createEventDispatcher();
   dispatch('hi');
+    const __svn_create_slot = __svn_create_create_slot();
     ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("button", {
             "on:click": undefined,
         });
         }
+        {
+            __svn_create_slot("default", { bar });
+        }
     });
     void bar;
     void foobar;
-    return { props: /** @type {{ bar: any; foobar?: typeof foobar; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { bar: (bar) } }, bindings: /** @type {string} */ (''), exports: /** @type {{ bar: typeof bar; foobar: typeof foobar; }} */ ({}) };
+    return { props: /** @type {{ bar: any; foobar?: typeof foobar; }} */({}), events: /** @type {(Omit<({ "click": HTMLElementEventMap["click"] }), keyof ({ "hi": CustomEvent<any> })> & ({ "hi": CustomEvent<any> })) & { [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { bar: (bar) } }, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
-/**
- * @typedef {__SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>} __SvnDefaultProps
- */
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
- */
-/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
+/** @type {__SvnIsomorphicComponent<__SvnSvelte4SlotedProps<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>, __SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */
 export const __svn_component_default = /** @type {any} */ (null);
-/** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
+/** @typedef {InstanceType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;
 

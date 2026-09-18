@@ -9,7 +9,7 @@ use std::fmt::Write;
 use svn_parser::EachBlock;
 
 use crate::emit_buffer::EmitBuffer;
-use crate::{emit_is_ts, emit_template_body, pattern_binding_names};
+use crate::emit_template_body;
 
 /// Emit a `for`-of loop for an `{#each}` block.
 ///
@@ -44,54 +44,68 @@ pub(crate) fn emit_each_block(
     };
     // `{#each expr, i}` (index-only sequence form) has an as-clause with
     // no context pattern — the placeholder binding covers it like the
-    // clause-less `{#each items}`.
-    let binding_text = b
+    // clause-less `{#each items}`, and is referenced once so an unused
+    // placeholder never reports.
+    let context: Option<(&str, svn_core::Range)> = b
         .as_clause
         .as_ref()
         .and_then(|c| c.context_range)
-        .and_then(|r| source.get(r.start as usize..r.end as usize))
-        .unwrap_or("__svn_each_unused")
-        .to_string();
-    // `{#each items as item, i}` — `i` is the zero-based iteration index.
-    // `__svn_each_items` returns a plain Iterable, which doesn't expose
-    // `.entries()`, so declaring the index as a `const i: number` inside
-    // the loop body is simpler than rewriting the for-of pattern to
-    // destructure an [index, item] pair. Using `0` for the value is a
-    // type-only trick — the generated function is never executed.
-    let index_binding: Option<&str> = b
+        .and_then(|r| source.get(r.start as usize..r.end as usize).map(|t| (t, r)));
+    let binding_text = context.map_or("__svn_each_unused", |(t, _)| t);
+    let index: Option<(&str, svn_core::Range)> = b
         .as_clause
         .as_ref()
         .and_then(|c| c.index_range)
-        .and_then(|r| source.get(r.start as usize..r.end as usize));
-    // `{#each items as items}` names the iterable and the item the same.
-    // Emitting `for (const items of __svn_each_items(items))` directly
-    // fires TS2448 / TS7022 — the for-of binding shadows the iterable
-    // reference, so `items` is "used before its declaration". Mirror
-    // upstream EachBlock.ts's `arrayAndItemVarTheSame` path: bind the
-    // iterable to a temp in a wrapper block first, then iterate the temp.
-    // (The temp is block-scoped, so nested same-name each blocks shadow
-    // cleanly rather than colliding.)
-    let same_name = b.as_clause.is_some() && !expr_text.is_empty() && binding_text == expr_text;
-    if same_name {
-        let _ = write!(buf, "{indent}{{ const __svn_each_arr = __svn_each_items(");
+        .and_then(|r| source.get(r.start as usize..r.end as usize).map(|t| (t, r)));
+    // `{#each true, items as item}` is valid; the sequence needs parens
+    // to stay one argument (`EachBlock.ts`'s `containsComma`).
+    let (open, close) = if expr_text.contains(',') {
+        ("(", ")")
     } else {
-        let _ = write!(buf, "{indent}for (let {binding_text} of __svn_each_items(");
+        ("", "")
+    };
+    let write_binding = |buf: &mut EmitBuffer| match context {
+        Some((text, range)) => buf.append_with_source(text, range),
+        None => buf.push_str(binding_text),
+    };
+    // `{#each items as items}` names the iterable and the item the same.
+    // Emitting `for (let items of __svn_each_items(items))` directly
+    // fires TS2448 / TS7022 — the for-of binding shadows the iterable
+    // reference. Mirror upstream EachBlock.ts's `arrayAndItemVarTheSame`
+    // path: bind the iterable to a temp in a wrapper block first, then
+    // iterate the temp. (The temp is block-scoped, so nested same-name
+    // each blocks shadow cleanly rather than colliding.)
+    let same_name = context.is_some() && !expr_text.is_empty() && binding_text == expr_text;
+    if same_name {
+        let _ = write!(
+            buf,
+            "{indent}{{ const __svn_each_arr = __svn_each_items({open}"
+        );
+    } else {
+        let _ = write!(buf, "{indent}for (let ");
+        write_binding(buf);
+        let _ = write!(buf, " of __svn_each_items({open}");
     }
     match expr_source_range {
         Some(r) => buf.append_with_source(expr_text, r),
         None => buf.push_str(expr_text),
     }
     if same_name {
-        let _ = writeln!(buf, "); for (let {binding_text} of __svn_each_arr) {{");
+        let _ = write!(buf, "{close}); for (let ");
+        write_binding(buf);
+        let _ = writeln!(buf, " of __svn_each_arr) {{");
     } else {
-        let _ = writeln!(buf, ")) {{");
+        let _ = writeln!(buf, "{close})) {{");
     }
-    if let Some(ix) = index_binding {
-        if emit_is_ts() {
-            let _ = writeln!(buf, "{indent}    let {ix}: number = 0;");
-        } else {
-            let _ = writeln!(buf, "{indent}    /** @type {{number}} */ let {ix} = 0;");
-        }
+    if context.is_none() {
+        let _ = writeln!(buf, "{indent}    {binding_text};");
+    }
+    // `let i = 1;` — the index, typed `number` by inference in both
+    // TypeScript and JavaScript overlays, as upstream writes it.
+    if let Some((text, range)) = index {
+        let _ = write!(buf, "{indent}    let ");
+        buf.append_with_source(text, range);
+        let _ = writeln!(buf, " = 1;");
     }
     // The `(key)` of a keyed each block is user code and gets checked
     // like any other template expression. It belongs inside the loop
@@ -110,15 +124,6 @@ pub(crate) fn emit_each_block(
         let _ = writeln!(buf, ");");
     }
     emit_template_body(buf, source, &b.body, depth + 1, insts, action_counter);
-    // Void every identifier that the binding pattern destructures, not
-    // just the first. `[id, label]` and `[id, { label }]` both bind two
-    // names and TS6133 fires on each unused one.
-    for ident in pattern_binding_names(&binding_text) {
-        let _ = writeln!(buf, "{indent}    void {ident};");
-    }
-    if let Some(ix) = index_binding {
-        let _ = writeln!(buf, "{indent}    void {ix};");
-    }
     let _ = writeln!(buf, "{indent}}}");
     if same_name {
         // Close the `arrayAndItemVarTheSame` wrapper block.

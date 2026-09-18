@@ -13,12 +13,12 @@ use svn_parser::{Node, SnippetBlock};
 
 use crate::TokenMapEntry;
 use crate::emit_buffer::EmitBuffer;
+use crate::emit_template_body;
 use crate::nodes::let_directive::{
-    child_is_slot_let_consumer, collect_let_destructures, emit_let_slot_destructure,
+    collect_let_destructures, emit_let_slot_destructure, fragment_has_slot_let_consumer,
     walk_child_with_slot_let,
 };
 use crate::util::{is_css_custom_prop_name, is_simple_js_identifier};
-use crate::{emit_template_body, param_binding_names};
 
 /// Emit a `<Component ...>` node as a call to the component's typed
 /// default export:
@@ -97,11 +97,7 @@ pub(crate) fn emit_component_node(
     // present, the parent (this component) needs its instance hoisted
     // to a local so the consumer wrapper can reference
     // `parent.$$slot_def["X"]`.
-    let any_child_consumes_slot_let = c
-        .children
-        .nodes
-        .iter()
-        .any(|n| child_is_slot_let_consumer(source, n));
+    let any_child_consumes_slot_let = fragment_has_slot_let_consumer(source, &c.children);
 
     // Only emit the call when analyze collected an instantiation for
     // this node. Components disqualified at analyze time fall back to
@@ -140,7 +136,15 @@ pub(crate) fn emit_component_node(
         let _ = writeln!(buf, "{inner_open_indent}{{");
         let dest_depth = child_depth + 1;
         if let Some(inst) = inst {
-            emit_let_slot_destructure(buf, inst, &let_destructures, "default", None, dest_depth);
+            emit_let_slot_destructure(
+                buf,
+                source,
+                inst,
+                &let_destructures,
+                "default",
+                None,
+                dest_depth,
+            );
         }
         dest_depth
     } else {
@@ -232,27 +236,15 @@ pub(crate) fn emit_component_call(
     let inst_local = svn_core::synth_names::instance_local(inst.node_start);
     // Hoist when ANY post-construction emit needs the instance:
     // `$inst.$on(...)`, `bind:this`, slot-let consumer destructure,
-    // OR named snippet props that drive a `const { NAME } =
-    // __svn_inst.$$prop_def;` destructure so subsequent `{@render
-    // NAME(...)}` calls resolve.
-    //
-    // The implicit `children` snippet is excluded — it's handled by
-    // the parent's `let { children } = $props()` (if any) and never
-    // gets a post-instance destructure (would shadow / collide).
-    // Hoisting JUST for `children`-only snippets leaves
-    // `__svn_inst_NN` unreferenced → TS6133 reverse-maps onto the
-    // user's `<Comp>` source span. Skip the hoist entirely in that
-    // case. Mirrors upstream svelte2tsx's `snippetPropVariables` at
-    // `htmlxtojsx_v2/nodes/InlineComponent.ts:209-214` (its
-    // `snippetPropsTransformation` excludes implicit-`children` for
-    // the same reason).
-    let has_named_snippet = snippet_children
-        .iter()
-        .any(|s| s.name.as_str() != "children");
+    // OR snippet props, which drive a `const { NAME } =
+    // __svn_inst.$$prop_def;` destructure so `{@render NAME(...)}`
+    // inside the component resolves to the component's own prop
+    // (upstream's `snippetPropVariables`, InlineComponent.ts).
     let hoist_instance = !inst.on_events.is_empty()
         || inst.bind_this_target.is_some()
+        || inst.bind_this_setter.is_some()
         || needs_inst_for_let
-        || has_named_snippet
+        || !snippet_children.is_empty()
         || !inst.bind_directives.is_empty();
     let ctor_lhs = if hoist_instance {
         format!("const {inst_local} = ")
@@ -281,38 +273,33 @@ pub(crate) fn emit_component_call(
     // matches the simple-identifier path's behavior and is enough to
     // surface TS2304 on the root identifier.
     let _ = write!(buf, "{inner}const {local} = __svn_ensure_component(");
-    let name_start = inst.node_start.saturating_add(1);
-    let name_end = name_start.saturating_add(comp.len() as u32);
-    buf.append_with_source(comp.as_str(), svn_core::Range::new(name_start, name_end));
+    buf.append_with_source(comp.as_str(), inst.root_range);
     buf.push_str(");\n");
 
     // Implicit-children synthesis: when the user has non-snippet body
-    // content, inject `"children": () => __svn_snippet_return()` into
-    // the props literal. Matches upstream svelte2tsx's behavior so
-    // components declaring `children: Snippet` (required) accept
-    // `<Comp>body</Comp>` without a TS2741 at the satisfies trailer.
-    //
-    // Skipped when the user explicitly named a `children` prop OR
-    // wrote a `{#snippet children}` block — both paths already emit
-    // a `children:` key; a second synthesis would fire TS1117.
-    let user_named_children = inst
-        .props
-        .iter()
-        .any(|p| prop_shape_name(p).is_some_and(|n| n == "children"));
-    let user_named_children_snippet = snippet_children
-        .iter()
-        .any(|s| s.name.as_str() == "children");
-    let emit_implicit_children =
-        inst.has_implicit_children && !user_named_children && !user_named_children_snippet;
+    // content, the props literal starts with `children: () =>
+    // __svn_snippet_return()`, so components declaring a required
+    // `children: Snippet` accept `<Comp>body</Comp>`. Upstream adds
+    // this prop when it enters the component, before any attribute or
+    // snippet prop, and adds it even when the user also passes
+    // `children` — an explicit `children` attribute or `{#snippet
+    // children}` is then a duplicate key (TS1117) at the user's name.
+    // Only a Svelte 5 install gets it (`handleImplicitChildren` runs
+    // under `svelte5Plus`): Svelte 4 components have no `children` prop.
+    let emit_implicit_children = inst.has_implicit_children && crate::util::svelte5_plus();
 
     if snippet_children.is_empty() && inst.props.is_empty() && !emit_implicit_children {
         let _ = write!(buf, "{inner}{ctor_lhs}");
         let call_start = buf.len() as u32;
-        let _ = write!(buf, "new {local}({{ target: __svn_any(), props: {{}} }})");
+        write_new_ctor(buf, inst, &local);
+        buf.push_str("({ target: __svn_any(), ");
+        write_props_key(buf, inst);
+        buf.push_str(" {} })");
         push_component_call_token_map(buf, call_start, inst.node_start);
         buf.push_str(";\n");
         emit_component_bind_widen_trailers(buf, inst, &inner);
         emit_bind_this_assignment(buf, source, inst, &inst_local, &inner);
+        emit_component_element_directives(buf, source, inst, &inner);
         emit_on_event_calls(buf, source, inst, &inst_local, &inner);
         emit_component_bindings_post_check(buf, inst, &inst_local, &inner);
         return;
@@ -321,26 +308,29 @@ pub(crate) fn emit_component_call(
     if snippet_children.is_empty() {
         let _ = write!(buf, "{inner}{ctor_lhs}");
         let call_start = buf.len() as u32;
-        let _ = write!(buf, "new {local}({{ target: __svn_any(), props: {{");
+        write_new_ctor(buf, inst, &local);
+        buf.push_str("({ target: __svn_any(), ");
+        write_props_key(buf, inst);
+        buf.push_str(" {");
         let mut first = true;
+        if emit_implicit_children {
+            write_implicit_children_key(buf, inst);
+            buf.push_str(" () => __svn_snippet_return()");
+            first = false;
+        }
         for p in &inst.props {
             if !first {
                 let _ = write!(buf, ", ");
             }
             first = false;
-            write_prop_shape(buf, source, p);
-        }
-        if emit_implicit_children {
-            if !first {
-                let _ = write!(buf, ", ");
-            }
-            let _ = write!(buf, "children: () => __svn_snippet_return()");
+            write_prop_shape(buf, source, inst, p);
         }
         let _ = write!(buf, "}} }})");
         push_component_call_token_map(buf, call_start, inst.node_start);
         buf.push_str(";\n");
         emit_component_bind_widen_trailers(buf, inst, &inner);
         emit_bind_this_assignment(buf, source, inst, &inst_local, &inner);
+        emit_component_element_directives(buf, source, inst, &inner);
         emit_on_event_calls(buf, source, inst, &inst_local, &inner);
         emit_component_bindings_post_check(buf, inst, &inst_local, &inner);
         return;
@@ -349,14 +339,22 @@ pub(crate) fn emit_component_call(
     // Multi-line form with snippets-as-arrow-props.
     let _ = write!(buf, "{inner}{ctor_lhs}");
     let call_start = buf.len() as u32;
-    let _ = writeln!(buf, "new {local}({{");
+    write_new_ctor(buf, inst, &local);
+    let _ = writeln!(buf, "({{");
     let opts_inner = "    ".repeat(depth + 2);
     let props_inner = "    ".repeat(depth + 3);
     let _ = writeln!(buf, "{opts_inner}target: __svn_any(),");
-    let _ = writeln!(buf, "{opts_inner}props: {{");
+    buf.push_str(&opts_inner);
+    write_props_key(buf, inst);
+    buf.push_str(" {\n");
+    if emit_implicit_children {
+        buf.push_str(&props_inner);
+        write_implicit_children_key(buf, inst);
+        let _ = writeln!(buf, " () => __svn_snippet_return(),");
+    }
     for p in &inst.props {
         buf.push_str(&props_inner);
-        write_prop_shape(buf, source, p);
+        write_prop_shape(buf, source, inst, p);
         let _ = writeln!(buf, ",");
     }
     for s in snippet_children {
@@ -364,19 +362,28 @@ pub(crate) fn emit_component_call(
         write_snippet_arrow_prop(buf, source, s, depth + 3, insts, action_counter);
         let _ = writeln!(buf, ",");
     }
-    if emit_implicit_children {
-        buf.push_str(&props_inner);
-        let _ = writeln!(buf, "children: () => __svn_snippet_return(),");
-    }
     let _ = writeln!(buf, "{opts_inner}}},");
     let _ = write!(buf, "{inner}}})");
     push_component_call_token_map(buf, call_start, inst.node_start);
     buf.push_str(";\n");
     emit_component_bind_widen_trailers(buf, inst, &inner);
     emit_bind_this_assignment(buf, source, inst, &inst_local, &inner);
+    emit_component_element_directives(buf, source, inst, &inner);
     emit_on_event_calls(buf, source, inst, &inst_local, &inner);
     emit_component_bindings_post_check(buf, inst, &inst_local, &inner);
     emit_snippet_prop_destructure(buf, snippet_children, &inst_local, &inner);
+}
+
+/// Write the implicit `children` key, mapped to the source character
+/// upstream's rewrite leaves in front of it (an excess-`children`
+/// diagnostic lands there).
+fn write_implicit_children_key(buf: &mut EmitBuffer, inst: &svn_analyze::ComponentInstantiation) {
+    match inst.implicit_children_anchor {
+        // The `:` shares the anchor, so a range ending right after the
+        // key collapses onto it, as upstream's does.
+        Some(anchor) => buf.append_with_source("children:", anchor),
+        None => buf.push_str("children:"),
+    }
 }
 
 /// Emit `const { name1, name2 } = __svn_inst_NN.$$prop_def;` after the
@@ -398,19 +405,11 @@ fn emit_snippet_prop_destructure(
     if snippet_children.is_empty() {
         return;
     }
-    // The implicit `children` snippet (declared via
-    // `{#snippet children}`) is special — `children` may already be a
-    // user local from `let { children } = $props()`. Skip it from the
-    // destructure to avoid TS2451 redeclaration. Other snippet names
-    // are unique-by-construction at the call site.
-    let names: Vec<&str> = snippet_children
-        .iter()
-        .map(|s| s.name.as_str())
-        .filter(|n| *n != "children")
-        .collect();
-    if names.is_empty() {
-        return;
-    }
+    // Every snippet prop, `children` included: the destructure sits in
+    // the component's own block, so it shadows (not redeclares) an
+    // outer `children` from `$props()`, and a `{@render children()}`
+    // inside the component reads the component's declared prop type.
+    let names: Vec<&str> = snippet_children.iter().map(|s| s.name.as_str()).collect();
     let _ = write!(buf, "{inner}/*svn:ignore_start*/const {{ ");
     for (i, n) in names.iter().enumerate() {
         if i > 0 {
@@ -498,7 +497,9 @@ fn emit_component_bindings_post_check(
         // surfaces the diagnostic at the directive's source position.
         let lhs = format!("{inst_local}.$$bindings");
         buf.append_with_source(&lhs, d.range);
-        buf.push_str(" = ");
+        // Upstream reports this error over the whole directive; the
+        // text right after the reference resolves to its end.
+        buf.append_with_source(" = ", svn_core::Range::new(d.range.end, d.range.end + 1));
         let literal = format!("'{}'", d.name.as_str());
         buf.append_with_source(&literal, d.range);
         buf.push_str(";\n");
@@ -511,6 +512,14 @@ fn emit_component_bindings_post_check(
 /// Map the whole `new C({ … })` call onto the first byte of the
 /// component's tag name, where upstream anchors a diagnostic on the
 /// call's props object (a missing required prop, an excess one).
+/// Write `new $$_CN`, mapping the constructor reference to the
+/// instantiation's constructor anchor. A component value that is not
+/// constructible (TS2351) is reported there, as upstream reports it.
+fn write_new_ctor(buf: &mut EmitBuffer, inst: &svn_analyze::ComponentInstantiation, local: &str) {
+    buf.push_str("new ");
+    buf.append_with_source(local, inst.ctor_anchor);
+}
+
 fn push_component_call_token_map(buf: &mut EmitBuffer, call_start: u32, node_start: u32) {
     let call_end = buf.len() as u32;
     let source_start = node_start.saturating_add(1);
@@ -521,21 +530,6 @@ fn push_component_call_token_map(buf: &mut EmitBuffer, call_start: u32, node_sta
         source_byte_start: source_start,
         source_byte_end: source_end,
     });
-}
-
-/// Extract the NAME from a `PropShape`, if it has one. Used at emit
-/// time to detect whether the user explicitly named a prop we'd
-/// otherwise synthesize (e.g. `children`).
-fn prop_shape_name(p: &svn_analyze::PropShape) -> Option<&str> {
-    match p {
-        svn_analyze::PropShape::Literal { name, .. }
-        | svn_analyze::PropShape::Expression { name, .. }
-        | svn_analyze::PropShape::Shorthand { name, .. }
-        | svn_analyze::PropShape::BoolShorthand { name, .. }
-        | svn_analyze::PropShape::GetSetBinding { name, .. }
-        | svn_analyze::PropShape::TemplateLiteral { name, .. } => Some(name),
-        svn_analyze::PropShape::Spread { .. } => None,
-    }
 }
 
 /// Emit one `$inst.$on("event", (handler))` line per `on:event`
@@ -558,7 +552,9 @@ fn emit_on_event_calls(
         // maps back to the source `on:NAME` position. Without this
         // the diagnostic falls inside the `(async () => {…})` synth
         // scaffolding and gets filtered by `map_diagnostic`.
-        let _ = write!(buf, "{inner}{inst_local}.$on(");
+        buf.push_str(inner);
+        crate::nodes::comment::write_leading_comments(buf, source, &ev.comments);
+        let _ = write!(buf, "{inst_local}.$on(");
         buf.append_with_source(&format!("\"{name}\""), ev.name_range);
         // Reviewer follow-up #1: bare `<Child on:event>` (no value)
         // is event-bubble shorthand. Walker stores those with an
@@ -567,7 +563,9 @@ fn emit_on_event_calls(
         // type-checked against the child's declared Events surface.
         // Mirrors upstream `EventHandler.ts:147`.
         if ev.handler_range.start >= ev.handler_range.end {
-            buf.push_str(", () => {});\n");
+            buf.push_str(", () => {});");
+            crate::nodes::comment::write_trailing_comments(buf, source, &ev.comments);
+            buf.push('\n');
             continue;
         }
         // `handler_range` is a parser-produced span over `source`, so
@@ -577,7 +575,85 @@ fn emit_on_event_calls(
         let expr = &source[ev.handler_range.start as usize..ev.handler_range.end as usize];
         buf.push_str(", (");
         buf.append_with_source(expr, ev.handler_range);
-        buf.push_str("));\n");
+        buf.push_str("));");
+        crate::nodes::comment::write_trailing_comments(buf, source, &ev.comments);
+        buf.push('\n');
+    }
+}
+
+/// Write the `class:` / `style:` / transition / `animate:` directives on
+/// a component after its constructor call. svelte2tsx handles them as
+/// it does on an element, but a component has no element tag or typings
+/// namespace, so a transition or animation receives
+/// `undefined.mapElementTag('undefined')` (TS18050). That text follows
+/// the directive name, and resolves to the character after it (or the
+/// name's last character when the name ends the start tag).
+fn emit_component_element_directives(
+    buf: &mut EmitBuffer,
+    source: &str,
+    inst: &svn_analyze::ComponentInstantiation,
+    inner: &str,
+) {
+    use svn_parser::DirectiveKind;
+    for d in &inst.element_directives {
+        let name_start = d.range.start + d.kind.prefix_len_with_colon();
+        let name_end = name_start + d.name.len() as u32;
+        let name_range = svn_core::Range::new(name_start, name_end);
+        let expression = match &d.value {
+            Some(svn_parser::DirectiveValue::Expression {
+                expression_range, ..
+            }) => source
+                .get(expression_range.start as usize..expression_range.end as usize)
+                .filter(|t| !t.trim().is_empty())
+                .map(|t| (t, *expression_range)),
+            _ => None,
+        };
+        match d.kind {
+            DirectiveKind::Class => {
+                buf.push_str(inner);
+                match expression {
+                    Some((text, range)) => buf.append_with_source(text, range),
+                    None => buf.append_with_source(d.name.as_str(), name_range),
+                }
+                buf.push_str(";\n");
+            }
+            DirectiveKind::Style => {
+                crate::nodes::style_directive::emit_style_directive(buf, source, d, inner);
+            }
+            DirectiveKind::Transition
+            | DirectiveKind::In
+            | DirectiveKind::Out
+            | DirectiveKind::Animate => {
+                let anchor = if name_end + 1 < inst.start_tag_end {
+                    svn_core::Range::new(name_end, name_end + 1)
+                } else {
+                    svn_core::Range::new(name_end.saturating_sub(1), name_end)
+                };
+                let (wrapper, tail) = if d.kind == DirectiveKind::Animate {
+                    (
+                        "__svn_ensure_animation(",
+                        "(undefined.mapElementTag('undefined'),__svn_AnimationMove",
+                    )
+                } else {
+                    (
+                        "__svn_ensure_transition(",
+                        "(undefined.mapElementTag('undefined')",
+                    )
+                };
+                buf.push_str(inner);
+                buf.push_str(wrapper);
+                buf.append_with_source(d.name.as_str(), name_range);
+                buf.append_with_source(tail, anchor);
+                if let Some((text, range)) = expression {
+                    buf.append_with_source(",(", anchor);
+                    buf.append_with_source(text, range);
+                    buf.push(')');
+                }
+                buf.append_with_source(")", anchor);
+                buf.push_str(");\n");
+            }
+            _ => {}
+        }
     }
 }
 
@@ -605,11 +681,50 @@ fn emit_bind_this_assignment(
         buf.push_str(inst_local);
         buf.push_str(";\n");
     }
+    if let Some(range) = &inst.bind_this_setter
+        && let Some(setter) = source.get(range.start as usize..range.end as usize)
+    {
+        buf.push_str(inner);
+        buf.push('(');
+        buf.append_with_source(setter, *range);
+        // Upstream writes this over the character after the setter, so
+        // the call maps there.
+        buf.append_with_source(
+            &format!(")({inst_local})"),
+            svn_core::Range::new(range.end, range.end + 1),
+        );
+        buf.push_str(";\n");
+    }
 }
 
 /// Write a single property of a component-prop-check object literal,
 /// dispatching on the analyze-side `PropShape` variant.
-fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropShape) {
+fn write_prop_shape(
+    buf: &mut EmitBuffer,
+    source: &str,
+    inst: &svn_analyze::ComponentInstantiation,
+    p: &svn_analyze::PropShape,
+) {
+    let attr_range = p.attr_range();
+    let comments = inst
+        .prop_comments
+        .iter()
+        .find(|(range, _)| *range == attr_range)
+        .map(|(_, thread)| thread);
+    // A shorthand prop is written from its name alone, so svelte2tsx
+    // drops the comments leading it and keeps only the trailing ones.
+    if let Some(thread) = comments
+        && !matches!(p, svn_analyze::PropShape::Shorthand { .. })
+    {
+        crate::nodes::comment::write_leading_comments(buf, source, thread);
+    }
+    write_prop_shape_value(buf, source, p);
+    if let Some(thread) = comments {
+        crate::nodes::comment::write_trailing_comments(buf, source, thread);
+    }
+}
+
+fn write_prop_shape_value(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropShape) {
     let attr_range = p.attr_range();
     match p {
         svn_analyze::PropShape::Literal { name, value, .. } => {
@@ -620,13 +735,13 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
             if is_css_custom_prop_name(name) {
                 buf.push_str("...__svn_css_prop({");
                 write_quoted_prop_key_with_source(buf, name, attr_range);
-                buf.push_str(": ");
+                buf.push_str(" ");
                 write_js_string_literal_to(buf, value);
                 buf.push_str("})");
                 return;
             }
             write_quoted_prop_key_with_source(buf, name, attr_range);
-            buf.push_str(": ");
+            buf.push_str(" ");
             write_js_string_literal_to(buf, value);
         }
         svn_analyze::PropShape::Expression {
@@ -638,15 +753,17 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
             if is_css_custom_prop_name(name) {
                 buf.push_str("...__svn_css_prop({");
                 write_quoted_prop_key_with_source(buf, name, attr_range);
-                buf.push_str(": (");
+                buf.push_str(" (");
                 buf.append_with_source(expr, *expr_range);
                 buf.push_str(")})");
                 return;
             }
             write_quoted_prop_key_with_source(buf, name, attr_range);
-            buf.push_str(": (");
+            let (open, close) = crate::nodes::attribute::value_parens(expr);
+            buf.push_str(" ");
+            buf.push_str(open);
             buf.append_with_source(expr, *expr_range);
-            buf.push_str(")");
+            buf.push_str(close);
         }
         svn_analyze::PropShape::Shorthand { name, .. } => {
             // `{foo}` shorthand is only valid when the key is also a
@@ -655,7 +772,7 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
                 buf.append_with_source(name, attr_range);
             } else {
                 write_quoted_prop_key_with_source(buf, name, attr_range);
-                let _ = write!(buf, ": {name}");
+                let _ = write!(buf, " {name}");
             }
         }
         svn_analyze::PropShape::BoolShorthand { name, .. } => {
@@ -674,11 +791,11 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
             if is_css_custom_prop_name(name) {
                 buf.push_str("...__svn_css_prop({");
                 write_quoted_prop_key_with_source(buf, name, attr_range);
-                buf.push_str(": true})");
+                buf.push_str(" true})");
                 return;
             }
             write_quoted_prop_key_with_source(buf, name, attr_range);
-            buf.push_str(": true");
+            buf.push_str(" true");
         }
         svn_analyze::PropShape::Spread { expr_range, .. } => {
             let expr = source
@@ -706,7 +823,7 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
             // `T` from the getter's return, checks the setter's
             // parameter against `T`, and flows the return out to the
             // prop slot.
-            buf.push_str(": __svn_get_set_binding(");
+            buf.push_str(" __svn_get_set_binding(");
             buf.append_with_source(getter, *getter_range);
             buf.push_str(", ");
             buf.append_with_source(setter, *setter_range);
@@ -737,7 +854,7 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
                 buf.push_str("...__svn_css_prop({");
             }
             write_quoted_prop_key_with_source(buf, name, attr_range);
-            buf.push_str(": `");
+            buf.push_str(" `");
             for part in parts {
                 match part {
                     svn_parser::AttrValuePart::Text { range } => {
@@ -779,6 +896,11 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
 /// TokenMapEntry covering the synthesized `"name"` text in the overlay
 /// pointing to the user's attribute span so prop-check diagnostics land
 /// at the user's source position.
+/// Write a prop name as a quoted key and its `:`. svelte2tsx keeps the name's
+/// source range and writes the quotes around it (the opening one over
+/// the name's first character), so the opening quote maps to the name's
+/// start and the closing one to the name's end: a diagnostic on the key
+/// spans exactly the name.
 fn write_quoted_prop_key_with_source(
     buf: &mut EmitBuffer,
     name: &str,
@@ -786,7 +908,27 @@ fn write_quoted_prop_key_with_source(
 ) {
     let mut quoted = String::with_capacity(name.len() + 2);
     write_js_string_literal_to(&mut quoted, name);
-    buf.append_with_source(&quoted, attr_range);
+    let start = attr_range.start;
+    let end = start + name.len() as u32;
+    if quoted.len() != name.len() + 2 || end > attr_range.end || name.is_empty() {
+        // An escaped name has no byte-for-byte counterpart.
+        buf.append_with_source(&quoted, attr_range);
+        buf.push(':');
+        return;
+    }
+    buf.append_with_source("\"", svn_core::Range::new(start, start + 1));
+    buf.append_with_source(name, svn_core::Range::new(start, end));
+    // The `:` shares the closing quote's source character, so a range
+    // ending right after the key ends at the name's end.
+    buf.append_with_source("\":", svn_core::Range::new(end, end + 1));
+}
+
+/// Write the `props` key of a component's constructor options. svelte2tsx
+/// writes it as text following the moved component name, so a diagnostic
+/// on the whole props object (a prop it does not accept, an excess
+/// `children`) resolves to the name's last character.
+fn write_props_key(buf: &mut EmitBuffer, inst: &svn_analyze::ComponentInstantiation) {
+    buf.append_with_source("props:", inst.ctor_anchor);
 }
 
 /// Write a `{#snippet name(params)}...{/snippet}` block as an
@@ -829,7 +971,12 @@ pub(crate) fn write_snippet_arrow_prop(
         .get(s.parameters_range.start as usize..s.parameters_range.end as usize)
         .unwrap_or("")
         .trim();
-    write_object_key(buf, &s.name);
+    // The key is the snippet's name as written, so a diagnostic on the
+    // key (a duplicate `children`) lands on `{#snippet NAME`.
+    match snippet_name_range(source, s) {
+        Some(range) if is_simple_js_identifier(&s.name) => buf.append_with_source(&s.name, range),
+        _ => write_object_key(buf, &s.name),
+    }
     if params_text.is_empty() {
         let _ = writeln!(buf, ": () => {{ async () => {{");
         emit_template_body(buf, source, &s.body, depth + 1, insts, action_counter);
@@ -838,12 +985,20 @@ pub(crate) fn write_snippet_arrow_prop(
         let _ = write!(buf, "{indent}}}");
         return;
     }
-    let _ = writeln!(buf, ": ({params_text}) => {{ async () => {{");
+    // The parameter list is the user's text; map it so a diagnostic on
+    // a parameter (an implicit `any`) lands on it.
+    let raw = source
+        .get(s.parameters_range.start as usize..s.parameters_range.end as usize)
+        .unwrap_or("");
+    let params_start = s.parameters_range.start + (raw.len() - raw.trim_start().len()) as u32;
+    buf.push_str(": (");
+    buf.append_with_source(
+        params_text,
+        svn_core::Range::new(params_start, params_start + params_text.len() as u32),
+    );
+    let _ = writeln!(buf, ") => {{ async () => {{");
     emit_template_body(buf, source, &s.body, depth + 1, insts, action_counter);
     let _ = writeln!(buf, "{body_indent}}};");
-    for ident in param_binding_names(params_text) {
-        let _ = writeln!(buf, "{body_indent}void {ident};");
-    }
     let _ = writeln!(buf, "{body_indent}return __svn_snippet_return();");
     let _ = write!(buf, "{indent}}}");
 }
@@ -851,6 +1006,18 @@ pub(crate) fn write_snippet_arrow_prop(
 /// Write an object-literal key. Plain JS identifiers are emitted bare;
 /// anything with a hyphen, a non-ident character, or a JS reserved
 /// word lookalike is double-quoted (always safe).
+/// Source range of NAME in `{#snippet NAME…}`: the name follows the
+/// `{#snippet` keyword and its whitespace.
+fn snippet_name_range(source: &str, s: &SnippetBlock) -> Option<svn_core::Range> {
+    const OPENER: &str = "{#snippet";
+    let after = s.range.start as usize + OPENER.len();
+    let rest = source.get(after..)?;
+    let start = after + (rest.len() - rest.trim_start().len());
+    let end = start + s.name.len();
+    (source.get(start..end)? == s.name.as_str())
+        .then(|| svn_core::Range::new(start as u32, end as u32))
+}
+
 fn write_object_key(buf: &mut EmitBuffer, name: &str) {
     if is_simple_js_identifier(name) {
         buf.push_str(name);

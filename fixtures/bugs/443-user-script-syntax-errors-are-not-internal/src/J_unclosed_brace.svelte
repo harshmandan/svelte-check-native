@@ -1,0 +1,3 @@
+<script>
+function f() {
+</script>

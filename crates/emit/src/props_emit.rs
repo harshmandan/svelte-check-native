@@ -20,47 +20,40 @@ use oxc_ast::ast::{BindingPattern, Expression, Statement, VariableDeclarator};
 use crate::process_instance_script_content;
 use crate::util::is_simple_js_identifier;
 
-/// Build the `{ name: sig; ... }` object-type text for each
-/// `export function` / `export const` / `export let` that process_instance_script_content
-/// surfaced. Consumed in two places:
-///   - the render body's `return { exports: undefined as any as (…) }`
-///     where body-local refs (`typeof handler`, `$$Props['x']`) resolve
-///     inside `$$render`'s own scope.
-///   - for non-class-wrapper arms, intersected into the default-export's
-///     SvelteComponent type directly (may fire TS2304 for body-local
-///     refs — rare and acceptable; class-wrapper arms take the other
-///     path and avoid it entirely).
+/// Build the component's `exports` object type — what consumers of
+/// `bind:this={x}` see as `x.name` — the way upstream's
+/// `ExportedNames.createExportsStr` does: every export that is not a
+/// `let` (a legacy `export let` is a prop, not an instance member), plus
+/// named `export { … }` lets in runes mode. Each member is required and
+/// keyed by the name the component exposes. `None` when nothing
+/// qualifies.
+///
+/// The text is embedded INSIDE `$$render`'s body
+/// (`return { … exports: undefined as any as <text> }`), where
+/// `typeof <local>` resolves against the body-local declaration; any
+/// module-scope use goes through the
+/// `Awaited<ReturnType<typeof $$render>>['exports']` projection.
 pub(crate) fn build_exports_object(
     split: Option<&process_instance_script_content::SplitScript>,
+    runes_mode: bool,
+    uses_accessors: bool,
 ) -> Option<String> {
     let s = split?;
-    if s.export_type_infos.is_empty() {
-        return None;
-    }
+    // Accessors make every export, props included, an instance member;
+    // runes mode has no accessors.
+    let all = uses_accessors && !runes_mode;
+    let mut members = s
+        .export_type_infos
+        .iter()
+        .filter(|info| all || !info.is_let || (runes_mode && info.is_named_export))
+        .peekable();
+    members.peek()?;
     let mut buf = String::from("{ ");
-    for info in &s.export_type_infos {
-        buf.push_str(info.name.as_str());
+    for info in members {
+        buf.push_str(info.exported_as.as_deref().unwrap_or(&info.name));
         buf.push_str(": ");
         match &info.type_source {
             Some(t) => buf.push_str(t),
-            // When no explicit type annotation exists on the local,
-            // use `typeof <name>` — a body-scope reference that
-            // resolves to whatever TS inferred from the local's
-            // initializer. Mirrors upstream svelte2tsx
-            // (ExportedNames.ts `createReturnElementsType`): upstream
-            // emits `translate?: typeof translate` so a local like
-            // `let translate = writable({x:0,y:0})` preserves its
-            // `Writable<{x,y}>` type through the default export's
-            // Exports slot instead of collapsing to `any`.
-            //
-            // Critical: the output is embedded INSIDE `$$render`'s
-            // body via `return { ... exports: undefined as any as
-            // <string> };`, so `typeof <name>` resolves against the
-            // body-local declaration. At module scope the same
-            // reference would fire TS2304, so any module-scope use
-            // of the Exports type MUST go through the
-            // `Awaited<ReturnType<typeof $$render>>['exports']`
-            // projection instead of the raw string.
             None => {
                 buf.push_str("typeof ");
                 buf.push_str(info.name.as_str());
@@ -70,6 +63,56 @@ pub(crate) fn build_exports_object(
     }
     buf.push('}');
     Some(buf)
+}
+
+/// Whether `<svelte:options accessors>` turns accessors on, read the way
+/// svelte2tsx's `handleSvelteOptions` reads it: a bare attribute is on;
+/// a `{…}` value is on when it is a truthy literal; a text value leaves
+/// the setting alone. The last `accessors` attribute decides.
+pub(crate) fn uses_accessors(fragment: &svn_parser::Fragment, source: &str) -> bool {
+    use svn_parser::{AttrValuePart, Attribute, Node, SvelteElementKind};
+    let truthy_literal = |range: svn_core::Range| {
+        let text = source
+            .get(range.start as usize..range.end as usize)
+            .unwrap_or("")
+            .trim();
+        !matches!(
+            text,
+            "false" | "0" | "null" | "undefined" | "\"\"" | "''" | "``"
+        ) && (text == "true"
+            || text.parse::<f64>().is_ok_and(|n| n != 0.0)
+            || text.starts_with(['"', '\'', '`']))
+    };
+    let mut on = false;
+    for node in &fragment.nodes {
+        let Node::SvelteElement(se) = node else {
+            continue;
+        };
+        if se.kind != SvelteElementKind::Options {
+            continue;
+        }
+        for attr in &se.attributes {
+            match attr {
+                Attribute::Plain(p) if p.name.as_str() == "accessors" => match &p.value {
+                    None => on = true,
+                    Some(v) => {
+                        if let Some(AttrValuePart::Expression {
+                            expression_range, ..
+                        }) = v.parts.first()
+                        {
+                            on = truthy_literal(*expression_range);
+                        }
+                    }
+                },
+                Attribute::Expression(e) if e.name.as_str() == "accessors" => {
+                    on = truthy_literal(e.expression_range);
+                }
+                Attribute::Shorthand(s) if s.name.as_str() == "accessors" => on = false,
+                _ => {}
+            }
+        }
+    }
+    on
 }
 
 /// Build the body of a JSDoc `@typedef <body> $$ComponentProps` from a
@@ -100,7 +143,7 @@ pub(crate) fn synthesise_js_props_typedef_body(
 ) -> Option<String> {
     let mut body = String::from("{");
     let mut first = true;
-    for entry in &props_info.destructures {
+    for entry in &props_info.destructures[..props_info.first_props_call_len] {
         if entry.is_rest || entry.local_only {
             // Covered by the `withUnknown` widening below — upstream
             // pushes no prop key for these elements.
@@ -159,30 +202,55 @@ pub(crate) fn inject_component_props_annotation(
     lang: svn_parser::ScriptLang,
 ) -> String {
     let alloc = Allocator::default();
-    let parsed = svn_parser::parse_script_body(&alloc, content, lang);
-    let mut action: Option<AnnotationAction> = None;
+    // Read with TypeScript's parser whatever the language, as
+    // svelte2tsx reads every script: a JavaScript component's
+    // annotation is type syntax, but it is there all the same.
+    let parsed = svn_parser::parse_script_body(&alloc, content, svn_parser::ScriptLang::Ts);
+    // Upstream rewrites every top-level `$props()` declaration the same
+    // way. Each rewrite declares its own `$$ComponentProps`, and only the
+    // first declaration counts, so a later destructure is typed by the
+    // first one's props.
+    let mut actions: Vec<AnnotationAction> = Vec::new();
     for stmt in &parsed.program.body {
-        let decl = match stmt {
-            Statement::VariableDeclaration(d) => d,
-            _ => continue,
+        let Statement::VariableDeclaration(decl) = stmt else {
+            continue;
         };
         for declarator in &decl.declarations {
             if let Some(a) = annotation_action(declarator) {
-                // Use the FIRST $props destructure — upstream only
-                // recognises one.
-                action = Some(a);
-                break;
+                actions.push(a);
             }
         }
-        if action.is_some() {
-            break;
-        }
     }
-    let Some(action) = action else {
+    if actions.is_empty() {
         return content.to_string();
-    };
+    }
+    let mut out = content.to_string();
+    for action in actions.into_iter().rev() {
+        out = apply_annotation_action(&out, action, lang);
+    }
+    out
+}
+
+fn apply_annotation_action(
+    content: &str,
+    action: AnnotationAction,
+    lang: svn_parser::ScriptLang,
+) -> String {
     let mut out = String::with_capacity(content.len() + 32);
     match action {
+        AnnotationAction::ReplaceTypeArgument { start, end } => {
+            // Keep the line count, as for the annotation below. A type
+            // argument on a function that takes none is an error, and
+            // upstream's marks keep it from being reported.
+            let dropped_newlines = content[start..end].matches('\n').count();
+            out.push_str(&content[..start]);
+            out.push_str("/*svn:ignore_start*/$$ComponentProps");
+            for _ in 0..dropped_newlines {
+                out.push('\n');
+            }
+            out.push_str("/*svn:ignore_end*/");
+            out.push_str(&content[end..]);
+        }
         AnnotationAction::Insert(pos) => {
             out.push_str(&content[..pos]);
             out.push_str(": $$ComponentProps");
@@ -218,11 +286,25 @@ pub(crate) fn inject_component_props_annotation(
             // Do not "unify" the two spellings by teaching the scanner
             // this one: a user's own error inside a `$props()` type
             // annotation would start disappearing.
+            //
+            // In a JavaScript component the replacement is itself type
+            // syntax, which draws TS8010 on the alias name; upstream's
+            // markers drop it. Only there, the ASCII pair goes inside
+            // so the mapper drops it too: the alias name is all the
+            // span holds, so nothing the user wrote is fenced off.
+            let js = lang == svn_parser::ScriptLang::Js;
             let dropped_newlines = content[start..end].matches('\n').count();
             out.push_str(&content[..start]);
-            out.push_str(": /*\u{03A9}ignore_start\u{03A9}*/$$ComponentProps");
+            out.push_str(": /*\u{03A9}ignore_start\u{03A9}*/");
+            if js {
+                out.push_str("/*svn:ignore_start*/");
+            }
+            out.push_str("$$ComponentProps");
             for _ in 0..dropped_newlines {
                 out.push('\n');
+            }
+            if js {
+                out.push_str("/*svn:ignore_end*/");
             }
             out.push_str("/*\u{03A9}ignore_end\u{03A9}*/");
             out.push_str(&content[end..]);
@@ -231,23 +313,56 @@ pub(crate) fn inject_component_props_annotation(
     out
 }
 
+/// Wrap the initializer of the first top-level `let/const { … } =
+/// $props()` declaration in a `/** @type {$$ComponentProps} */ (…)`
+/// JSDoc cast, so a JS component's destructured locals take the
+/// synthesised `$$ComponentProps` typedef.
+///
+/// Upstream svelte2tsx places the `@type` tag on the declaration
+/// itself; typing the initializer gives the locals the same types and
+/// the same errors (a key missing from the typedef is TS2339 on the
+/// key either way), while leaving every column before the call
+/// untouched — the script body maps back to the source by line only.
+pub(crate) fn inject_jsdoc_props_cast(content: &str, lang: svn_parser::ScriptLang) -> String {
+    let alloc = Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, content, lang);
+    let init_span = parsed.program.body.iter().find_map(|stmt| {
+        let Statement::VariableDeclaration(decl) = stmt else {
+            return None;
+        };
+        decl.declarations.iter().find_map(|declarator| {
+            let init = declarator.init.as_ref()?;
+            let Expression::CallExpression(call) = init else {
+                return None;
+            };
+            let Expression::Identifier(callee) = &call.callee else {
+                return None;
+            };
+            (callee.name == "$props" && matches!(declarator.id, BindingPattern::ObjectPattern(_)))
+                .then_some(call.span)
+        })
+    });
+    let Some(span) = init_span else {
+        return content.to_string();
+    };
+    let (start, end) = (span.start as usize, span.end as usize);
+    let mut out = String::with_capacity(content.len() + 40);
+    out.push_str(&content[..start]);
+    out.push_str("/** @type {$$ComponentProps} */ (");
+    out.push_str(&content[start..end]);
+    out.push(')');
+    out.push_str(&content[end..]);
+    out
+}
+
 enum AnnotationAction {
     Insert(usize),
     Replace { start: usize, end: usize },
+    ReplaceTypeArgument { start: usize, end: usize },
 }
 
 fn annotation_action(declarator: &VariableDeclarator<'_>) -> Option<AnnotationAction> {
-    let BindingPattern::ObjectPattern(obj) = &declarator.id else {
-        return None;
-    };
-    // Initializer must be a bare `$props()` call with NO explicit
-    // type argument. When the user wrote `$props<T>()` they already
-    // expressed the intended type — upstream's `ExportedNames` swaps
-    // the generic argument in place with `$$ComponentProps` (via
-    // ignore markers) rather than adding a destructure annotation,
-    // so we leave it alone on that shape to match. Annotating on top
-    // of `$props<T>()` would double-specify and silence downstream
-    // errors that upstream catches.
+    use oxc_span::GetSpan;
     let init = declarator.init.as_ref()?;
     let Expression::CallExpression(call) = init else {
         return None;
@@ -258,9 +373,24 @@ fn annotation_action(declarator: &VariableDeclarator<'_>) -> Option<AnnotationAc
     if callee_id.name != "$props" {
         return None;
     }
-    if call.type_arguments.is_some() {
-        return None;
+    if let Some(args) = &call.type_arguments {
+        // `$props<{ … }>()`, destructured or not: upstream moves a
+        // literal type argument into the `$$ComponentProps` alias and
+        // leaves the alias name, marked generated, as the argument. A
+        // named type stays where it is.
+        let arg = args.params.first()?;
+        if matches!(arg, oxc_ast::ast::TSType::TSTypeReference(_)) {
+            return None;
+        }
+        return Some(AnnotationAction::ReplaceTypeArgument {
+            start: arg.span().start as usize,
+            end: arg.span().end as usize,
+        });
     }
+    // Without a type argument, only a destructure gets the annotation.
+    let BindingPattern::ObjectPattern(obj) = &declarator.id else {
+        return None;
+    };
     // CASE A — user wrote `let { … }: { lit } = $props()`. Replace
     // the literal annotation with `$$ComponentProps` (wrapped in
     // ignore markers to drop tsgo errors inside). This collapses a
@@ -273,7 +403,11 @@ fn annotation_action(declarator: &VariableDeclarator<'_>) -> Option<AnnotationAc
         return Some(AnnotationAction::Replace { start, end });
     }
     // CASE B — no existing annotation. Splice after the destructure
-    // pattern's closing `}`.
+    // pattern's closing `}` — unless the pattern is empty, which gives
+    // upstream nothing to declare the alias from.
+    if obj.properties.is_empty() && obj.rest.is_none() {
+        return None;
+    }
     Some(AnnotationAction::Insert(obj.span.end as usize))
 }
 

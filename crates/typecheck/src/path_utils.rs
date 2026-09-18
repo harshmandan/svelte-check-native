@@ -46,19 +46,9 @@ pub(crate) fn rewrite_external_imports(
         return overlay_text.to_string();
     }
 
-    let alloc = oxc_allocator::Allocator::default();
-    let parsed = svn_parser::parse_script_body(&alloc, overlay_text, svn_parser::ScriptLang::Ts);
-    let mut probe = SpecifierSpans { spans: Vec::new() };
-    oxc_ast_visit::Visit::visit_program(&mut probe, &parsed.program);
-    for comment in &parsed.program.comments {
-        let span = comment.content_span();
-        probe.collect_from_comment(overlay_text, span.start as usize, span.end as usize);
-    }
-    probe.spans.sort_unstable();
-
     let mut out = String::with_capacity(overlay_text.len());
     let mut copy_from = 0;
-    for (start, end) in probe.spans {
+    for (start, end) in specifier_spans(overlay_text) {
         // Spans cover the quoted literal; the quotes stay in place.
         let Some(specifier) = overlay_text.get(start + 1..end - 1) else {
             continue;
@@ -71,6 +61,64 @@ pub(crate) fn rewrite_external_imports(
     }
     out.push_str(&overlay_text[copy_from..]);
     out
+}
+
+/// Where upstream splices the external-import rewrite into a SvelteKit
+/// file's typed copy: `(byte offset just past the opening quote,
+/// prefix)` for each `../` specifier that leaves the workspace.
+///
+/// Upstream (`applyExternalImportRewritesToAddedCode`) records each
+/// rewrite as an insertion — the part of the new relative path in front
+/// of the user's own path — so it maps back like any other added code.
+/// Same specifier set and rewrite rule as [`rewrite_external_imports`].
+pub(crate) fn external_import_prefixes(
+    text: &str,
+    source_path: &Path,
+    overlay_path: &Path,
+    workspace: &Path,
+) -> Vec<(usize, String)> {
+    let (Some(source_dir), Some(overlay_dir)) = (source_path.parent(), overlay_path.parent())
+    else {
+        return Vec::new();
+    };
+    if !text.contains("../") {
+        return Vec::new();
+    }
+    specifier_spans(text)
+        .into_iter()
+        .filter_map(|(start, end)| {
+            let specifier = text.get(start + 1..end - 1)?;
+            let (path_part, _) = split_specifier(specifier);
+            let rewritten = compute_rewrite(specifier, source_dir, overlay_dir, workspace)?;
+            let (rewritten_path, _) = split_specifier(&rewritten);
+            let prefix_len = rewritten_path.len().checked_sub(path_part.len())?;
+            let prefix = rewritten_path.get(..prefix_len)?;
+            (!prefix.is_empty()).then(|| (start + 1, prefix.to_string()))
+        })
+        .collect()
+}
+
+/// Byte spans (quotes included) of every module specifier literal in
+/// `text`, in source order.
+fn specifier_spans(text: &str) -> Vec<(usize, usize)> {
+    let alloc = oxc_allocator::Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, text, svn_parser::ScriptLang::Ts);
+    let mut probe = SpecifierSpans { spans: Vec::new() };
+    oxc_ast_visit::Visit::visit_program(&mut probe, &parsed.program);
+    for comment in &parsed.program.comments {
+        let span = comment.content_span();
+        probe.collect_from_comment(text, span.start as usize, span.end as usize);
+    }
+    probe.spans.sort_unstable();
+    probe.spans
+}
+
+/// Upstream's `splitImportSpecifier`: `(path, ?query/#hash suffix)`.
+fn split_specifier(specifier: &str) -> (&str, &str) {
+    match specifier.find(['?', '#']) {
+        Some(i) => (&specifier[..i], &specifier[i..]),
+        None => (specifier, ""),
+    }
 }
 
 /// Byte spans (quotes included) of every module specifier literal in
@@ -169,11 +217,7 @@ fn compute_rewrite(
     // Mirror upstream's `splitImportSpecifier`: a query (`?`) or hash
     // (`#`) suffix is not part of the path and must survive the rewrite
     // unchanged. Rewrite only the path part, then re-append the suffix.
-    let cut = specifier.find(['?', '#']);
-    let (path_part, suffix) = match cut {
-        Some(i) => (&specifier[..i], &specifier[i..]),
-        None => (specifier, ""),
-    };
+    let (path_part, suffix) = split_specifier(specifier);
     if !path_part.starts_with("../") {
         return None;
     }
@@ -267,7 +311,22 @@ pub(crate) fn lexical_normalise(p: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::rewrite_external_imports;
+    use super::{external_import_prefixes, rewrite_external_imports};
+
+    #[test]
+    fn kit_external_imports_become_prefix_insertions() {
+        let ws = std::path::Path::new("/repo/app");
+        let text = "import { db } from '../../../shared/db?x';\nimport a from '../lib/a';\n";
+        let got = external_import_prefixes(
+            text,
+            &ws.join("src/routes/+page.ts"),
+            &ws.join("node_modules/.cache/scn/svelte/src/routes/+page.ts"),
+            ws,
+        );
+        // Only the specifier leaving the workspace; the prefix lands
+        // just inside its opening quote.
+        assert_eq!(got, vec![(20, "../../../../".to_string())]);
+    }
     use std::path::Path;
 
     fn rewrite(overlay: &str) -> String {

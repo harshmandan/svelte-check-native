@@ -1,0 +1,97 @@
+{
+    "errors": [
+        {
+            "file": "src/NsExportClassM.svelte",
+            "line": 1,
+            "column": 0,
+            "code": "typescript_invalid_feature"
+        },
+        {
+            "file": "src/ObjAccessorM.svelte",
+            "line": 1,
+            "column": 27,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/ObjAccessor.svelte",
+            "line": 0,
+            "column": 8,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/ReservedIdent.svelte",
+            "line": 1,
+            "column": 0,
+            "code": 1440
+        },
+        {
+            "file": "src/ReservedIdent.svelte",
+            "line": 1,
+            "column": 0,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/ReservedIdent.svelte",
+            "line": 1,
+            "column": 10,
+            "code": 1005
+        },
+        {
+            "file": "src/StaticAccessorLater.svelte",
+            "line": 0,
+            "column": 8,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/StaticAccessor.svelte",
+            "line": 0,
+            "column": 8,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/UnicodeIdent.svelte",
+            "line": 1,
+            "column": 5,
+            "code": 1127
+        },
+        {
+            "file": "src/UnicodeIdent.svelte",
+            "line": 1,
+            "column": 7,
+            "code": 1005
+        },
+        {
+            "file": "src/UnicodeIdent.svelte",
+            "line": 1,
+            "column": 9,
+            "code": 1005
+        }
+    ],
+    "warnings": [
+        {
+            "file": "src/NsExportClass.svelte",
+            "line": 1,
+            "column": 14,
+            "code": "perf_avoid_nested_class"
+        },
+        {
+            "file": "src/NsFunctionClass.svelte",
+            "line": 1,
+            "column": 36,
+            "code": "perf_avoid_nested_class"
+        },
+        {
+            "file": "src/RunesEnum.svelte",
+            "line": 2,
+            "column": 7,
+            "code": "non_reactive_update"
+        },
+        {
+            "file": "src/RunesEnum.svelte",
+            "line": 3,
+            "column": 10,
+            "code": "state_referenced_locally"
+        }
+    ],
+    "_note": "No Svelte config: svelte-check transpiles each <script lang=\"ts\"> with TypeScript before compiling it, and maps the compiler's positions back through the preprocessing source map. These components are linted from the real transpile output: TypeScript's error recovery ('let class' prints as 'let; class {}'; an invalid escape prints as a destructuring whose error the language server drops), 'static accessor' rejected at a position taken from the printed layout (column read as offset, mapped through the tag's tokens), a namespace or enum turned into an IIFE (nested class, a non-reactive var), and a syntax error in an untranspiled script mapped to the start of the word it falls in. Verified against upstream svelte-check."
+}

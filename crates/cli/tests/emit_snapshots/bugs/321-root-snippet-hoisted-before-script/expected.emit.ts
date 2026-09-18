@@ -3,20 +3,18 @@
   import type { Snippet } from 'svelte';
 function $$render_e40e2c10() {
     type $$ComponentProps = { header?: Snippet<[string]> };
-    const defaultHeader = (n: number): any => { async () => {
-        { svelteHTML.createElement("h1", {});             (n);
+    const defaultHeader = (n: number): ReturnType<import('svelte').Snippet> => { async () => {
+        { svelteHTML.createElement("h1", {});             n;
         }
         };
-        void n;
-        return null as any;
+        return __svn_any(0);
     };
-    void defaultHeader;
 
                                         
   let { header = defaultHeader }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     ;(async () => {
         // template type-check body (incremental)
-        (header('x'));
+        __svn_ensure_snippet(header('x'));
     });
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }

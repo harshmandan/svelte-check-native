@@ -1,0 +1,9 @@
+{
+    "extends": "../_shared/tsconfig.base.json",
+    "compilerOptions": {
+        "paths": { "$lib/*": ["./src/lib/*"], "~/*": ["./src/*"] }
+    },
+    "files": ["src/globals.d.ts"],
+    "include": ["src/**/*", "src/deep/**"],
+    "exclude": ["src/skip/**"]
+}

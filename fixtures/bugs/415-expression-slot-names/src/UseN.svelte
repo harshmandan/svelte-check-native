@@ -1,0 +1,1 @@
+<script lang="ts">import N from "./Named2.svelte";</script><N let:x let:y let:z>{x.toFixed()}{y.nope}{z.nope}</N><N><div slot="undefined" let:x>{x.nope}</div></N><N><div slot="a" let:z>{z.nope}</div></N>

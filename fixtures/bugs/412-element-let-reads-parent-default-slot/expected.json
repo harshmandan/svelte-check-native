@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "src/A.svelte",
+            "line": 1,
+            "column": 14,
+            "code": 2339
+        },
+        {
+            "file": "src/A.svelte",
+            "line": 3,
+            "column": 41,
+            "code": 2339
+        }
+    ],
+    "_note": "A `let:` on a plain element or `<svelte:fragment>` that is a child of a component and has no `slot=` fills that component's default slot, so svelte2tsx destructures the name from the parent's `$$slot_def.default`: an unknown name is TS2339 and a known one is typed. Before, such names were declared `any`, so misspelled slot props and misuse of their values passed silently."
+}

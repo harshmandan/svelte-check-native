@@ -16,9 +16,7 @@
 use std::collections::HashSet;
 use std::ops::Range;
 
-use oxc_ast::ast::{
-    Declaration, ImportDeclarationSpecifier, ImportOrExportKind, Program, Statement,
-};
+use oxc_ast::ast::{Declaration, ImportDeclarationSpecifier, Program, Statement};
 use smol_str::SmolStr;
 use svn_parser::ScriptLang;
 
@@ -40,28 +38,20 @@ pub(crate) fn store_declarations<'a>(names: impl IntoIterator<Item = &'a str>) -
     out
 }
 
-/// Local names bound by value imports at the top level of `program`.
+/// Local names of the top-level imports a `$name` store read can be
+/// declared for: default and named imports, type-only ones included,
+/// but not namespace imports — upstream's `addImportStatement` records
+/// import clauses and specifiers only.
 pub(crate) fn import_local_names(program: &Program<'_>, out: &mut HashSet<SmolStr>) {
     for stmt in &program.body {
         let Statement::ImportDeclaration(decl) = stmt else {
             continue;
         };
-        if matches!(decl.import_kind, ImportOrExportKind::Type) {
-            continue;
-        }
-        let Some(specifiers) = &decl.specifiers else {
-            continue;
-        };
-        for spec in specifiers {
+        for spec in decl.specifiers.iter().flatten() {
             let local = match spec {
-                ImportDeclarationSpecifier::ImportSpecifier(s) => {
-                    if matches!(s.import_kind, ImportOrExportKind::Type) {
-                        continue;
-                    }
-                    &s.local
-                }
+                ImportDeclarationSpecifier::ImportSpecifier(s) => &s.local,
                 ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => &s.local,
-                ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => &s.local,
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => continue,
             };
             out.insert(SmolStr::from(local.name.as_str()));
         }

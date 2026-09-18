@@ -1,0 +1,37 @@
+{
+    "errors": [
+        {
+            "file": "src/SlotInComment.svelte",
+            "line": 3,
+            "column": 2,
+            "code": "slot_snippet_conflict"
+        },
+        {
+            "file": "src/SlotInDroppedComment.svelte",
+            "line": 6,
+            "column": 12,
+            "code": "slot_snippet_conflict"
+        },
+        {
+            "file": "src/SlotInString.svelte",
+            "line": 3,
+            "column": 16,
+            "code": "slot_snippet_conflict"
+        },
+        {
+            "file": "src/SlotInType.svelte",
+            "line": 4,
+            "column": 12,
+            "code": "slot_snippet_conflict"
+        }
+    ],
+    "warnings": [
+        {
+            "file": "src/BidiInTemplate.svelte",
+            "line": 2,
+            "column": 27,
+            "code": "bidirectional_control_characters"
+        }
+    ],
+    "_note": "Without a Svelte config each <script lang=\"ts\"> is transpiled before compiling and the compiler's positions are mapped back through TypeScript's source map, which maps tokens from their start: a `$$slot` found in a comment or string is reported at the comment or string, a template chunk at the delimiter before it, and text TypeScript deletes (type syntax, comments attached to a deleted declaration) is never found. Each file verified on its own against svelte-check 4.4.6."
+}

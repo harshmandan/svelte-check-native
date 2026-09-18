@@ -18,7 +18,7 @@ function $$render_2ec81c7f() {
         { svelteHTML.createElement("button", {
             "onclick": (() => onchange({ checked: !checked })),
         });
-            (checked ? 'on' : 'off');
+            checked ? 'on' : 'off';
         }
     });
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };

@@ -1,0 +1,47 @@
+{
+    "errors": [
+        {
+            "file": "src/Named2.svelte",
+            "line": 0,
+            "column": 22,
+            "code": 6133
+        },
+        {
+            "file": "src/Named2.svelte",
+            "line": 0,
+            "column": 45,
+            "code": "slot_element_invalid_name"
+        },
+        {
+            "file": "src/Named2.svelte",
+            "line": 1,
+            "column": 39,
+            "code": 6133
+        },
+        {
+            "file": "src/UseN.svelte",
+            "line": 0,
+            "column": 62,
+            "code": 2322
+        },
+        {
+            "file": "src/UseN.svelte",
+            "line": 0,
+            "column": 78,
+            "code": 2339
+        },
+        {
+            "file": "src/UseN.svelte",
+            "line": 0,
+            "column": 142,
+            "code": 2339
+        },
+        {
+            "file": "src/UseN.svelte",
+            "line": 0,
+            "column": 183,
+            "code": 2339
+        }
+    ],
+    "_note": "svelte2tsx names a slot after the raw text of the first value chunk of its first `name` attribute: a `{...}` value or `{name}` shorthand has none, so the slot is keyed `undefined`, and those attributes are never slot props. A component whose slots then lack `default` gets no `children` widening, so default content given to a prop-less one is TS2322 against `never`."
+}

@@ -157,15 +157,12 @@ fn js_only_sources_count_only_files_with_diagnostics() {
 }
 
 #[test]
-fn solution_escape_picks_first_reference_with_paths_and_reports_it() {
-    // Documents (locks, without endorsing) the monorepo auto-escape's
-    // pick-FIRST behavior: a project-references solution root with TWO
-    // referenced apps redirects workspace + tsconfig to the first
-    // reference whose extends chain declares `compilerOptions.paths`.
-    // The second app is silently out of the run — its files don't
-    // enter discovery or the `<N> FILES` denominator. The escape must
-    // announce itself on stderr naming the chosen sub-project so a
-    // two-app monorepo user can see which app was (and wasn't) checked.
+fn solution_root_is_checked_as_written() {
+    // A project-references solution root is not swapped for one of its
+    // references: svelte-check extends the solution itself, so every
+    // component under the workspace is discovered and counted, the run
+    // stays anchored where the user pointed it, and — the solution
+    // listing no sources — the compiler checks nothing.
     let bin = env!("CARGO_BIN_EXE_svelte-check-native");
     let ws = workspace_temp();
     let root = ws.path();
@@ -181,19 +178,17 @@ fn solution_escape_picks_first_reference_with_paths_and_reports_it() {
         write(
             &root.join(app).join("tsconfig.json"),
             r#"{
-                "compilerOptions": { "paths": { "$lib/*": ["./src/lib/*"] } },
+                "compilerOptions": { "composite": true, "paths": { "$lib/*": ["./src/lib/*"] } },
                 "include": ["src/**/*"]
             }"#,
         );
         write(
             &root.join(app).join("src/App.svelte"),
-            "<script>let a = 1;</script><p>{a}</p>",
+            "<script lang=\"ts\">const a: number = \"x\";</script><p>{a}</p>",
         );
     }
 
-    // `--diagnostic-sources svelte` skips tsgo, keeping the test
-    // hermetic; discovery + the denominator still exercise the
-    // escaped workspace.
+    // `--diagnostic-sources svelte` still runs the type checker.
     let output = Command::new(bin)
         .args([
             "--workspace",
@@ -208,23 +203,18 @@ fn solution_escape_picks_first_reference_with_paths_and_reports_it() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // The escape decision is announced on stderr, naming app-a.
     assert!(
-        stderr.contains("redirected workspace to"),
-        "escape must be visible on stderr. stderr:\n{stderr}"
+        !stderr.contains("redirected workspace to"),
+        "the workspace must not be relocated. stderr:\n{stderr}"
     );
-    let app_a = root.join("app-a");
-    assert!(
-        stderr.contains(app_a.to_str().unwrap()) || stderr.contains("app-a"),
-        "stderr must name the chosen sub-project. stderr:\n{stderr}"
-    );
-
-    // Pick-first: only app-a's file is discovered/counted; app-b's
-    // App.svelte is out of the run entirely.
     assert_eq!(
         completed_files(&stdout),
-        Some(1),
-        "only the first referenced app's files enter the denominator. stdout:\n{stdout}"
+        Some(2),
+        "both apps' components enter the denominator. stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(" 0 ERRORS"),
+        "a solution root type-checks nothing. stdout:\n{stdout}"
     );
 }
 

@@ -299,6 +299,15 @@ pub struct ComponentInstantiation {
     /// Root identifier of the component name (e.g. `MyButton` from
     /// `<MyButton />` or `<ui.MyButton />`).
     pub component_root: SmolStr,
+    /// Source range `component_root` was written at: the tag name, or
+    /// the `this={…}` expression of `<svelte:component>`.
+    pub root_range: Range,
+    /// Source range a diagnostic on the synthesized constructor
+    /// reference (`new $$_C(…)`) lands on. svelte2tsx writes that
+    /// reference right after the moved component name, so its source
+    /// map resolves it to the name's last character — or, after a
+    /// `this={…}` expression, to the closing brace.
+    pub ctor_anchor: Range,
     /// Plain attributes + translated `bind:NAME={x}` directives (as
     /// `Expression` props) + `{...expr}` spreads. Excludes
     /// `on:event` (tracked separately in `on_events`), `bind:this`,
@@ -333,6 +342,9 @@ pub struct ComponentInstantiation {
     /// path; the assignment emitted here is the only type-check
     /// flow for them.
     pub bind_this_target: Option<Range>,
+    /// Source range of the setter in `<Comp bind:this={get, set}>`;
+    /// emit calls it with the instance.
+    pub bind_this_setter: Option<Range>,
     /// SVELTE-4-COMPAT: `on:event={handler}` directives on this
     /// component. Emit binds each via `$inst.$on("event", handler)`
     /// on the hoisted instance local, mirroring upstream svelte2tsx's
@@ -370,6 +382,23 @@ pub struct ComponentInstantiation {
     /// `htmlxtojsx_v2/nodes/Binding.ts:192-195`'s
     /// `appendToStartEnd([\`${element.name}.$$bindings = '${attr.name}';\`])`.
     pub bind_directives: Vec<BindDirective>,
+    /// In-tag JS comments threaded onto the prop they belong to, keyed
+    /// by that prop's [`PropShape::attr_range`]. Emit writes them
+    /// around the prop inside the props literal so a
+    /// `// @ts-expect-error` / `// @ts-ignore` line applies to it.
+    pub prop_comments: Vec<(Range, CommentThread)>,
+    /// Source character the synthesized implicit `children` prop maps
+    /// to, when [`Self::has_implicit_children`] holds.
+    pub implicit_children_anchor: Option<Range>,
+    /// `class:` / `style:` / transition / `animate:` directives on the
+    /// component, in source order. svelte2tsx writes each after the
+    /// constructor call as it would for an element, but with the
+    /// component standing in for the element's tag.
+    pub element_directives: Vec<svn_parser::Directive>,
+    /// Where svelte2tsx's rewrite of the start tag ends: the first
+    /// child's start, else the end of a self-closing tag, else just
+    /// past the start tag's `>`.
+    pub start_tag_end: u32,
     /// Byte offset of the `<Component` token in the source. Emit keys
     /// the prop-check on this to locate the correct enclosing scope
     /// (i.e. inside the right `{#each}` / `{#if}` / `{#snippet}` body)
@@ -415,6 +444,38 @@ pub struct OnEventDirective {
     /// resolves and the event name's `keyof Events` constraint
     /// fires.
     pub handler_range: Range,
+    /// In-tag JS comments written around this directive.
+    pub comments: CommentThread,
+}
+
+/// One JS comment written inside a start tag (`// …` or `/* … */`
+/// between attributes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThreadedComment {
+    pub range: Range,
+    /// The comment starts its own line (only blanks precede it on it),
+    /// so the generated code opens a new line before writing it.
+    pub newline: bool,
+}
+
+/// The in-tag comments that belong to one attribute: the run written
+/// directly before it, and — for the tag's last attribute only — the
+/// run written after it up to the tag's `>`.
+///
+/// Mirrors svelte2tsx's `handleLeadingStartComment` /
+/// `handleTrailingEndComment` (`htmlxtojsx_v2/nodes/Comment.ts`),
+/// whose output keeps a TS comment directive on the line right above
+/// the generated attribute code it annotates.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CommentThread {
+    pub leading: Vec<ThreadedComment>,
+    pub trailing: Vec<ThreadedComment>,
+}
+
+impl CommentThread {
+    pub fn is_empty(&self) -> bool {
+        self.leading.is_empty() && self.trailing.is_empty()
+    }
 }
 
 /// One prop on a component instantiation.
@@ -560,6 +621,7 @@ pub fn walk_template(fragment: &Fragment, source: &str) -> TemplateSummary {
         pending_each_items_range: None,
         pending_await_promise_range: None,
         pending_let_owner: None,
+        slot_let_owners: std::collections::HashMap::new(),
     };
     crate::template_scope::walk_with_visitor(fragment, source, &mut visitor);
     visitor.summary
@@ -647,26 +709,28 @@ pub(crate) struct AnalyzeVisitor<'src> {
     /// then branch). Reset per await-block so each branch picks up
     /// the same promise range.
     pub(crate) pending_await_promise_range: Option<Range>,
-    /// SlotHandler PLAN Stage 4: stashed by `visit_component` /
-    /// `visit_svelte_element` (Component / SelfRef kinds) and
-    /// consumed by the next `enter_scope(LetDirective, …)` call.
-    /// When present, `let:foo` bindings on this component resolve
-    /// to `__SvnComponentSlots<typeof <root>>['default']['foo']`.
-    /// `None` for elements that aren't producer-side let owners
-    /// (DOM elements, components with `slot=` consumer wrappers,
-    /// dynamic `<svelte:component this={EXPR}>` forms whose root
-    /// isn't a typeable identifier).
+    /// Owner of the `let:` directives on the node being visited, set by
+    /// its `visit_*` hook and consumed by the `enter_scope(LetDirective,
+    /// …)` that follows for that node's children. `None` when svelte2tsx
+    /// does not resolve the node's `let:` names at all (an element that
+    /// fills no named slot of a component), so they stay unshadowed.
     pub(crate) pending_let_owner: Option<LetOwnerInfo>,
+    /// Owners registered by a component for its direct children that
+    /// fill one of its named slots with `let:` directives, keyed by the
+    /// child's start offset.
+    pub(crate) slot_let_owners: std::collections::HashMap<u32, LetOwnerInfo>,
 }
 
-/// Producer-side let-owner info — see
+/// The component whose slot a set of `let:` directives reads — see
 /// `AnalyzeVisitor.pending_let_owner`.
 #[derive(Debug, Clone)]
 pub(crate) struct LetOwnerInfo {
-    /// `typeof <root>`-safe component identifier.
-    pub(crate) component_root: SmolStr,
-    /// Slot name the let-bindings target. `"default"` unless a
-    /// future stage adds named-slot let-forwarding.
+    /// The component value svelte2tsx takes the instance of: the tag
+    /// name as written (dotted names included). `None` for
+    /// `<svelte:component>` / `<svelte:self>`, whose instance type
+    /// svelte2tsx leaves unresolved (any).
+    pub(crate) component: Option<SmolStr>,
+    /// The slot the directives read.
     pub(crate) slot_name: SmolStr,
 }
 
@@ -709,10 +773,18 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
             crate::template_scope::ScopeKind::LetDirective => {
                 crate::nodes::let_directive::enter(self, bindings);
             }
+            // The compiler-scope kinds never reach this visitor (it
+            // keeps the default `COMPILER_SCOPES = false` walk).
+            // svelte2tsx's slot resolver tracks no other binders: a
+            // snippet parameter keeps its name as written.
             crate::template_scope::ScopeKind::Snippet
-            | crate::template_scope::ScopeKind::Fragment => {
-                crate::nodes::snippet_block::enter_unresolved(self, bindings);
-            }
+            | crate::template_scope::ScopeKind::Fragment
+            | crate::template_scope::ScopeKind::Block
+            | crate::template_scope::ScopeKind::Element
+            | crate::template_scope::ScopeKind::ElementFragment
+            | crate::template_scope::ScopeKind::ComponentDefault
+            | crate::template_scope::ScopeKind::ComponentSlot
+            | crate::template_scope::ScopeKind::AwaitValue => {}
         }
         self.scope_marks.push(mark);
     }
@@ -735,9 +807,8 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
         crate::nodes::svelte_element::visit(self, s);
     }
 
-    fn visit_at_const(&mut self, bound_names: &[SmolStr], expr_range: svn_core::Range) {
-        crate::nodes::const_tag::visit_at_const(self, bound_names, expr_range);
-    }
+    // `{@const}` names are left untracked: svelte2tsx's slot resolver
+    // (`slot.ts`) keeps a `<slot>` attribute naming one as written.
 }
 
 #[cfg(test)]

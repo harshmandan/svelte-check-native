@@ -61,7 +61,11 @@ pub struct LintContext<'src> {
     /// A compile error has been raised. The compiler throws on its
     /// first error, so `svelte-check` reports that one diagnostic and
     /// no warnings for the file; later emissions are dropped.
-    errored: bool,
+    pub(crate) errored: bool,
+
+    /// The message of the JavaScript exception the compiler crashed
+    /// with, when it crashed rather than raising a compile error.
+    exception: Option<String>,
 
     /// `<!-- svelte-ignore ... -->` frames. Pushed on entering a node
     /// with leading ignore comments, popped on exit.
@@ -93,6 +97,60 @@ pub struct LintContext<'src> {
     /// modern superset, which matches upstream main and the
     /// `upstream_validator` fixture suite.
     pub compat: crate::compat::CompatFeatures,
+
+    /// The file being linted, as the compiler's `filename` option;
+    /// `None` when the caller has no file name (the compiler's
+    /// `(unknown)`).
+    pub filename: Option<std::path::PathBuf>,
+
+    /// Template-expression rule events not yet emitted, in source
+    /// order (see `ScopeTree::template_rule_events`). The template walk
+    /// drains them as it passes their positions.
+    pub(crate) pending_template_events:
+        std::collections::VecDeque<crate::rules::script_ast_rules::ScriptRuleEvent>,
+
+    /// The template nodes enclosing the node being visited, outermost
+    /// first — the node-kind view of the compiler's `context.path`
+    /// that its placement and slot validations walk.
+    pub(crate) template_path: Vec<crate::walk::PathFrame>,
+
+    /// The `experimental.async` compiler option from the project's
+    /// Svelte config.
+    pub experimental_async: bool,
+
+    /// The first `on:` directive on an element and whether any element
+    /// carries an `on*` event attribute — mixing both is an error the
+    /// compiler raises once the walks are done.
+    pub(crate) event_directive: Option<(SmolStr, Range)>,
+    pub(crate) uses_event_attributes: bool,
+
+    /// Whether the template has a `{@render}` tag, and the `<slot>`
+    /// standing for the first slot name seen (the latest `<slot>` of
+    /// that name, as the compiler's name-keyed map keeps it) — the
+    /// inputs of the `slot_snippet_conflict` check.
+    pub(crate) uses_render_tags: bool,
+
+    /// See [`crate::LintOptions::ts_scripts_transpiled`].
+    pub(crate) ts_scripts_transpiled: bool,
+    /// See [`crate::LintOptions::preprocess_configured`].
+    pub(crate) preprocess_configured: bool,
+    /// The component's diagnostics depend on the real output of the
+    /// language server's fallback TypeScript transpile (see
+    /// `crate::transpile_sensitive`).
+    pub(crate) needs_real_transpile: bool,
+    /// tsgo cannot print the transpile faithfully for this component
+    /// (see `crate::transpile_sensitive::printed_differently_by_tsgo`).
+    pub(crate) real_transpile_unavailable: bool,
+    /// Where the compiler's bidi regex starts (see
+    /// [`crate::LintOptions::bidi_last_index`]).
+    pub(crate) bidi_last_index: u32,
+    /// What compiling the component does to that regex.
+    pub(crate) bidi_trace: crate::rules::bidi_state::BidiTrace,
+    pub(crate) first_slot: Option<(SmolStr, Range)>,
+    /// The error reading the config's `customElement` / `css` option
+    /// throws during the analysis (see
+    /// [`crate::CompileOptionsCheck::late_error`]).
+    pub(crate) compile_options_late_error: Option<(crate::LateOption, Code, String)>,
 }
 
 impl<'src> LintContext<'src> {
@@ -113,9 +171,25 @@ impl<'src> LintContext<'src> {
             runes: false,
             runes_option: None,
             errored: false,
+            exception: None,
             scope_tree: None,
             custom_element_info: None,
             compat: crate::compat::CompatFeatures::MODERN,
+            filename: None,
+            pending_template_events: std::collections::VecDeque::new(),
+            template_path: Vec::new(),
+            experimental_async: false,
+            event_directive: None,
+            uses_event_attributes: false,
+            uses_render_tags: false,
+            ts_scripts_transpiled: false,
+            preprocess_configured: false,
+            needs_real_transpile: false,
+            real_transpile_unavailable: false,
+            bidi_last_index: 0,
+            bidi_trace: crate::rules::bidi_state::BidiTrace::Untouched,
+            first_slot: None,
+            compile_options_late_error: None,
         }
     }
 
@@ -187,6 +261,25 @@ impl<'src> LintContext<'src> {
             end_line: end.line + 1,
             end_column: end.character,
         });
+    }
+
+    /// The compiler crashed on the component with a JavaScript exception
+    /// whose message is `message`: nothing it would have reported
+    /// survives, and nothing more is reported. An error the compiler
+    /// raised first stands; it would have thrown before reaching the
+    /// crash.
+    pub(crate) fn abort(&mut self, message: &str) {
+        if self.errored {
+            return;
+        }
+        self.errored = true;
+        self.warnings.clear();
+        self.exception = Some(message.to_string());
+    }
+
+    /// The exception the compiler crashed with, if it did.
+    pub fn take_exception(&mut self) -> Option<String> {
+        self.exception.take()
     }
 
     pub fn take_warnings(self) -> Vec<Warning> {

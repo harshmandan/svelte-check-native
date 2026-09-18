@@ -1,0 +1,12 @@
+{
+    "errors": [
+        {
+            "file": "src/Ok.svelte",
+            "line": 0,
+            "column": 22,
+            "code": 2322
+        }
+    ],
+    "warnings": [],
+    "_note": "svelte-check --tsgo runs svelte2tsx with emitOnTemplateError: false, so a component the compiler's parse() rejects makes svelte2tsx throw and the file is dropped: no overlay (so its broken TypeScript cannot hide type errors elsewhere), no diagnostics of any source, not counted in FILES. Covered: a template expression that is not valid JS (`{a +}`) and a non-boolean <svelte:options runes> value (`runes={x}`, `runes=\"true\"`). Only Ok.svelte reports. Verified against svelte-check 4.4.6."
+}

@@ -1,0 +1,35 @@
+{
+    "errors": [
+        {
+            "file": "src/Js.svelte",
+            "line": 3,
+            "column": 14,
+            "code": 18048
+        },
+        {
+            "file": "src/Import.svelte",
+            "line": 2,
+            "column": 3,
+            "code": "constant_assignment"
+        },
+        {
+            "file": "src/Import.svelte",
+            "line": 1,
+            "column": 9,
+            "code": 6133
+        },
+        {
+            "file": "src/Import.svelte",
+            "line": 2,
+            "column": 3,
+            "code": 2632
+        },
+        {
+            "file": "src/Definite.svelte",
+            "line": 2,
+            "column": 12,
+            "code": 2454
+        }
+    ],
+    "warnings": []
+}

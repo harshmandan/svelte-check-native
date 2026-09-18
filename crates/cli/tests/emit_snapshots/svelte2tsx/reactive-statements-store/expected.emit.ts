@@ -3,16 +3,16 @@
 function $$render_e40e2c10() {
 
     const uid = readable('')/*svn:ignore_start*/;let $uid = __svn_store_get(uid);/*svn:ignore_end*/
-    let foo1 = __svn_invalidate(() => (getFoo1($uid)))/*svn:ignore_start*/;let $foo1 = __svn_store_get(foo1);/*svn:ignore_end*/; void foo1;
+    let foo1 = __svn_invalidate(() => (getFoo1($uid)))/*svn:ignore_start*/;let $foo1 = __svn_store_get(foo1);/*svn:ignore_end*/;
     ;() => { $: console.log({ foo1: $foo1 }); };
     
-    let foo2 = __svn_invalidate(() => (getFoo2($uid)))/*svn:ignore_start*/;let $foo2 = __svn_store_get(foo2);/*svn:ignore_end*/; void foo2;
+    let foo2 = __svn_invalidate(() => (getFoo2($uid)))/*svn:ignore_start*/;let $foo2 = __svn_store_get(foo2);/*svn:ignore_end*/;
     ;() => { $: console.log({ foo2: $foo2 }) };
 
-    let {foo3} = __svn_invalidate(() => (getFoo3($uid)))/*svn:ignore_start*/;let $foo3 = __svn_store_get(foo3);/*svn:ignore_end*/; void foo3;
+    let {foo3} = __svn_invalidate(() => (getFoo3($uid)))/*svn:ignore_start*/;let $foo3 = __svn_store_get(foo3);/*svn:ignore_end*/;
     ;() => { $: console.log({ foo3: $foo3 }); };
     
-    let {foo4} = __svn_invalidate(() => (getFoo4($uid)))/*svn:ignore_start*/;let $foo4 = __svn_store_get(foo4);/*svn:ignore_end*/; void foo4;
+    let {foo4} = __svn_invalidate(() => (getFoo4($uid)))/*svn:ignore_start*/;let $foo4 = __svn_store_get(foo4);/*svn:ignore_end*/;
     ;() => { $: console.log({ foo4: $foo4 }) };
     ;(async () => {
         // template type-check body (incremental)
@@ -22,7 +22,7 @@ function $$render_e40e2c10() {
 $$render_e40e2c10;
 interface $$IsomorphicComponent {
     new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings'] } & Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'];
-    (internal: unknown, props: Awaited<ReturnType<typeof $$render_e40e2c10>>['props']): Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'] & { $set?: any; $on?: any };
+    (internal: unknown, props: Awaited<ReturnType<typeof $$render_e40e2c10>>['props'] extends Record<string, never> ? { $$events?: Awaited<ReturnType<typeof $$render_e40e2c10>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_e40e2c10>>['slots'] } : Awaited<ReturnType<typeof $$render_e40e2c10>>['props'] & { $$events?: Awaited<ReturnType<typeof $$render_e40e2c10>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_e40e2c10>>['slots'] }): Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;

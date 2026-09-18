@@ -1,0 +1,29 @@
+{
+    "errors": [
+        {
+            "file": "src/A.svelte",
+            "line": 0,
+            "column": 35,
+            "code": 6133
+        },
+        {
+            "file": "src/A.svelte",
+            "line": 0,
+            "column": 88,
+            "code": 6133
+        },
+        {
+            "file": "src/A.svelte",
+            "line": 2,
+            "column": 11,
+            "code": 2322
+        },
+        {
+            "file": "src/A.svelte",
+            "line": 3,
+            "column": 15,
+            "code": 2345
+        }
+    ],
+    "warnings": []
+}

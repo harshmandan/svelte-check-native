@@ -1,0 +1,41 @@
+{
+    "errors": [
+        {
+            "file": "src/T1.svelte",
+            "line": 0,
+            "column": 54,
+            "code": 2451
+        },
+        {
+            "file": "src/T1.svelte",
+            "line": 0,
+            "column": 63,
+            "code": 2588
+        },
+        {
+            "file": "src/T1.svelte",
+            "line": 1,
+            "column": 10,
+            "code": 2451
+        },
+        {
+            "file": "src/T2.svelte",
+            "line": 1,
+            "column": 4,
+            "code": 2451
+        },
+        {
+            "file": "src/T2.svelte",
+            "line": 3,
+            "column": 10,
+            "code": 2451
+        },
+        {
+            "file": "src/T2.svelte",
+            "line": 3,
+            "column": 10,
+            "code": 6133
+        }
+    ],
+    "_note": "A root snippet named like a script variable is a redeclaration in svelte2tsx's output, where the snippet becomes a `const` whose name is mapped to `{#snippet NAME`. TS2451 is therefore reported on both declarations. Our `const NAME` had no mapping, so the snippet-side error was dropped."
+}

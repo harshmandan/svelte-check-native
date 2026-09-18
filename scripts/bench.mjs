@@ -37,6 +37,10 @@
 //                            (default 3). Parity mode always runs once per
 //                            tool — counts are deterministic.
 //   --tsconfig <path>        Pass through to the binary.
+//   --no-rig                 Parity mode: skip the target's recipe in
+//                            scripts/parity-rigs.json (tsconfig override
+//                            and source patches that let upstream
+//                            --tsgo type-check the rig at all).
 //   --quiet                  Suppress per-run timing lines (CSV still prints).
 //   --diagnostic-detail      Parity mode: capture every per-diagnostic
 //                            ERROR/WARNING line via `--output
@@ -64,7 +68,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { performance } from 'node:perf_hooks';
 
 const argv = process.argv.slice(2);
@@ -85,6 +89,7 @@ if (!existsSync(binary)) fail(`binary not found — run \`cargo build --release\
 const cacheDirs = [
     join(targetAbs, 'node_modules/.cache/svelte-check-native'),
     join(targetAbs, '.svelte-check'),
+    join(targetAbs, '.svelte-kit/.svelte-check'),
 ];
 
 const mode = args.mode ?? 'timing';
@@ -92,6 +97,7 @@ if (mode !== 'timing' && mode !== 'parity') fail(`unknown --mode: ${mode}`);
 
 const extraArgs = [];
 if (args.tsconfig) extraArgs.push('--tsconfig', args.tsconfig);
+if (mode === 'parity' && !args.noRig) applyParityRig();
 
 if (mode === 'timing') {
     runTimingMode();
@@ -167,6 +173,7 @@ function runParityMode() {
                 tool: 'upstream --tsgo',
                 ...runUpstream(upstream, { tsgo: true, cwd: effectiveWorkspace }),
             });
+            assertUpstreamNotHollow(effectiveWorkspace);
         } else if (!args.quiet) {
             console.error('  (upstream --tsgo not supported on this svelte-check version — skipping)');
         }
@@ -195,12 +202,13 @@ function runParityMode() {
         detailMismatch = reportDiagnosticDetail(rows);
     }
 
-    // Exit 1 if ours deviates from the best upstream baseline. Prefer
-    // upstream (non-tsgo); fall back to upstream --tsgo. If no upstream
-    // was available, always exit 0.
+    // Exit 1 if ours deviates from the upstream baseline: `svelte-check
+    // --tsgo`, the surface we mirror, falling back to the default
+    // engine only when --tsgo is unavailable. If no upstream was
+    // available, always exit 0.
     const ours = rows.find(r => r.tool === 'ours');
-    const upstreamRow = rows.find(r => r.tool === 'upstream')
-        ?? rows.find(r => r.tool === 'upstream --tsgo');
+    const upstreamRow = rows.find(r => r.tool === 'upstream --tsgo')
+        ?? rows.find(r => r.tool === 'upstream');
     if (!upstreamRow || args.allowDelta) {
         if (detailMismatch) process.exit(1);
         return;
@@ -336,6 +344,100 @@ function runUpstream(bin, { tsgo, cwd }) {
     const diagnostics = args.diagnosticDetail ? parseMachineVerboseDiagnostics(stdout) : null;
     return { ...counts, diagnostics };
 }
+
+/// Apply this target's recipe from scripts/parity-rigs.json: a
+/// tsconfig layered over the target's own (checked by every tool) and
+/// source patches that are reverted when the process exits, however it
+/// exits. A patch whose `find` text is not present exactly once fails
+/// the run, so a rig that drifts can't silently fall back to a hollow
+/// comparison.
+function applyParityRig() {
+    const rigs = JSON.parse(readFileSync(join(repoRoot, 'scripts/parity-rigs.json'), 'utf8'));
+    const key = relative(join(repoRoot, 'bench'), targetAbs).split(sep).join('/');
+    const rig = rigs[key];
+    if (!rig) return;
+    if (args.tsconfig) fail(`--tsconfig conflicts with the parity recipe for ${key}`);
+    const originals = new Map();
+    const restore = () => {
+        for (const [file, text] of originals) writeFileSync(file, text);
+        originals.clear();
+        rmSync(join(targetAbs, 'tsconfig.svn-parity.json'), { force: true });
+    };
+    process.on('exit', restore);
+    for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+        process.on(sig, () => { restore(); process.exit(130); });
+    }
+    for (const patch of rig.patches ?? []) {
+        const file = join(targetAbs, patch.file);
+        const text = readFileSync(file, 'utf8');
+        const count = text.split(patch.find).length - 1;
+        if (count !== 1) {
+            fail(`parity recipe for ${key}: ${JSON.stringify(patch.find)} occurs ${count} times in ${patch.file} (expected once) — update scripts/parity-rigs.json`);
+        }
+        originals.set(file, text);
+        writeFileSync(file, text.replace(patch.find, patch.replace));
+    }
+    writeFileSync(
+        join(targetAbs, 'tsconfig.svn-parity.json'),
+        JSON.stringify({ extends: './tsconfig.json', compilerOptions: rig.tsconfig ?? {} }, null, 2) + '\n',
+    );
+    extraArgs.push('--tsconfig', 'tsconfig.svn-parity.json');
+    if (!args.quiet) {
+        console.error(`  parity recipe ${key}: ${(rig.patches ?? []).length} patch(es), tsconfig.svn-parity.json`);
+    }
+}
+
+/// Fail when upstream `--tsgo` could not have type-checked anything.
+/// One syntax error anywhere in its generated TypeScript makes tsgo skip
+/// semantic checking for the whole program, and a composite project
+/// aborts with TS6379; either way upstream reports (almost) nothing and
+/// a comparison against it proves nothing. Re-checks the overlay
+/// project upstream just wrote with tsgo and looks for exactly those.
+function assertUpstreamNotHollow(workspace) {
+    const overlay = [join(workspace, '.svelte-kit/.svelte-check'), join(workspace, '.svelte-check')]
+        .map(d => join(d, 'tsconfig.json'))
+        .find(existsSync);
+    if (!overlay) {
+        console.error('  (upstream --tsgo left no overlay tsconfig — cannot verify it type-checked anything)');
+        return;
+    }
+    const tsgo = process.env.TSGO_BIN
+        ?? [join(workspace, 'node_modules/.bin/tsgo'), join(repoRoot, 'node_modules/.bin/tsgo')].find(existsSync);
+    if (!tsgo) {
+        console.error('  (no tsgo found — cannot verify upstream --tsgo type-checked anything)');
+        return;
+    }
+    let out = '';
+    try {
+        out = execFileSync(tsgo, ['-p', overlay, '--noEmit', '--pretty', 'false'], {
+            stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 256 * 1024 * 1024, encoding: 'utf8', cwd: dirname(overlay),
+        });
+    } catch (err) {
+        out = (err.stdout?.toString('utf8') ?? '') + (err.stderr?.toString('utf8') ?? '');
+    }
+    // TypeScript parser (not checker) error codes: the class whose
+    // presence makes tsgo drop semantic diagnostics program-wide.
+    const PARSER_SYNTAX_CODES = new Set([
+        1002, 1003, 1005, 1009, 1010, 1011, 1109, 1110, 1124, 1126, 1127, 1128, 1131, 1134,
+        1135, 1136, 1137, 1138, 1141, 1160, 1161, 1434, 1435, 1436,
+    ]);
+    const overlayDir = dirname(overlay);
+    const fatal = out.split('\n').filter(line => {
+        const m = /^(.*?)\(\d+,\d+\): error TS(\d+):/.exec(line) ?? /^()error TS(\d+):/.exec(line);
+        if (!m) return false;
+        const code = Number(m[2]);
+        if (code === 6379) return true;
+        const inOverlay = m[1] !== '' && resolve(overlayDir, m[1]).startsWith(overlayDir);
+        return code >= 1000 && code < 2000 && inOverlay && PARSER_SYNTAX_CODES.has(code);
+    });
+    if (fatal.length) {
+        console.error('\nupstream --tsgo checked nothing — its generated program does not parse or cannot build:');
+        for (const line of fatal.slice(0, 20)) console.error(`  ${line}`);
+        console.error('Add a patch or tsconfig override for this target in scripts/parity-rigs.json.');
+        process.exit(1);
+    }
+}
+
 
 /// Parse the upstream "COMPLETED N FILES E ERRORS W WARNINGS F FILES_WITH_PROBLEMS"
 /// line. Last COMPLETED wins in case of retries/warm-up lines.
@@ -522,6 +624,12 @@ function reportDiagnosticDetail(rows) {
     }
     const exceptions = loadExceptions(targetAbs);
     let drift = false;
+    // Only the baseline decides the exit code: `upstream --tsgo` when it
+    // ran, else the default engine. The other peer is printed for
+    // information — the default engine checks with a different program
+    // (its own module resolution, no --tsgo reductions) and legitimately
+    // differs.
+    const baseline = rows.some(r => r.tool === 'upstream --tsgo') ? 'upstream --tsgo' : 'upstream';
 
     for (const peer of ['upstream', 'upstream --tsgo']) {
         const peerRow = rows.find(r => r.tool === peer);
@@ -540,7 +648,7 @@ function reportDiagnosticDetail(rows) {
         if (extraA.length === 0 && extraB.length === 0) {
             console.error(`  ours == ${peer} (after allowlist)`);
         } else {
-            drift = true;
+            if (peer === baseline) drift = true;
             if (extraA.length > 0) {
                 console.error(`  ours - ${peer} (${extraA.length}):`);
                 for (const d of extraA) console.error(`    ${d}`);
@@ -558,7 +666,7 @@ function reportDiagnosticDetail(rows) {
             // regression made it through. Now staleness fails the
             // gate the same way new drift does — the allowlist has
             // to be pruned before the bench can stay green.
-            drift = true;
+            if (peer === baseline) drift = true;
             console.error(`  STALE allowlist entries (no longer firing) for ${peerLabel}:`);
             for (const d of missingA) console.error(`    ${aKey}: ${d}`);
             for (const d of missingB) console.error(`    ${bKey}: ${d}`);
@@ -679,6 +787,7 @@ function parseArgs(a) {
         allowDelta: false,
         diagnosticDetail: false,
         exceptions: null,
+        noRig: false,
     };
     for (let i = 0; i < a.length; i++) {
         const v = a[i];
@@ -692,6 +801,7 @@ function parseArgs(a) {
             case '--allow-delta': out.allowDelta = true; break;
             case '--diagnostic-detail': out.diagnosticDetail = true; break;
             case '--exceptions': out.exceptions = a[++i]; break;
+            case '--no-rig': out.noRig = true; break;
             case '--help':
             case '-h': printHelp(); process.exit(0);
             default: return { error: `unknown flag: ${v}` };

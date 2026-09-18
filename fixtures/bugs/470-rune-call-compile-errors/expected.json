@@ -1,0 +1,143 @@
+{
+    "errors": [
+        {
+            "file": "src/A01.svelte",
+            "line": 1,
+            "column": 9,
+            "code": "rune_invalid_arguments_length"
+        },
+        {
+            "file": "src/A02.svelte",
+            "line": 1,
+            "column": 9,
+            "code": "rune_invalid_arguments_length"
+        },
+        {
+            "file": "src/A03.svelte",
+            "line": 1,
+            "column": 1,
+            "code": "rune_invalid_arguments_length"
+        },
+        {
+            "file": "src/A04.svelte",
+            "line": 1,
+            "column": 9,
+            "code": "effect_invalid_placement"
+        },
+        {
+            "file": "src/A05.svelte",
+            "line": 2,
+            "column": 17,
+            "code": "effect_invalid_placement"
+        },
+        {
+            "file": "src/A06.svelte",
+            "line": 1,
+            "column": 1,
+            "code": "rune_invalid_arguments"
+        },
+        {
+            "file": "src/A07.svelte",
+            "line": 1,
+            "column": 1,
+            "code": "rune_invalid_arguments_length"
+        },
+        {
+            "file": "src/A08.svelte",
+            "line": 1,
+            "column": 1,
+            "code": "rune_invalid_arguments_length"
+        },
+        {
+            "file": "src/A09.svelte",
+            "line": 2,
+            "column": 1,
+            "code": "rune_invalid_arguments_length"
+        },
+        {
+            "file": "src/A10.svelte",
+            "line": 3,
+            "column": 2,
+            "code": "inspect_trace_invalid_placement"
+        },
+        {
+            "file": "src/A11.svelte",
+            "line": 2,
+            "column": 2,
+            "code": "inspect_trace_generator"
+        },
+        {
+            "file": "src/A12.svelte",
+            "line": 1,
+            "column": 9,
+            "code": "rune_invalid_arguments_length"
+        },
+        {
+            "file": "src/A13.svelte",
+            "line": 1,
+            "column": 9,
+            "code": "rune_invalid_arguments_length"
+        },
+        {
+            "file": "src/A14.svelte",
+            "line": 1,
+            "column": 9,
+            "code": "host_invalid_placement"
+        },
+        {
+            "file": "src/A15.svelte",
+            "line": 1,
+            "column": 9,
+            "code": "rune_invalid_arguments"
+        },
+        {
+            "file": "src/A16.svelte",
+            "line": 1,
+            "column": 13,
+            "code": "rune_invalid_arguments"
+        },
+        {
+            "file": "src/A17.svelte",
+            "line": 2,
+            "column": 13,
+            "code": "props_duplicate"
+        },
+        {
+            "file": "src/A18.svelte",
+            "line": 1,
+            "column": 27,
+            "code": "props_id_invalid_placement"
+        },
+        {
+            "file": "src/A19.svelte",
+            "line": 1,
+            "column": 15,
+            "code": "props_id_invalid_placement"
+        },
+        {
+            "file": "src/A20.svelte",
+            "line": 1,
+            "column": 11,
+            "code": "rune_invalid_arguments_length"
+        },
+        {
+            "file": "src/A35.svelte",
+            "line": 2,
+            "column": 13,
+            "code": "state_invalid_placement"
+        },
+        {
+            "file": "src/A36.svelte",
+            "line": 3,
+            "column": 4,
+            "code": "effect_invalid_placement"
+        },
+        {
+            "file": "src/A45.svelte",
+            "line": 3,
+            "column": 39,
+            "code": "inspect_trace_invalid_placement"
+        }
+    ],
+    "_note": "The compiler's CallExpression checks on rune calls: spread arguments, argument counts, and where each rune may stand. svelte-check reports the first compile error as the component's only compiler diagnostic. Every entry verified against upstream svelte-check 4.4.6 / svelte 5.55.4."
+}

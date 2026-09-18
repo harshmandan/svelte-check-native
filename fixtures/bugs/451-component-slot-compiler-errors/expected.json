@@ -1,0 +1,55 @@
+{
+    "errors": [
+        {
+            "file": "src/CompSeq.svelte",
+            "line": 0,
+            "column": 84,
+            "code": "attribute_invalid_sequence_expression"
+        },
+        {
+            "file": "src/CompUnquoted.svelte",
+            "line": 0,
+            "column": 81,
+            "code": "attribute_unquoted_sequence"
+        },
+        {
+            "file": "src/FragSlotDup.svelte",
+            "line": 0,
+            "column": 97,
+            "code": "slot_attribute_duplicate"
+        },
+        {
+            "file": "src/SlotDefaultComment.svelte",
+            "line": 0,
+            "column": 47,
+            "code": "slot_default_duplicate"
+        },
+        {
+            "file": "src/SlotDefaultDup.svelte",
+            "line": 0,
+            "column": 47,
+            "code": "slot_default_duplicate"
+        },
+        {
+            "file": "src/SlotDup.svelte",
+            "line": 0,
+            "column": 73,
+            "code": "slot_attribute_duplicate"
+        }
+    ],
+    "warnings": [
+        {
+            "file": "src/IgnoreQuirk.svelte",
+            "line": 9,
+            "column": 2,
+            "code": "a11y_no_static_element_interactions"
+        },
+        {
+            "file": "src/IgnoreQuirk.svelte",
+            "line": 9,
+            "column": 2,
+            "code": "a11y_click_events_have_key_events"
+        }
+    ],
+    "_note": "Compiler diagnostics of a component's children and attributes: a slot filled twice, slot=\"default\" next to default content, runes-mode attribute value shapes, and the svelte-ignore reach the compiler gives a comment before default-slot children (it applies to every later default-slot child, since the compiler re-inserts pending comments before each). Verified against svelte/compiler 5.55."
+}

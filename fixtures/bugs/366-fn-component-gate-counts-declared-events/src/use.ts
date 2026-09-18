@@ -1,0 +1,14 @@
+import type { Component } from 'svelte';
+import Comp from './Comp.svelte';
+import Comp2 from './Comp2.svelte';
+import Comp3 from './Comp3.svelte';
+import Comp4 from './Comp4.svelte';
+export const x: Parameters<typeof Comp> = null as any;
+export const c1: Component<{ a: number }> = Comp;
+export const c2: Component<{ a: number }> = Comp2;
+type Fn = (anchor: any, props: { a: number }) => {};
+export const f1: Fn = Comp;
+export const n1 = new Comp({ target: document.body, props: { a: 1 } });
+export const n2 = new Comp2({ target: document.body, props: { a: 1 } });
+export const n3 = new Comp3({ target: document.body, props: { a: 1 } });
+export const n4 = new Comp4({ target: document.body, props: { a: 1 } });

@@ -13,11 +13,13 @@ function $$render_e40e2c10() {
             "type": `text`,
             "bind:value": (test),
         });
+            /*svn:ignore_start*/void (() => { test = __svn_any(null); });/*svn:ignore_end*/
         }
         { svelteHTML.createElement("input", {
             "type": `text`,
             "bind:value": (test),
         });
+            /*svn:ignore_start*/void (() => { test = __svn_any(null); });/*svn:ignore_end*/
         }
         {
             const __svn_C_7a = __svn_ensure_component(Input);
@@ -27,11 +29,15 @@ function $$render_e40e2c10() {
         }
         {
             const __svn_C_a1 = __svn_ensure_component(Input);
-            new __svn_C_a1({ target: __svn_any(), props: {"type": "text"} });
+            const __svn_inst_a1 = new __svn_C_a1({ target: __svn_any(), props: {"type": "text", "value": (test)} });
+            /*svn:ignore_start*/void (() => { test = __svn_any(null); });/*svn:ignore_end*/
+            __svn_inst_a1.$$bindings = 'value';
         }
         {
             const __svn_C_ca = __svn_ensure_component(Input);
-            new __svn_C_ca({ target: __svn_any(), props: {"type": "text"} });
+            const __svn_inst_ca = new __svn_C_ca({ target: __svn_any(), props: {"type": "text", "value": (test)} });
+            /*svn:ignore_start*/void (() => { test = __svn_any(null); });/*svn:ignore_end*/
+            __svn_inst_ca.$$bindings = 'value';
         }
         {
             const __svn_C_f3 = __svn_ensure_component(Input);
@@ -40,17 +46,11 @@ function $$render_e40e2c10() {
             __svn_inst_f3.$$bindings = 'value';
         }
     });
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
- */
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
- */
-/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
+/** @type {__SvnIsomorphicComponent<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */
 export const __svn_component_default = /** @type {any} */ (null);
-/** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
+/** @typedef {InstanceType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;
 

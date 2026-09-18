@@ -1528,8 +1528,20 @@ fn non_reactive_update_emits_after_template_warnings() {
 // DOM element) discriminates the resolved mode.
 // ----------------------------------------------------------------
 
+/// Auto-detected runes mode, with the `experimental.async` option on
+/// so a suspending `await` (which flips runes) compiles.
 fn lint_auto(source: &str) -> Vec<Warning> {
-    svn_lint::lint_file(source, Path::new("t.svelte"), None, CompatFeatures::MODERN)
+    let options = svn_lint::LintOptions {
+        runes: None,
+        experimental_async: true,
+        ..svn_lint::LintOptions::default()
+    };
+    svn_lint::lint_file_with_options(
+        source,
+        Path::new("t.svelte"),
+        options,
+        CompatFeatures::MODERN,
+    )
 }
 
 /// A backing `state` binding turns `$state(…)` into a store
@@ -1560,8 +1572,9 @@ fn store_named_state_call_stays_non_runes() {
 }
 
 /// A bare rune REFERENCE without backing stays in the unresolved
-/// reference set — the file resolves as runes (upstream then errors
-/// rune_missing_parentheses, proving the flip).
+/// reference set — the file resolves as runes, where the compiler
+/// rejects the reference with rune_missing_parentheses (a runes-only
+/// error, proving the flip).
 #[test]
 fn bare_rune_reference_flips_runes() {
     let src = "\
@@ -1572,10 +1585,10 @@ fn bare_rune_reference_flips_runes() {
 <button on:click={() => {}}>x</button>
 ";
     let warnings = lint_auto(src);
-    assert!(
-        codes(&warnings).contains(&"event_directive_deprecated"),
-        "bare $state ref must flip runes, got: {:?}",
-        codes(&warnings)
+    assert_eq!(
+        codes(&warnings),
+        vec!["rune_missing_parentheses"],
+        "bare $state ref must flip runes"
     );
 }
 

@@ -1,0 +1,30 @@
+{
+    "errors": [
+        {
+            "file": "src/r40/Use.svelte",
+            "line": 3,
+            "column": 9,
+            "code": 2353
+        },
+        {
+            "file": "src/r03/B.svelte",
+            "line": 1,
+            "column": 4,
+            "code": 2322
+        },
+        {
+            "file": "src/r03/A.svelte",
+            "line": 1,
+            "column": 4,
+            "code": 2322
+        }
+    ],
+    "warnings": [
+        {
+            "file": "src/r40/A.svelte",
+            "line": 0,
+            "column": 8,
+            "code": "script_context_deprecated"
+        }
+    ]
+}

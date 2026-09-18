@@ -1,0 +1,36 @@
+{
+    "errors": [],
+    "warnings": [
+        {
+            "file": "src/A.svelte",
+            "line": 1,
+            "column": 13,
+            "code": "bidirectional_control_characters"
+        },
+        {
+            "file": "src/A.svelte",
+            "line": 2,
+            "column": 12,
+            "code": "bidirectional_control_characters"
+        },
+        {
+            "file": "src/B.svelte",
+            "line": 0,
+            "column": 1,
+            "code": "bidirectional_control_characters"
+        },
+        {
+            "file": "src/C.svelte",
+            "line": 0,
+            "column": 17,
+            "code": "bidirectional_control_characters"
+        },
+        {
+            "file": "src/D.svelte",
+            "line": 1,
+            "column": 13,
+            "code": "bidirectional_control_characters"
+        }
+    ],
+    "_note": "The compiler tests string literals and template chunks for bidirectional control characters with one global regex whose lastIndex survives from one compiled component to the next, and svelte-check compiles every component in one process. Components reach the compiler after the fallback preprocessor's awaits: B (no <script> or comment) first, then C (a comment only), then A and D (scripts) in discovery order. So C's first literal is searched from where B left the regex and misses, and A and D start past the bidi character in their first literal and report the template chunk instead. Verified against upstream svelte-check."
+}

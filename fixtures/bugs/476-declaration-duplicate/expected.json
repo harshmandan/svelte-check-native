@@ -1,0 +1,41 @@
+{
+    "errors": [
+        {
+            "file": "src/D01.svelte",
+            "line": 1,
+            "column": 10,
+            "code": "declaration_duplicate"
+        },
+        {
+            "file": "src/D02.svelte",
+            "line": 0,
+            "column": 0,
+            "code": "declaration_duplicate"
+        },
+        {
+            "file": "src/D03.svelte",
+            "line": 5,
+            "column": 11,
+            "code": "declaration_duplicate"
+        },
+        {
+            "file": "src/D05.svelte",
+            "line": 3,
+            "column": 21,
+            "code": "declaration_duplicate"
+        },
+        {
+            "file": "src/D06.svelte",
+            "line": 3,
+            "column": 15,
+            "code": "declaration_duplicate"
+        },
+        {
+            "file": "src/D07.svelte",
+            "line": 3,
+            "column": 17,
+            "code": "declaration_duplicate"
+        }
+    ],
+    "_note": "A name declared twice in one template scope: two top-level snippets, an each item and its index (the compiler declares the index from a bare name, so the error has no position: 0:0), an each item or await value and a {@const} in the same block (the await value is declared after its branch is walked, so the error points at the value), a component's let: directive and a {@const}. D04 shows var redeclarations and a {@const} shadowing a script variable stay valid. Verified against upstream svelte-check."
+}

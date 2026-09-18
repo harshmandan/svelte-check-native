@@ -5,56 +5,41 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         {
             const __svn_C_0 = __svn_ensure_component(Component);
-            const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {unshadowed1, "foo": (unshadowed2), subthing, shadowed1, "shadowed-2": (shadowed2), "templateString": ` ${complex} `, "complex": `${{complex}}`, children: () => __svn_snippet_return()} });
+            const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return(), unshadowed1, "foo": (unshadowed2), subthing, shadowed1, "shadowed-2": (shadowed2), "templateString": ` ${complex} `, "complex": `${{complex}}`} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, name: n, shadowed1, shadowed2, subthing } = __svn_inst_0.$$slot_def.default; $$_$$;
-                void n;
-                void shadowed1;
-                void shadowed2;
-                void subthing;
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, subthing } = __svn_inst_0.$$slot_def["sub1"]; $$_$$;
-                    void subthing;
-                    { svelteHTML.createElement("p", {});                         (thing);
-                        (subthing);
+                    { svelteHTML.createElement("p", {});                         thing;
+                        subthing;
                     }
                 }
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, subthing, othersubthing } = __svn_inst_0.$$slot_def["sub2"]; $$_$$;
-                    void subthing;
-                    void othersubthing;
                     {
                         const __svn_C_169 = __svn_ensure_component(Sub);
-                        new __svn_C_169({ target: __svn_any(), props: {subthing, children: () => __svn_snippet_return()} });
-                        (thing);
-                        (subthing);
+                        new __svn_C_169({ target: __svn_any(), props: {children: () => __svn_snippet_return(), subthing} });
+                        thing;
+                        subthing;
                     }
                 }
                 {
                     const __svn_C_205 = __svn_ensure_component(Sub);
-                    const __svn_inst_205 = new __svn_C_205({ target: __svn_any(), props: {subthing, children: () => __svn_snippet_return()} });
+                    const __svn_inst_205 = new __svn_C_205({ target: __svn_any(), props: {children: () => __svn_snippet_return(), subthing} });
                     {
                         const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, subthing, othersubthing } = __svn_inst_205.$$slot_def.default; $$_$$;
-                        void subthing;
-                        void othersubthing;
-                        (thing);
-                        (subthing);
+                        thing;
+                        subthing;
                     }
                 }
             }
         }
     });
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
- */
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
- */
-/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
+/** @type {__SvnIsomorphicComponent<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */
 export const __svn_component_default = /** @type {any} */ (null);
-/** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
+/** @typedef {InstanceType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;
 

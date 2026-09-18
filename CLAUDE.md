@@ -490,7 +490,7 @@ fixture that starts passing strict will fail the suite with `STALE:
 <name>` until removed from the list. Loose mode
 `LS_DIAGNOSTICS_LOOSE=1` falls back to `(file, code)` for envs
 that can't reach byte-perfect positions yet. Current skip state:
-17 fixtures under `crates/cli/tests/ls_diagnostics/skips/` (the
+21 fixtures under `crates/cli/tests/ls_diagnostics/skips/` (the
 suite's own denominator is authoritative; run it for the live
 pass count). Per-fixture investigation profiles for every current
 skip live in `notes/LS_CONVERGENCE.md` (consolidated 2026-07-31
@@ -514,7 +514,7 @@ by the suites above. Their error counts are not a shipping metric.
   target. Mid-migration SvelteKit monorepo, mostly Svelte-4-
   syntax components. The "1000-file mid-migration" number in the
   public README and CHANGELOG refers to this workspace's primary
-  sub-app (~1124 files after monorepo-root auto-escape). Ties
+  sub-app (~1124 files, checked from inside the sub-app). Ties
   upstream `svelte-check --tsgo` at 0 user errors.
 - A Svelte-5 control-rig bench — the latest fresh extract of the
   same upstream repo's `main` branch (Svelte 5.55+ and further
@@ -548,6 +548,20 @@ the symmetric diff per pair. Per-bench allowlist lives at
 `bench/.parity-exceptions.json` (the only path under `bench/`
 that's tracked in git). Stale-allowlist entries (no longer firing)
 print as a warning so the file decays toward zero.
+
+The exit code follows `svelte-check --tsgo` (the surface we mirror);
+the default engine's diff is printed for information only. Two guards
+keep "identical to upstream" honest. A per-target recipe in
+`scripts/parity-rigs.json` (keyed by path under `bench/`) layers
+tsconfig overrides (`composite`/`incremental`/`declaration` off) and
+small source patches over the control rigs for the run — patches are
+reverted on exit, and one whose `find` text no longer matches exactly
+once fails the run. Then, after upstream `--tsgo` runs, its generated
+overlay project is re-checked with tsgo: a parser syntax error in a
+generated file or TS6379 means upstream type-checked nothing (one
+syntax error makes tsgo skip semantic checking program-wide), and the
+run fails instead of comparing against an empty side. `--no-rig`
+skips the recipe.
 
 **SvelteKit test apps as differential targets.**
 `scripts/bootstrap-kit-bench.mjs` clones `sveltejs/kit` shallowly

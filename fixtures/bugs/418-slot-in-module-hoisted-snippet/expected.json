@@ -1,0 +1,41 @@
+{
+    "errors": [
+        {
+            "file": "src/Hoisted.svelte",
+            "line": 2,
+            "column": 10,
+            "code": 6133
+        },
+        {
+            "file": "src/Hoisted.svelte",
+            "line": 2,
+            "column": 16,
+            "code": 2304
+        },
+        {
+            "file": "src/Hoisted.svelte",
+            "line": 3,
+            "column": 10,
+            "code": 6133
+        },
+        {
+            "file": "src/Hoisted.svelte",
+            "line": 3,
+            "column": 23,
+            "code": 2304
+        },
+        {
+            "file": "src/Local.svelte",
+            "line": 1,
+            "column": 10,
+            "code": 6133
+        },
+        {
+            "file": "src/Local.svelte",
+            "line": 2,
+            "column": 10,
+            "code": 6133
+        }
+    ],
+    "_note": "svelte2tsx declares its createSlot helper in the render function. A root snippet that references only module-scope names is hoisted to module scope, where a `<slot>` inside it cannot see the helper: TS2304, reported at the `<` of `<slot`. A snippet that stays in the render function sees the helper and reports nothing. We declared the helper inside the template check body and left its name unmapped."
+}

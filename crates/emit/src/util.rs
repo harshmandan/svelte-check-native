@@ -66,6 +66,48 @@ pub fn set_render_hash_root(root: &Path) {
     let _ = RENDER_HASH_ROOT.set(root.to_path_buf());
 }
 
+/// Major version of the project's installed `svelte`, when known.
+static SVELTE_MAJOR: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+
+/// Record the installed `svelte` major version (`None` when there is no
+/// install). Call once before emit; later calls are ignored.
+pub fn set_svelte_major(major: Option<u32>) {
+    let _ = SVELTE_MAJOR.set(major);
+}
+
+/// svelte2tsx's `svelte5Plus`, which gates the conversions only a
+/// Svelte 5 install gets. Without a known install we assume Svelte 5.
+pub(crate) fn svelte5_plus() -> bool {
+    SVELTE_MAJOR
+        .get()
+        .copied()
+        .flatten()
+        .is_none_or(|major| major >= 5)
+}
+
+/// Whether an attribute value expression is a top-level comma sequence
+/// (`{a, b}`). svelte2tsx copies attribute values into the attrs or
+/// props object without parentheses, so a sequence there is read as
+/// extra object members — usually a syntax error — rather than one
+/// value; the emit sites leave such a value unwrapped to match.
+pub(crate) fn is_sequence_expression(expr: &str) -> bool {
+    let wrapped = format!("(\n{expr}\n);");
+    let alloc = oxc_allocator::Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+    if !parsed.errors.is_empty() {
+        return false;
+    }
+    matches!(
+        parsed.program.body.as_slice(),
+        [oxc_ast::ast::Statement::ExpressionStatement(stmt)]
+            if matches!(
+                &stmt.expression,
+                oxc_ast::ast::Expression::ParenthesizedExpression(p)
+                    if matches!(p.expression, oxc_ast::ast::Expression::SequenceExpression(_))
+            )
+    )
+}
+
 /// Derive a per-file render function name. Hash of the source path
 /// prevents collisions when multiple components in the same overlay
 /// project would otherwise both produce `function $$render()`
@@ -226,6 +268,33 @@ fn dollar_generic_decls(script: &str) -> Option<Vec<DollarGenericDecl>> {
         });
     }
     Some(out)
+}
+
+/// The render function's type-parameter names, and the constraint text
+/// of each `type NAME = $$Generic<Constraint>` declaration (an attribute
+/// list has none) — what the type-hoisting decision needs to know about
+/// generics.
+pub(crate) fn generic_hoist_inputs(
+    generics: Option<&(SmolStr, GenericsOrigin)>,
+    script: &str,
+) -> (Vec<SmolStr>, Vec<String>) {
+    match generics {
+        None => (Vec::new(), Vec::new()),
+        Some((list, GenericsOrigin::Attribute)) => (
+            generic_arg_names(list)
+                .split(',')
+                .map(|n| SmolStr::from(n.trim()))
+                .filter(|n| !n.is_empty())
+                .collect(),
+            Vec::new(),
+        ),
+        Some((_, GenericsOrigin::DollarGeneric)) => {
+            let decls = dollar_generic_decls(script).unwrap_or_default();
+            let names = decls.iter().map(|d| d.name.clone()).collect();
+            let constraints = decls.into_iter().filter_map(|d| d.constraint).collect();
+            (names, constraints)
+        }
+    }
 }
 
 /// Blank out `type NAME = $$Generic[<args>];` declarations from a

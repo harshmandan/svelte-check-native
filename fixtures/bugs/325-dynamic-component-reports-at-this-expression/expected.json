@@ -1,0 +1,18 @@
+{
+    "errors": [
+        {
+            "file": "src/App.svelte",
+            "line": 4,
+            "column": 24,
+            "code": 2345
+        }
+    ],
+    "warnings": [
+        {
+            "file": "src/App.svelte",
+            "line": 4,
+            "column": 0,
+            "code": "svelte_component_deprecated"
+        }
+    ]
+}

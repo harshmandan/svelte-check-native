@@ -1,0 +1,18 @@
+{
+    "clean": true,
+    "warnings": [
+        {
+            "file": "src/Cls.svelte",
+            "line": 1,
+            "column": 1,
+            "code": "perf_avoid_inline_class"
+        },
+        {
+            "file": "src/Bidi.svelte",
+            "line": 1,
+            "column": 1,
+            "code": "bidirectional_control_characters"
+        }
+    ],
+    "_note": "The compiler's template walk runs the same Literal / TemplateElement / NewExpression visitors as its script walks, so a bidirectional control character in a template string literal and `new class {}` in a template expression warn. A template expression starting with a string literal is parsed as an expression, not a directive prologue. Verified against svelte-check 4.4.6."
+}

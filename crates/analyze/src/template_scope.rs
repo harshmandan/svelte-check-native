@@ -424,6 +424,34 @@ pub enum ScopeKind {
     /// `<Comp let:foo>` / `<el let:foo>` — let-directive bindings on
     /// an element/component scope its children.
     LetDirective,
+    // The kinds below are only produced for visitors that opt into
+    // [`TemplateScopeVisitor::COMPILER_SCOPES`].
+    /// A block's fragment (`{#if}` branches, `{#each}` fallback,
+    /// `{#await}` pending body, `{#key}` body, snippet body, the root
+    /// fragment): a non-porous child scope. `{#await}` then/catch
+    /// bodies use `AwaitThen` / `AwaitCatch` instead.
+    Block,
+    /// A regular element, `<slot>`, `<svelte:element>` or
+    /// `<svelte:fragment>`: a non-porous child scope holding the
+    /// element's attributes, its `let:` bindings and its children.
+    Element,
+    /// The children fragment of an element-like node: a porous
+    /// (block-like) child scope.
+    ElementFragment,
+    /// A component's default scope: its `let:` bindings (unless the
+    /// component itself fills a named slot) and every child without
+    /// a `slot="…"` attribute.
+    ComponentDefault,
+    /// A component child carrying a static `slot="…"` attribute. Its
+    /// scope is a SIBLING of the enclosing [`ScopeKind::ComponentDefault`]
+    /// scope (a child of the component's own parent scope), so it
+    /// does not see the default `let:` bindings.
+    ComponentSlot,
+    /// The pattern of `{:then PATTERN}` / `{:catch PATTERN}`: a
+    /// non-porous child of the await block's scope that declares the
+    /// pattern's identifiers as plain bindings and holds the pattern's
+    /// default-value expressions.
+    AwaitValue,
 }
 
 /// Visitor invoked by [`walk_with_visitor`] at every scope boundary
@@ -431,6 +459,20 @@ pub enum ScopeKind {
 /// implement the methods they care about.
 #[allow(unused_variables)]
 pub trait TemplateScopeVisitor {
+    /// Bracket scopes exactly the way the Svelte compiler's scope
+    /// builder does (`phases/scope.js` `create_scopes`): every block
+    /// fragment, element and component slot gets its own scope,
+    /// `{#each}` fallbacks and pattern defaults resolve inside the
+    /// block's scope, and `let:` directive defaults are not walked.
+    /// The default (`false`) keeps the svelte2tsx-shaped bracketing
+    /// the overlay emit relies on.
+    const COMPILER_SCOPES: bool = false;
+
+    /// Compiler-scope mode only: declare `bindings` (a component's
+    /// `let:` directives, when the component itself fills a named
+    /// slot) into the CURRENT scope without opening a new one.
+    fn declare_in_current_scope(&mut self, bindings: &[BoundIdent]) {}
+
     /// Called at fragment entry. The visitor brackets its scope-stack
     /// here so any `visit_at_const` push during the walk is truncated
     /// at fragment exit.
@@ -506,6 +548,9 @@ pub trait TemplateScopeVisitor {
     /// every name; lint ignores the list and re-parses for
     /// declarations.
     fn visit_at_const(&mut self, bound_names: &[SmolStr], expr_range: Range) {}
+
+    /// A text node of a fragment, in walk order.
+    fn visit_text(&mut self, range: Range) {}
 }
 
 /// Drive the visitor over a template fragment. Handles all
@@ -520,7 +565,13 @@ pub fn walk_with_visitor<V: TemplateScopeVisitor>(
     source: &str,
     visitor: &mut V,
 ) {
-    walk_fragment_inner(fragment, source, visitor);
+    if V::COMPILER_SCOPES {
+        // The root fragment is a Fragment node like any other: the
+        // compiler gives it a child of the template scope.
+        compiler::walk_block_fragment(fragment, fragment.range, source, visitor);
+    } else {
+        walk_fragment_inner(fragment, source, visitor);
+    }
 }
 
 fn walk_fragment_inner<V: TemplateScopeVisitor>(
@@ -725,7 +776,316 @@ fn walk_node_inner<V: TemplateScopeVisitor>(node: &Node, source: &str, visitor: 
             visitor.visit_expr(i.expression_range);
         }
         // Leaf nodes — no children, no scope, nothing for the visitor.
-        Node::Text(_) | Node::Comment(_) => {}
+        Node::Text(t) => visitor.visit_text(t.range),
+        Node::Comment(_) => {}
+    }
+}
+
+/// The [`TemplateScopeVisitor::COMPILER_SCOPES`] walk. Mirrors the
+/// template visitors of the compiler's `create_scopes`
+/// (`phases/scope.js`): `Fragment` → a child scope (porous when the
+/// fragment belongs to an element-like node), `RegularElement` /
+/// `SlotElement` / `SvelteElement` / `SvelteFragment` → a child scope
+/// for attributes and children, `Component` → a default scope plus a
+/// sibling scope per `slot="…"` child, `EachBlock` → one scope for
+/// the context, key, body and fallback, `AwaitBlock` → a value scope
+/// per pattern, `SnippetBlock` → a parameter scope.
+mod compiler {
+    use super::*;
+
+    pub(super) fn walk_block_fragment<V: TemplateScopeVisitor>(
+        fragment: &Fragment,
+        range: Range,
+        source: &str,
+        visitor: &mut V,
+    ) {
+        visitor.enter_scope(ScopeKind::Block, &[], range);
+        walk_nodes(fragment, source, visitor);
+        visitor.leave_scope(ScopeKind::Block);
+    }
+
+    fn walk_nodes<V: TemplateScopeVisitor>(fragment: &Fragment, source: &str, visitor: &mut V) {
+        visitor.enter_fragment();
+        for node in &fragment.nodes {
+            walk_node(node, source, visitor);
+        }
+        visitor.leave_fragment();
+    }
+
+    fn walk_element_fragment<V: TemplateScopeVisitor>(
+        children: &Fragment,
+        source: &str,
+        visitor: &mut V,
+    ) {
+        visitor.enter_scope(ScopeKind::ElementFragment, &[], children.range);
+        walk_nodes(children, source, visitor);
+        visitor.leave_scope(ScopeKind::ElementFragment);
+    }
+
+    /// `let:` bindings of an element-like node. The compiler's
+    /// `LetDirective` visitor never walks the directive expression,
+    /// so default values inside a destructure are dropped here.
+    fn let_bindings(attrs: &[svn_parser::Attribute], source: &str) -> Vec<BoundIdent> {
+        collect_let_directive_bindings(attrs, source).bindings
+    }
+
+    /// Element-like nodes with their own scope (`SvelteFragment`
+    /// visitor): attributes, `let:` bindings and children all live in
+    /// it.
+    fn walk_scoped_element<V: TemplateScopeVisitor>(
+        attrs: &[svn_parser::Attribute],
+        children: &Fragment,
+        range: Range,
+        source: &str,
+        visitor: &mut V,
+        visit_attrs: impl FnOnce(&mut V),
+    ) {
+        visitor.enter_scope(ScopeKind::Element, &let_bindings(attrs, source), range);
+        visit_attrs(visitor);
+        walk_element_fragment(children, source, visitor);
+        visitor.leave_scope(ScopeKind::Element);
+    }
+
+    /// `Component` / `SvelteComponent` / `SvelteSelf`: attributes in
+    /// the current scope (the caller visits them first), then the
+    /// default scope and one sibling scope per `slot="…"` child. The
+    /// children are visited directly — no fragment scope.
+    fn walk_component_children<V: TemplateScopeVisitor>(
+        attrs: &[svn_parser::Attribute],
+        children: &Fragment,
+        source: &str,
+        visitor: &mut V,
+    ) {
+        let lets = let_bindings(attrs, source);
+        let self_slotted = static_slot_name(attrs, source).is_some();
+        if self_slotted {
+            visitor.declare_in_current_scope(&lets);
+        }
+        let default_bindings: &[BoundIdent] = if self_slotted { &[] } else { &lets };
+        visitor.enter_scope(
+            ScopeKind::ComponentDefault,
+            default_bindings,
+            children.range,
+        );
+        visitor.enter_fragment();
+        for child in &children.nodes {
+            if let Some(range) = slotted_child_range(child, source) {
+                visitor.enter_scope(ScopeKind::ComponentSlot, &[], range);
+                walk_node(child, source, visitor);
+                visitor.leave_scope(ScopeKind::ComponentSlot);
+            } else {
+                walk_node(child, source, visitor);
+            }
+        }
+        visitor.leave_fragment();
+        visitor.leave_scope(ScopeKind::ComponentDefault);
+    }
+
+    /// The range of `node` when it is an element-like node carrying a
+    /// static `slot="…"` attribute (the compiler's `determine_slot`).
+    fn slotted_child_range(node: &Node, source: &str) -> Option<Range> {
+        use svn_parser::SvelteElementKind as K;
+        let (attrs, range) = match node {
+            Node::Element(e) => (&e.attributes, e.range),
+            Node::Component(c) => (&c.attributes, c.range),
+            Node::SvelteElement(s)
+                if matches!(s.kind, K::Element | K::Fragment | K::SelfRef | K::Component) =>
+            {
+                (&s.attributes, s.range)
+            }
+            _ => return None,
+        };
+        static_slot_name(attrs, source).map(|_| range)
+    }
+
+    /// The value of a `slot` attribute whose value is exactly one text
+    /// chunk (`is_text_attribute`); an empty quoted value counts.
+    fn static_slot_name<'s>(attrs: &[svn_parser::Attribute], source: &'s str) -> Option<&'s str> {
+        use svn_parser::ast::{AttrValuePart, Attribute};
+        attrs.iter().find_map(|a| {
+            let Attribute::Plain(p) = a else {
+                return None;
+            };
+            if p.name != "slot" {
+                return None;
+            }
+            let value = p.value.as_ref()?;
+            match value.parts.as_slice() {
+                [] if value.quoted => Some(""),
+                [AttrValuePart::Text { range }] => {
+                    source.get(range.start as usize..range.end as usize)
+                }
+                _ => None,
+            }
+        })
+    }
+
+    fn walk_node<V: TemplateScopeVisitor>(node: &Node, source: &str, visitor: &mut V) {
+        use svn_parser::SvelteElementKind as K;
+        match node {
+            Node::Element(e) => {
+                walk_scoped_element(&e.attributes, &e.children, e.range, source, visitor, |v| {
+                    v.visit_element(e)
+                });
+            }
+            Node::Component(c) => {
+                visitor.visit_component(c);
+                walk_component_children(&c.attributes, &c.children, source, visitor);
+            }
+            Node::SvelteElement(s) => match s.kind {
+                K::SelfRef | K::Component => {
+                    visitor.visit_svelte_element(s);
+                    walk_component_children(&s.attributes, &s.children, source, visitor);
+                }
+                K::Element | K::Fragment => {
+                    walk_scoped_element(
+                        &s.attributes,
+                        &s.children,
+                        s.range,
+                        source,
+                        visitor,
+                        |v| v.visit_svelte_element(s),
+                    );
+                }
+                // `<svelte:head>`, `<svelte:window>`, `<svelte:boundary>`
+                // … have no scope visitor: only their (porous) fragment
+                // gets one.
+                K::Window | K::Document | K::Body | K::Head | K::Options | K::Boundary => {
+                    visitor.visit_svelte_element(s);
+                    walk_element_fragment(&s.children, source, visitor);
+                }
+            },
+            Node::IfBlock(b) => {
+                visitor.visit_if_block(b);
+                visitor.visit_expr(b.condition_range);
+                visitor.enter_control_flow();
+                walk_block_fragment(&b.consequent, b.consequent.range, source, visitor);
+                // `{:else if}` parses as an `IfBlock` inside the
+                // previous branch's alternate fragment, so each arm's
+                // condition sits in a scope nested under the previous
+                // alternate scope.
+                for arm in &b.elseif_arms {
+                    let alt_range = Range::new(arm.condition_range.start, b.range.end);
+                    visitor.enter_scope(ScopeKind::Block, &[], alt_range);
+                    visitor.visit_expr(arm.condition_range);
+                    walk_block_fragment(&arm.body, arm.body.range, source, visitor);
+                }
+                if let Some(alt) = &b.alternate {
+                    walk_block_fragment(alt, alt.range, source, visitor);
+                }
+                for _ in &b.elseif_arms {
+                    visitor.leave_scope(ScopeKind::Block);
+                }
+                visitor.leave_control_flow();
+            }
+            Node::EachBlock(b) => {
+                visitor.visit_each_block(b);
+                visitor.visit_expr(b.expression_range);
+                let mut bindings: Vec<BoundIdent> = Vec::new();
+                let mut defaults: Vec<Range> = Vec::new();
+                let mut has_index = false;
+                let mut key_range: Option<Range> = None;
+                if let Some(as_clause) = &b.as_clause {
+                    if let Some(ctx) = as_clause.context_range {
+                        let context = collect_pattern_bindings_from_slice(source, ctx);
+                        bindings.extend(context.bindings);
+                        defaults.extend(context.default_value_ranges);
+                    }
+                    if let Some(idx) = &as_clause.index_range {
+                        let i = collect_pattern_bindings_from_slice(source, *idx);
+                        bindings.extend(i.bindings);
+                        has_index = true;
+                    }
+                    key_range = as_clause.key_range;
+                }
+                let kind = ScopeKind::Each {
+                    is_keyed: key_range.is_some(),
+                    has_index,
+                };
+                visitor.enter_scope(kind, &bindings, b.range);
+                for default in &defaults {
+                    visitor.visit_expr(*default);
+                }
+                if let Some(k) = key_range {
+                    visitor.visit_expr(k);
+                }
+                visitor.enter_control_flow();
+                walk_nodes(&b.body, source, visitor);
+                if let Some(alt) = &b.alternate {
+                    walk_block_fragment(alt, alt.range, source, visitor);
+                }
+                visitor.leave_control_flow();
+                visitor.leave_scope(kind);
+            }
+            Node::AwaitBlock(b) => {
+                visitor.visit_await_block(b);
+                visitor.visit_expr(b.expression_range);
+                visitor.enter_control_flow();
+                if let Some(p) = &b.pending {
+                    walk_block_fragment(p, p.range, source, visitor);
+                }
+                let branches = [
+                    b.then_branch
+                        .as_ref()
+                        .map(|t| (ScopeKind::AwaitThen, t.context_range, &t.body)),
+                    b.catch_branch
+                        .as_ref()
+                        .map(|c| (ScopeKind::AwaitCatch, c.context_range, &c.body)),
+                ];
+                for (kind, context_range, body) in branches.into_iter().flatten() {
+                    let pb = match context_range {
+                        Some(r) => collect_pattern_bindings_from_slice(source, r),
+                        None => PatternBindings::default(),
+                    };
+                    visitor.enter_scope(kind, &pb.bindings, body.range);
+                    walk_nodes(body, source, visitor);
+                    visitor.leave_scope(kind);
+                    if let Some(r) = context_range {
+                        visitor.enter_scope(ScopeKind::AwaitValue, &pb.bindings, r);
+                        for default in &pb.default_value_ranges {
+                            visitor.visit_expr(*default);
+                        }
+                        visitor.leave_scope(ScopeKind::AwaitValue);
+                    }
+                }
+                visitor.leave_control_flow();
+            }
+            Node::KeyBlock(b) => {
+                visitor.visit_key_block(b);
+                visitor.visit_expr(b.expression_range);
+                visitor.enter_control_flow();
+                walk_block_fragment(&b.body, b.body.range, source, visitor);
+                visitor.leave_control_flow();
+            }
+            Node::SnippetBlock(b) => {
+                visitor.visit_snippet_block(b);
+                let pb = if b.parameters_range.start < b.parameters_range.end {
+                    collect_pattern_bindings_from_slice(source, b.parameters_range)
+                } else {
+                    PatternBindings::default()
+                };
+                visitor.enter_scope(ScopeKind::Snippet, &pb.bindings, b.range);
+                for default in &pb.default_value_ranges {
+                    visitor.visit_expr(*default);
+                }
+                walk_block_fragment(&b.body, b.body.range, source, visitor);
+                visitor.leave_scope(ScopeKind::Snippet);
+            }
+            Node::Interpolation(i)
+                if matches!(
+                    i.kind,
+                    svn_parser::InterpolationKind::AtConst
+                        | svn_parser::InterpolationKind::DeclConst
+                        | svn_parser::InterpolationKind::DeclLet
+                ) =>
+            {
+                let names = extract_at_const_bindings(i, source);
+                visitor.visit_at_const(&names, i.expression_range);
+            }
+            Node::Interpolation(i) => visitor.visit_expr(i.expression_range),
+            Node::Text(t) => visitor.visit_text(t.range),
+            Node::Comment(_) => {}
+        }
     }
 }
 

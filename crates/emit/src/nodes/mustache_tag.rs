@@ -15,8 +15,8 @@ use crate::nodes::debug_tag::emit_debug_tag;
 use crate::nodes::raw_mustache_tag::emit_raw_html;
 use crate::nodes::render_tag::emit_render_tag;
 
-/// Emit a `{expr}` interpolation as a bare-paren-call expression
-/// statement (`(EXPR);`) in the current scope so tsgo type-checks EXPR
+/// Emit a `{expr}` interpolation as an expression statement (`EXPR;`)
+/// in the current scope so tsgo type-checks EXPR
 /// against any enclosing control-flow narrowing (`{#if}` / `{:else if}` /
 /// `{#each …}`) and against the script-declared types of referenced
 /// identifiers.
@@ -42,8 +42,16 @@ pub(crate) fn emit_interpolation(
     }
 }
 
-/// `{EXPR}` plain interpolation. Emits `INDENT(EXPR);\n` with a
-/// TokenMapEntry covering the trimmed expression slice.
+/// `{EXPR}` plain interpolation, emitted the way svelte2tsx's
+/// `MustacheTag.ts` rewrites it: the braces become `EXPR;`, or
+/// `;(EXPR);` when the expression opens with `{` (an object literal
+/// that would otherwise read as a block). The text matters beyond its
+/// meaning: when the overlay around it is already syntactically broken
+/// (a script block svelte2tsx did not recognise is copied into the
+/// template verbatim), the TypeScript parser's recovery errors depend
+/// on the exact tokens, so they have to be svelte2tsx's. The
+/// replacement punctuation maps back to the brace it replaces, as
+/// svelte2tsx's content-only overwrite of that brace does.
 fn emit_plain_expression(
     buf: &mut EmitBuffer,
     source: &str,
@@ -65,12 +73,23 @@ fn emit_plain_expression(
     let leading_ws = expr_raw.len() - expr_raw.trim_start().len();
     let trimmed_source_start = interp.expression_range.start + leading_ws as u32;
     let trimmed_source_end = trimmed_source_start + trimmed.len() as u32;
+    let open_brace = svn_core::Range::new(interp.range.start, interp.range.start + 1);
+    // svelte2tsx keeps the whitespace inside the braces and overwrites
+    // only the `}`, so the first character after the expression — that
+    // whitespace, or the brace itself — is where a range ending with the
+    // expression lands. The trimmed emit's closing punctuation stands
+    // for that character.
+    let after_expr = svn_core::Range::new(trimmed_source_end, trimmed_source_end + 1);
+    let object_like = trimmed.starts_with('{');
     let indent = "    ".repeat(depth);
     buf.append_synthetic(&indent);
-    buf.append_synthetic("(");
+    if object_like {
+        buf.append_with_source(";(", open_brace);
+    }
     buf.append_with_source(
         trimmed,
         svn_core::Range::new(trimmed_source_start, trimmed_source_end),
     );
-    buf.append_synthetic(");\n");
+    buf.append_with_source(if object_like { ");" } else { ";" }, after_expr);
+    buf.append_synthetic("\n");
 }

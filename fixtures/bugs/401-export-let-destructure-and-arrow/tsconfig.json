@@ -1,0 +1,9 @@
+{
+    "extends": "../_shared/tsconfig.base.json",
+    "compilerOptions": {
+        "noUnusedLocals": false,
+        "noUnusedParameters": false,
+        "checkJs": true
+    },
+    "include": ["**/*"]
+}

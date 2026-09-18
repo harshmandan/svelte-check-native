@@ -4,24 +4,18 @@ function $$render_aad4163e() {
 
            let /** @type {import('./$types.js').PageData} */ data/*svn:ignore_start*/;data = __svn_any(data);/*svn:ignore_end*/;
            let /** @type {import('./$types.js').ActionData} */ form/*svn:ignore_start*/;form = __svn_any(form);/*svn:ignore_end*/;
-           const snapshot = {};
+           const /** @type {import('./$types.js').Snapshot} */ snapshot = {};
     ;(async () => {
         // template type-check body (incremental)
     });
     void data;
     void form;
     void snapshot;
-    return { props: /** @type {{ data: any; form: any; snapshot?: typeof snapshot; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ data: typeof data; form: typeof form; snapshot: typeof snapshot; }} */ ({}) };
+    return { props: /** @type {{ data: any; form: any; snapshot?: typeof snapshot; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ snapshot: typeof snapshot; }} */ ({}) };
 }
 $$render_aad4163e;
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_aad4163e>>['props']} __SvnDefaultProps
- */
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_aad4163e>>['exports']} __SvnDefaultExports
- */
-/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
+/** @type {__SvnIsomorphicComponent<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_aad4163e>>['props']>>, Awaited<ReturnType<typeof $$render_aad4163e>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_aad4163e>>['slots']>>, Awaited<ReturnType<typeof $$render_aad4163e>>['exports'], Awaited<ReturnType<typeof $$render_aad4163e>>['bindings']>} */
 export const __svn_component_default = /** @type {any} */ (null);
-/** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
+/** @typedef {InstanceType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;
 

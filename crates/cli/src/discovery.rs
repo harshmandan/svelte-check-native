@@ -1,9 +1,8 @@
 //! Workspace file discovery.
 //!
-//! Single-pass walk of the user's workspace producing the four file
-//! categories the typecheck pipeline cares about: Svelte components,
-//! SvelteKit route/hooks files, `.svelte.ts` runes modules, and plain
-//! `.ts` files (candidates for the runes-collision overlay rewrite).
+//! Single-pass walk of the user's workspace producing the two file
+//! categories the typecheck pipeline cares about: Svelte components and
+//! SvelteKit route/hooks files.
 //!
 //! Also hosts the small predicates that govern walk pruning
 //! (`is_excluded_dir`, `path_is_under_node_modules`) and the tsconfig
@@ -12,7 +11,6 @@
 use std::path::{Path, PathBuf};
 
 use svn_core::sveltekit::{KitFilesSettings, classify};
-use walkdir::WalkDir;
 
 /// Does `path` contain a `node_modules` segment? Uses path components
 /// (not string-contains) so a directory named `my_node_modules_dir`
@@ -34,21 +32,15 @@ pub(crate) fn discover_svelte_files(workspace: &Path) -> Vec<PathBuf> {
 /// Wrapper accepting default Kit-file settings — kept for callers
 /// (notably the `--list-relevant` debug flow) that don't have the
 /// user's `svelte.config.js` parsed yet.
-pub(crate) fn discover_relevant_files(
-    workspace: &Path,
-) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>) {
+pub(crate) fn discover_relevant_files(workspace: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
     discover_relevant_files_with_settings(workspace, &KitFilesSettings::default())
 }
 
-/// Walk the workspace once and return all four file categories the
+/// Walk the workspace once and return the file categories the
 /// typecheck pipeline consumes:
 ///
 /// 1. `.svelte` components.
 /// 2. SvelteKit route/hooks files (`+page.ts`, `+layout.ts`, etc.).
-/// 3. `.svelte.ts` runes modules (separately tracked so the runes-
-///    collision overlay decider can O(1) membership-test).
-/// 4. Plain `.ts` files (candidates for `.svelte`-import rewriting
-///    when their imports collide with a sibling runes module).
 ///
 /// Sharing the walker pass means callers that need multiple
 /// categories don't traverse the filesystem more than once.
@@ -62,48 +54,41 @@ pub(crate) fn discover_relevant_files(
 pub(crate) fn discover_relevant_files_with_settings(
     workspace: &Path,
     kit_settings: &KitFilesSettings,
-) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>) {
+) -> (Vec<PathBuf>, Vec<PathBuf>) {
     let mut svelte_files = Vec::new();
     let mut kit_files = Vec::new();
-    // `.svelte.ts` and `.svelte.js` runes modules — siblings of a
-    // `.svelte` component, the pattern that creates the rootDirs
-    // resolution collision fixed by user-script overlays. Collected
-    // here once so the overlay decider can membership-test without
-    // rewalking disk. Both lang variants live in the same set
-    // because the collision is identical and the rewrite output
-    // (`.svelte.svn.js`) is the same regardless of source lang.
-    let mut runes_modules = Vec::new();
-    // User `.ts` and `.js` files that aren't Kit files and aren't
-    // runes modules. Candidates for the `.svelte`-import-rewrite
-    // overlay — final filter (does the file actually import a
-    // sibling-collision `.svelte`?) happens later after all runes
-    // modules are known.
-    let mut user_scripts = Vec::new();
-    for e in WalkDir::new(workspace)
-        .into_iter()
-        // depth 0 is the workspace root itself — never prune it, even
-        // if its basename is hidden or `node_modules` (the user pointed
-        // us at it deliberately). Pruning the root yields zero files.
-        .filter_entry(|e| e.depth() == 0 || !e.file_type().is_dir() || !is_excluded_dir(e.path()))
-        .filter_map(Result::ok)
-        // A symlink POINTING AT a file counts as a file. We walk with
-        // `follow_links = false`, so such an entry reports
-        // `is_symlink()` rather than `is_file()` and a bare `is_file()`
-        // test drops it — a symlinked `+page.svelte` then gets no
-        // overlay, is never checked, and loses its route autotyping.
-        //
-        // Upstream's `fdir` admits an entry when
-        // `isFile() || (isSymbolicLink() && !resolveSymlinks &&
-        // !excludeSymlinks)`, and `findFiles` sets neither option
-        // (`utils.ts:63-75`). Symlinked DIRECTORIES stay excluded on
-        // both sides — fdir needs `resolveSymlink` to descend one, and
-        // `filter_entry` above only prunes `is_dir()` entries, which a
-        // symlinked dir is not, so it is never descended here either.
-        .filter(|e| e.file_type().is_file() || e.file_type().is_symlink())
-    {
-        let path = e.path();
+    // Visit order follows svelte-check's `fdir` crawl, which fixes the
+    // order files are reported in: Node lists each directory sorted by
+    // name (libuv's scandir), a directory's files are taken when its
+    // listing arrives, and its subdirectories are listed after every
+    // directory already queued, so shallower files come first.
+    let mut queue = std::collections::VecDeque::from([workspace.to_path_buf()]);
+    let mut files: Vec<PathBuf> = Vec::new();
+    while let Some(dir) = queue.pop_front() {
+        let Ok(read) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut entries: Vec<(std::ffi::OsString, std::fs::FileType)> = read
+            .filter_map(Result::ok)
+            .filter_map(|e| e.file_type().ok().map(|t| (e.file_name(), t)))
+            .collect();
+        entries.sort_by(|a, b| a.0.as_encoded_bytes().cmp(b.0.as_encoded_bytes()));
+        for (name, file_type) in entries {
+            let path = dir.join(&name);
+            // A symlink POINTING AT a file counts as a file: `fdir`
+            // admits an entry when `isFile() || isSymbolicLink()` without
+            // resolving it. Symlinked directories are never descended.
+            if file_type.is_dir() {
+                if !is_excluded_dir(&path) {
+                    queue.push_back(path);
+                }
+            } else if file_type.is_file() || file_type.is_symlink() {
+                files.push(path);
+            }
+        }
+    }
+    for path in &files {
         let ext = path.extension().and_then(|s| s.to_str());
-        let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
         match ext {
             Some("svelte") => svelte_files.push(path.to_path_buf()),
             // Any classify hit on a `.ts`/`.js` is a kit file — route
@@ -112,16 +97,10 @@ pub(crate) fn discover_relevant_files_with_settings(
             Some("ts" | "js") if classify(path, kit_settings).is_some() => {
                 kit_files.push(path.to_path_buf());
             }
-            Some("ts" | "js")
-                if file_name.ends_with(".svelte.ts") || file_name.ends_with(".svelte.js") =>
-            {
-                runes_modules.push(path.to_path_buf());
-            }
-            Some("ts" | "js") => user_scripts.push(path.to_path_buf()),
             _ => {}
         }
     }
-    (svelte_files, kit_files, runes_modules, user_scripts)
+    (svelte_files, kit_files)
 }
 
 /// Lexically normalize a path, collapsing `.` and `..` segments
@@ -160,6 +139,7 @@ fn normalize_lexical(p: &Path) -> PathBuf {
 /// projection agree on which files are in the project.
 pub(crate) fn resolve_patterns_against_declaring_dir<F>(
     chain: &[svn_core::tsconfig::TsConfigFile],
+    kind: SpecKind,
     get: F,
 ) -> Option<Vec<String>>
 where
@@ -170,6 +150,7 @@ where
     Some(
         patterns
             .iter()
+            .filter(|s| kind.accepts(s))
             .map(|s| {
                 let resolved = if Path::new(s).is_absolute() {
                     PathBuf::from(s)
@@ -180,6 +161,39 @@ where
             })
             .collect(),
     )
+}
+
+/// Which tsconfig list a pattern came from. TypeScript drops invalid
+/// `include` / `exclude` entries (reporting TS5010 / TS5065) before
+/// matching anything; `files` entries are paths, not patterns.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SpecKind {
+    Include,
+    Exclude,
+    Files,
+}
+
+impl SpecKind {
+    /// TypeScript's `specToDiagnostic`: an include may not end in a
+    /// recursive `**`, and no pattern may climb `..` after one.
+    fn accepts(self, spec: &str) -> bool {
+        if self == SpecKind::Files {
+            return true;
+        }
+        let parts: Vec<&str> = spec.split(['/', '\\']).collect();
+        let trailing_recursion = parts
+            .iter()
+            .rev()
+            .find(|p| !p.is_empty())
+            .is_some_and(|last| *last == "**");
+        if self == SpecKind::Include && trailing_recursion {
+            return false;
+        }
+        match parts.iter().position(|p| *p == "**") {
+            Some(i) => !parts[i + 1..].contains(&".."),
+            None => true,
+        }
+    }
 }
 
 /// Is the filesystem holding `probe` case-insensitive? Mirrors
@@ -383,8 +397,10 @@ mod tests {
         std::fs::write(&leaf, r#"{ "extends": ["./a.json", "./sub/b.json"] }"#).expect("write");
 
         let chain = svn_core::tsconfig::load_chain(&leaf).expect("chain");
-        let include = resolve_patterns_against_declaring_dir(&chain, |f| f.include.as_deref())
-            .expect("include is declared in the chain");
+        let include = resolve_patterns_against_declaring_dir(&chain, SpecKind::Include, |f| {
+            f.include.as_deref()
+        })
+        .expect("include is declared in the chain");
         let expected = normalize_lexical(
             &dunce::canonicalize(&sub)
                 .expect("canonicalize")
@@ -408,12 +424,16 @@ mod tests {
         // Explicit `"include": []` REPLACES the parent's include:
         // declared-but-empty, not "fall through to the parent".
         assert_eq!(
-            resolve_patterns_against_declaring_dir(&chain, |f| f.include.as_deref()),
+            resolve_patterns_against_declaring_dir(&chain, SpecKind::Include, |f| f
+                .include
+                .as_deref()),
             Some(Vec::new())
         );
         // `exclude` is declared nowhere → None.
         assert_eq!(
-            resolve_patterns_against_declaring_dir(&chain, |f| f.exclude.as_deref()),
+            resolve_patterns_against_declaring_dir(&chain, SpecKind::Exclude, |f| f
+                .exclude
+                .as_deref()),
             None
         );
     }

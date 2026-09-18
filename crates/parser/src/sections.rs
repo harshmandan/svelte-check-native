@@ -48,17 +48,19 @@ pub fn parse_sections(source: &str) -> (Document<'_>, Vec<ParseError>) {
 
 /// If the scanner sits on a `<script` / `<style` tag start, the section
 /// tag name — else `None`. The identifier-boundary check distinguishes
-/// `<script>` from e.g. `<scripted>`. Whether the position actually IS a
+/// `<script>` from e.g. `<scripted>`, and the match is case-sensitive as
+/// the compiler's (`tag.name === 'script'`), so `<Script>` is a
+/// component. Whether the position actually IS a
 /// section is the template parser's call (root frame only); this only
 /// answers "is this one of the two section tag names?".
 pub(crate) fn section_tag_at(scanner: &Scanner<'_>) -> Option<&'static str> {
     if scanner.peek_byte() != Some(b'<') {
         return None;
     }
-    if scanner.starts_with_ignore_case("<script") && !is_ident_char(scanner.peek_byte_at(7)) {
+    if scanner.starts_with("<script") && !is_ident_char(scanner.peek_byte_at(7)) {
         return Some("script");
     }
-    if scanner.starts_with_ignore_case("<style") && !is_ident_char(scanner.peek_byte_at(6)) {
+    if scanner.starts_with("<style") && !is_ident_char(scanner.peek_byte_at(6)) {
         return Some("style");
     }
     None
@@ -295,11 +297,7 @@ fn find_close_tag(scanner: &Scanner<'_>, close_literal: &str) -> Option<u32> {
     let mut i = start;
     while i + needle.len() <= bytes.len() {
         let window = &bytes[i..i + needle.len()];
-        if window
-            .iter()
-            .zip(needle)
-            .all(|(a, b)| a.eq_ignore_ascii_case(b))
-        {
+        if window == needle {
             let mut j = i + needle.len();
             while j < bytes.len() && bytes[j].is_ascii_whitespace() {
                 j += 1;
@@ -438,26 +436,13 @@ fn build_script_section<'src>(
     errors: &mut Vec<ParseError>,
 ) -> ScriptSection<'src> {
     let context = parse_context_attr(&raw.attrs, errors);
-    let pre_err = errors.len();
-    let lang = parse_lang_attr(&raw.attrs, errors);
-    // Unknown `lang=` (e.g. `<script lang="coffee">`) — upstream's LS
-    // `DiagnosticsProvider.ts:72-77` early-returns `[]` for coffee /
-    // coffeescript bodies so they never reach TS. Mirror by blanking
-    // the body slice: `parse_script_body("", _)` produces an empty
-    // AST, no oxc-as-JS parse errors cascade, and the overlay emits
-    // only scaffolding. The `UnknownScriptLang` warning that
-    // `parse_lang_attr` already pushed remains the user-facing
-    // signal that the script is opaque.
-    let unknown_lang = errors.len() > pre_err
-        && matches!(errors.last(), Some(ParseError::UnknownScriptLang { .. }));
-    let (content, content_range) = if unknown_lang {
-        (
-            "",
-            Range::new(raw.content_range.start, raw.content_range.start),
-        )
-    } else {
-        (raw.content, raw.content_range)
-    };
+    // Any `lang=` other than TypeScript is a JavaScript script, its body
+    // checked as written: svelte-check's `--tsgo` path converts every
+    // script with svelte2tsx whatever its language, so a
+    // `<script lang="coffee">` body reaches tsgo (and fails to parse
+    // there) like any other.
+    let lang = parse_lang_attr(&raw.attrs);
+    let (content, content_range) = (raw.content, raw.content_range);
     // `generics="T extends ..."` is only meaningful on the INSTANCE
     // script; ignore it on `<script module>` where type parameters
     // wouldn't have anything to apply to (the render function lives in
@@ -490,11 +475,9 @@ fn build_style_section<'src>(_source: &'src str, raw: RawSection<'src>) -> Style
 }
 
 fn parse_context_attr(attrs: &[ScriptAttr], errors: &mut Vec<ParseError>) -> ScriptContext {
-    // Svelte 5 syntax: bare `module` attribute (boolean).
-    if attrs
-        .iter()
-        .any(|a| a.name.eq_ignore_ascii_case("module") && a.value.is_none())
-    {
+    // Svelte 5 syntax: a `module` attribute, whatever its value — svelte2tsx
+    // (`Scripts.getTopLevelScriptTags`) checks only the name.
+    if attrs.iter().any(|a| a.name.eq_ignore_ascii_case("module")) {
         return ScriptContext::Module;
     }
     // Svelte 4 syntax: `context="module"`.
@@ -537,21 +520,19 @@ fn parse_generics_attr(attrs: &[ScriptAttr]) -> Option<String> {
     }
 }
 
-fn parse_lang_attr(attrs: &[ScriptAttr], errors: &mut Vec<ParseError>) -> ScriptLang {
+fn parse_lang_attr(attrs: &[ScriptAttr]) -> ScriptLang {
     let Some(attr) = attrs.iter().find(|a| a.name.eq_ignore_ascii_case("lang")) else {
         return ScriptLang::Js;
     };
-    match attr.value.as_deref() {
+    // svelte-check compares the value case-insensitively (`isTsSvelte`).
+    match attr
+        .value
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
         Some("ts") | Some("typescript") => ScriptLang::Ts,
-        Some("js") | Some("javascript") | None => ScriptLang::Js,
-        Some("") => ScriptLang::Js,
-        Some(other) => {
-            errors.push(ParseError::UnknownScriptLang {
-                value: other.to_string(),
-                range: attr.range,
-            });
-            ScriptLang::Js
-        }
+        _ => ScriptLang::Js,
     }
 }
 
@@ -749,10 +730,13 @@ let x: number = 1;
     }
 
     #[test]
-    fn case_insensitive_tag_matching() {
-        let src = "<SCRIPT>let a = 1;</SCRIPT>";
-        let doc = parse_ok(src);
-        assert!(doc.instance_script.is_some());
+    fn section_tag_names_are_case_sensitive() {
+        // The compiler compares tag names exactly: `<Script>` is a
+        // component and `<SCRIPT>` an element, neither a script section.
+        for src in ["<SCRIPT>let a = 1;</SCRIPT>", "<Script><p></p></Script>"] {
+            let (doc, _) = crate::parse_sections(src);
+            assert!(doc.instance_script.is_none(), "{src}");
+        }
     }
 
     #[test]
@@ -816,11 +800,12 @@ let x: number = 1;
     }
 
     #[test]
-    fn unknown_lang_emits_error_and_falls_back_to_js() {
-        let (doc, errors) = parse_sections(r#"<script lang="coffee">let a = 1;</script>"#);
-        assert_eq!(doc.instance_script.unwrap().lang, ScriptLang::Js);
-        assert_eq!(errors.len(), 1);
-        assert!(matches!(errors[0], ParseError::UnknownScriptLang { .. }));
+    fn unknown_lang_is_javascript_with_its_body_kept() {
+        let (doc, errors) = parse_sections(r#"<script lang="coffee">x = -> 1</script>"#);
+        let script = doc.instance_script.unwrap();
+        assert_eq!(script.lang, ScriptLang::Js);
+        assert_eq!(script.content, "x = -> 1");
+        assert!(errors.is_empty());
     }
 
     #[test]

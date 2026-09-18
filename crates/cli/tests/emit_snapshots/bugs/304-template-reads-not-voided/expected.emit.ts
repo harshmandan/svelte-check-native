@@ -7,7 +7,7 @@ function $$render_0a59fd6a() {
   function fn(o: Record<string, unknown>) { return JSON.stringify(o); }
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (fn({ count: 1, from: 2 }));
+        { svelteHTML.createElement("p", {});             fn({ count: 1, from: 2 });
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
@@ -15,7 +15,7 @@ function $$render_0a59fd6a() {
 $$render_0a59fd6a;
 interface $$IsomorphicComponent {
     new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_0a59fd6a>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_0a59fd6a>>['props'], Awaited<ReturnType<typeof $$render_0a59fd6a>>['events'], Awaited<ReturnType<typeof $$render_0a59fd6a>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_0a59fd6a>>['bindings'] } & Awaited<ReturnType<typeof $$render_0a59fd6a>>['exports'];
-    (internal: unknown, props: Awaited<ReturnType<typeof $$render_0a59fd6a>>['props']): Awaited<ReturnType<typeof $$render_0a59fd6a>>['exports'] & { $set?: any; $on?: any };
+    (internal: unknown, props: Awaited<ReturnType<typeof $$render_0a59fd6a>>['props'] extends Record<string, never> ? { $$events?: Awaited<ReturnType<typeof $$render_0a59fd6a>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_0a59fd6a>>['slots'] } : Awaited<ReturnType<typeof $$render_0a59fd6a>>['props'] & { $$events?: Awaited<ReturnType<typeof $$render_0a59fd6a>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_0a59fd6a>>['slots'] }): Awaited<ReturnType<typeof $$render_0a59fd6a>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_0a59fd6a>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;
@@ -29,7 +29,7 @@ function $$render_d6648a59() {
   let count = 0;
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             ((new (class { #count = 1; get v() { return this.#count; } })()).v);
+        { svelteHTML.createElement("p", {});             (new (class { #count = 1; get v() { return this.#count; } })()).v;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
@@ -37,7 +37,7 @@ function $$render_d6648a59() {
 $$render_d6648a59;
 interface $$IsomorphicComponent {
     new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_d6648a59>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_d6648a59>>['props'], Awaited<ReturnType<typeof $$render_d6648a59>>['events'], Awaited<ReturnType<typeof $$render_d6648a59>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_d6648a59>>['bindings'] } & Awaited<ReturnType<typeof $$render_d6648a59>>['exports'];
-    (internal: unknown, props: Awaited<ReturnType<typeof $$render_d6648a59>>['props']): Awaited<ReturnType<typeof $$render_d6648a59>>['exports'] & { $set?: any; $on?: any };
+    (internal: unknown, props: Awaited<ReturnType<typeof $$render_d6648a59>>['props'] extends Record<string, never> ? { $$events?: Awaited<ReturnType<typeof $$render_d6648a59>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_d6648a59>>['slots'] } : Awaited<ReturnType<typeof $$render_d6648a59>>['props'] & { $$events?: Awaited<ReturnType<typeof $$render_d6648a59>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_d6648a59>>['slots'] }): Awaited<ReturnType<typeof $$render_d6648a59>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_d6648a59>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;
@@ -52,7 +52,7 @@ function $$render_a1fa1ca4() {
   let s = 'a';
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (s.replace(/count/g, ''));
+        { svelteHTML.createElement("p", {});             s.replace(/count/g, '');
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
@@ -60,7 +60,7 @@ function $$render_a1fa1ca4() {
 $$render_a1fa1ca4;
 interface $$IsomorphicComponent {
     new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_a1fa1ca4>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_a1fa1ca4>>['props'], Awaited<ReturnType<typeof $$render_a1fa1ca4>>['events'], Awaited<ReturnType<typeof $$render_a1fa1ca4>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_a1fa1ca4>>['bindings'] } & Awaited<ReturnType<typeof $$render_a1fa1ca4>>['exports'];
-    (internal: unknown, props: Awaited<ReturnType<typeof $$render_a1fa1ca4>>['props']): Awaited<ReturnType<typeof $$render_a1fa1ca4>>['exports'] & { $set?: any; $on?: any };
+    (internal: unknown, props: Awaited<ReturnType<typeof $$render_a1fa1ca4>>['props'] extends Record<string, never> ? { $$events?: Awaited<ReturnType<typeof $$render_a1fa1ca4>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_a1fa1ca4>>['slots'] } : Awaited<ReturnType<typeof $$render_a1fa1ca4>>['props'] & { $$events?: Awaited<ReturnType<typeof $$render_a1fa1ca4>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_a1fa1ca4>>['slots'] }): Awaited<ReturnType<typeof $$render_a1fa1ca4>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_a1fa1ca4>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;
@@ -78,7 +78,7 @@ function $$render_03a8371a() {
   let tail = 'b';
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (s.replace(/"/g, '') + tail + $count);
+        { svelteHTML.createElement("p", {});             s.replace(/"/g, '') + tail + $count;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
@@ -86,7 +86,7 @@ function $$render_03a8371a() {
 $$render_03a8371a;
 interface $$IsomorphicComponent {
     new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_03a8371a>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_03a8371a>>['props'], Awaited<ReturnType<typeof $$render_03a8371a>>['events'], Awaited<ReturnType<typeof $$render_03a8371a>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_03a8371a>>['bindings'] } & Awaited<ReturnType<typeof $$render_03a8371a>>['exports'];
-    (internal: unknown, props: Awaited<ReturnType<typeof $$render_03a8371a>>['props']): Awaited<ReturnType<typeof $$render_03a8371a>>['exports'] & { $set?: any; $on?: any };
+    (internal: unknown, props: Awaited<ReturnType<typeof $$render_03a8371a>>['props'] extends Record<string, never> ? { $$events?: Awaited<ReturnType<typeof $$render_03a8371a>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_03a8371a>>['slots'] } : Awaited<ReturnType<typeof $$render_03a8371a>>['props'] & { $$events?: Awaited<ReturnType<typeof $$render_03a8371a>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_03a8371a>>['slots'] }): Awaited<ReturnType<typeof $$render_03a8371a>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_03a8371a>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;
@@ -102,8 +102,8 @@ function $$render_67b95d21() {
   function fn(o: Record<string, unknown>) { return JSON.stringify(o); }
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (fn({ $count: 1 }));
-            (s.replace(/\$count/, ''));
+        { svelteHTML.createElement("p", {});             fn({ $count: 1 });
+            s.replace(/\$count/, '');
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
@@ -111,7 +111,7 @@ function $$render_67b95d21() {
 $$render_67b95d21;
 interface $$IsomorphicComponent {
     new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_67b95d21>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_67b95d21>>['props'], Awaited<ReturnType<typeof $$render_67b95d21>>['events'], Awaited<ReturnType<typeof $$render_67b95d21>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_67b95d21>>['bindings'] } & Awaited<ReturnType<typeof $$render_67b95d21>>['exports'];
-    (internal: unknown, props: Awaited<ReturnType<typeof $$render_67b95d21>>['props']): Awaited<ReturnType<typeof $$render_67b95d21>>['exports'] & { $set?: any; $on?: any };
+    (internal: unknown, props: Awaited<ReturnType<typeof $$render_67b95d21>>['props'] extends Record<string, never> ? { $$events?: Awaited<ReturnType<typeof $$render_67b95d21>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_67b95d21>>['slots'] } : Awaited<ReturnType<typeof $$render_67b95d21>>['props'] & { $$events?: Awaited<ReturnType<typeof $$render_67b95d21>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_67b95d21>>['slots'] }): Awaited<ReturnType<typeof $$render_67b95d21>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_67b95d21>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;
@@ -127,7 +127,7 @@ function $$render_8a8626ca() {
   function fn(o: Record<string, unknown>) { return JSON.stringify(o); }
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (fn({ AppVideo: 1 }));
+        { svelteHTML.createElement("p", {});             fn({ AppVideo: 1 });
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
@@ -135,7 +135,7 @@ function $$render_8a8626ca() {
 $$render_8a8626ca;
 interface $$IsomorphicComponent {
     new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_8a8626ca>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_8a8626ca>>['props'], Awaited<ReturnType<typeof $$render_8a8626ca>>['events'], Awaited<ReturnType<typeof $$render_8a8626ca>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_8a8626ca>>['bindings'] } & Awaited<ReturnType<typeof $$render_8a8626ca>>['exports'];
-    (internal: unknown, props: Awaited<ReturnType<typeof $$render_8a8626ca>>['props']): Awaited<ReturnType<typeof $$render_8a8626ca>>['exports'] & { $set?: any; $on?: any };
+    (internal: unknown, props: Awaited<ReturnType<typeof $$render_8a8626ca>>['props'] extends Record<string, never> ? { $$events?: Awaited<ReturnType<typeof $$render_8a8626ca>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_8a8626ca>>['slots'] } : Awaited<ReturnType<typeof $$render_8a8626ca>>['props'] & { $$events?: Awaited<ReturnType<typeof $$render_8a8626ca>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_8a8626ca>>['slots'] }): Awaited<ReturnType<typeof $$render_8a8626ca>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_8a8626ca>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;
@@ -149,7 +149,7 @@ function $$render_e40e2c10() {
     let el: HTMLDivElement;
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("div", {});             el = null as any as HTMLElementTagNameMap['div'];
+        { svelteHTML.createElement("div", {});             el = svelteHTML.createElement("div", {});
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
@@ -157,7 +157,7 @@ function $$render_e40e2c10() {
 $$render_e40e2c10;
 interface $$IsomorphicComponent {
     new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings'] } & Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'];
-    (internal: unknown, props: Awaited<ReturnType<typeof $$render_e40e2c10>>['props']): Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'] & { $set?: any; $on?: any };
+    (internal: unknown, props: Awaited<ReturnType<typeof $$render_e40e2c10>>['props'] extends Record<string, never> ? { $$events?: Awaited<ReturnType<typeof $$render_e40e2c10>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_e40e2c10>>['slots'] } : Awaited<ReturnType<typeof $$render_e40e2c10>>['props'] & { $$events?: Awaited<ReturnType<typeof $$render_e40e2c10>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_e40e2c10>>['slots'] }): Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;

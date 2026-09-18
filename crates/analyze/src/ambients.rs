@@ -2,13 +2,17 @@
 //! `$$slots` — a component refers to.
 //!
 //! Upstream sets `uses$$props` / `uses$$restProps` / `uses$$slots` from
-//! identifier nodes while walking the script and template ASTs
-//! (`processInstanceScriptContent.ts`, `htmlxtojsx_v2/index.ts`). The
-//! flags decide whether the component accepts arbitrary props and
-//! whether the ambients get a declaration in the render body. A text
-//! match would also count a comment that mentions `$$restProps`.
+//! identifier nodes while walking the instance script and the template
+//! (`processInstanceScriptContent.ts`, `htmlxtojsx_v2/index.ts`) — any
+//! identifier with the name, a declaration or property name included,
+//! and never from the module script. The flags decide whether the
+//! component accepts arbitrary props and whether the ambients get a
+//! declaration in the render body. A text match would also count a
+//! comment that mentions `$$restProps`.
 
-use oxc_ast::ast::{IdentifierReference, Program};
+use oxc_ast::ast::{
+    BindingIdentifier, IdentifierName, IdentifierReference, LabelIdentifier, Program,
+};
 use oxc_ast_visit::Visit;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -24,20 +28,19 @@ impl AmbientRefs {
     }
 }
 
-/// Collect the ambient references of both scripts and every template
-/// expression.
+/// Collect the ambient identifiers of the instance script and every
+/// template expression.
 pub fn find_ambient_refs(
     fragment: &svn_parser::Fragment,
     source: &str,
     parsed_instance: Option<&Program<'_>>,
-    parsed_module: Option<&Program<'_>>,
 ) -> AmbientRefs {
     // Cheap pre-filter: every ambient starts with `$$`.
     if !source.contains("$$") {
         return AmbientRefs::default();
     }
     let mut probe = AmbientProbe::default();
-    for program in [parsed_instance, parsed_module].into_iter().flatten() {
+    if let Some(program) = parsed_instance {
         probe.visit_program(program);
     }
     let alloc = oxc_allocator::Allocator::default();
@@ -64,14 +67,29 @@ struct AmbientProbe {
     refs: AmbientRefs,
 }
 
-impl<'a> Visit<'a> for AmbientProbe {
-    fn visit_identifier_reference(&mut self, it: &IdentifierReference<'a>) {
-        match it.name.as_str() {
+impl AmbientProbe {
+    fn note(&mut self, name: &str) {
+        match name {
             "$$props" => self.refs.props = true,
             "$$restProps" => self.refs.rest_props = true,
             "$$slots" => self.refs.slots = true,
             _ => {}
         }
+    }
+}
+
+impl<'a> Visit<'a> for AmbientProbe {
+    fn visit_identifier_reference(&mut self, it: &IdentifierReference<'a>) {
+        self.note(&it.name);
+    }
+    fn visit_binding_identifier(&mut self, it: &BindingIdentifier<'a>) {
+        self.note(&it.name);
+    }
+    fn visit_identifier_name(&mut self, it: &IdentifierName<'a>) {
+        self.note(&it.name);
+    }
+    fn visit_label_identifier(&mut self, it: &LabelIdentifier<'a>) {
+        self.note(&it.name);
     }
 }
 
@@ -90,7 +108,7 @@ mod tests {
             .instance_script
             .as_ref()
             .map(|s| svn_parser::parse_script_body(&alloc, s.content, s.lang));
-        find_ambient_refs(&fragment, src, instance.as_ref().map(|p| &p.program), None)
+        find_ambient_refs(&fragment, src, instance.as_ref().map(|p| &p.program))
     }
 
     #[test]
@@ -98,6 +116,13 @@ mod tests {
         assert!(refs("<script>const r = $$restProps;</script>").rest_props);
         assert!(refs("<div {...$$props} />").props);
         assert!(refs("{#if $$slots.header}x{/if}").slots);
+    }
+
+    #[test]
+    fn declarations_and_property_names_count_but_the_module_script_does_not() {
+        assert!(refs("<script>let $$props = {};</script>").props);
+        assert!(refs("<script>const s = o.$$slots;</script>").slots);
+        assert!(!refs("<script module>export const p = $$props;</script>").any());
     }
 
     #[test]

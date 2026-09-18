@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A `types` entry that does not resolve is inherited as written. The compiler reports a fatal TS2688 without a file, which svelte-check does not print, and abandons the program, so the component's assignability error is never reported: svelte-check --tsgo reports a clean run here, and so do we."
+}

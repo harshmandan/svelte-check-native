@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "src/Input.svelte",
+            "line": 11,
+            "column": 17,
+            "code": 1117
+        },
+        {
+            "file": "src/Input.svelte",
+            "line": 12,
+            "column": 21,
+            "code": 1117
+        }
+    ],
+    "_note": "A duplicate object key is dropped only when its mapped start is an element attribute's own node, the way svelte-check asks the Svelte AST: the handle-and-forward `on:` idiom on elements, <svelte:window> and <svelte:element> (inside blocks too) and a spread beside a named attribute stay silent, while a duplicate key inside a `{...}` expression, in markup or in an attribute value, is reported. Verified against svelte-check --tsgo with svelte 5.55 (which additionally reports a TS2322 on the title attribute through the real element typings, absent here without a svelte install)."
+}

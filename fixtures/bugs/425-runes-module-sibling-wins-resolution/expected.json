@@ -1,0 +1,35 @@
+{
+    "errors": [
+        {
+            "file": "src/A.svelte",
+            "line": 1,
+            "column": 9,
+            "code": 1192
+        },
+        {
+            "file": "src/lib/index.ts",
+            "line": 0,
+            "column": 9,
+            "code": 2305
+        },
+        {
+            "file": "src/lib/index.ts",
+            "line": 1,
+            "column": 7,
+            "code": 1192
+        },
+        {
+            "file": "src/lib/index.ts",
+            "line": 2,
+            "column": 6,
+            "code": 2322
+        },
+        {
+            "file": "src/lib/index.ts",
+            "line": 2,
+            "column": 6,
+            "code": 6133
+        }
+    ],
+    "_note": "A Foo.svelte.ts runes module beside Foo.svelte wins resolution of a `Foo.svelte` specifier, as under svelte-check: a .ts barrel's `./Foo.svelte` finds the module first (TS2305 / TS1192, no default export), and a `$lib/Foo.svelte` path mapping tries the source tree before the overlay tree, so a component importing it gets TS1192 too. Verified against svelte-check --tsgo."
+}

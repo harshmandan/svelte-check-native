@@ -1,0 +1,29 @@
+{
+    "errors": [
+        {
+            "file": "src/SpacedClose.svelte",
+            "line": 0,
+            "column": 8,
+            "code": 1005
+        },
+        {
+            "file": "src/SpacedClose.svelte",
+            "line": 0,
+            "column": 12,
+            "code": 1005
+        },
+        {
+            "file": "src/SpacedClose.svelte",
+            "line": 1,
+            "column": 4,
+            "code": 1005
+        },
+        {
+            "file": "src/SpacedClose.svelte",
+            "line": 2,
+            "column": 1,
+            "code": 1110
+        }
+    ],
+    "_note": "svelte2tsx finds script blocks with its own regular expression, which needs a literal `</script>`. A block closed by `</script >` is a script to the Svelte parser but not to svelte2tsx: no script is processed, and the block's text stays verbatim in the template output, where it fails to parse (TS1005 / TS1110). Those syntax errors hide every semantic error in the program, the component's own `number = 'x'` included."
+}

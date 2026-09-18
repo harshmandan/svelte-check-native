@@ -1,0 +1,23 @@
+{
+    "errors": [
+        {
+            "file": "src/B.svelte",
+            "line": 5,
+            "column": 6,
+            "code": 1117
+        },
+        {
+            "file": "src/B.svelte",
+            "line": 6,
+            "column": 16,
+            "code": 2353
+        },
+        {
+            "file": "src/C.svelte",
+            "line": 1,
+            "column": 39,
+            "code": 2722
+        }
+    ],
+    "_note": "Component props follow upstream's InlineComponent order: the implicit children prop (added for non-snippet body content) comes first, even when the user also passes children, so an explicit children attribute is a duplicate key (TS1117 at the attribute; the same holds at the name of a {#snippet children} next to body content, which additionally is Svelte's snippet_conflict compiler error and so is not part of this fixture). Every snippet prop, children included, is destructured from the component's $$prop_def inside the component block, so {@render children()} there reads the component's optional children type (TS2722). Duplicate keys in a component's props literal are not dropped by the element-attribute duplicate filter. Verified against upstream svelte-check --tsgo with svelte 5.55."
+}

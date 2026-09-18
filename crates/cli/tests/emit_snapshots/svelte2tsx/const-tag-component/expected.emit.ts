@@ -14,176 +14,120 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         {
             const __svn_C_fe = __svn_ensure_component(Component);
-            const __svn_inst_fe = new __svn_C_fe({ target: __svn_any(), props: {box, children: () => __svn_snippet_return()} });
+            const __svn_inst_fe = new __svn_C_fe({ target: __svn_any(), props: {children: () => __svn_snippet_return(), box} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, box } = __svn_inst_fe.$$slot_def["box1"]; $$_$$;
-                void box;
                 { svelteHTML.createElement("svelte:fragment", {});                     const {area, volume} = calculate(box.width, box.height, constant);
-                    void area;
-                    void volume;
                     const perimeter = (box.width + box.height) * constant;
-                    void perimeter;
                     const [width, height, sum] = [box.width * constant, box.height, box.width * constant + box.height];
-                    void width;
-                    void height;
-                    void sum;
-                    { svelteHTML.createElement("div", {});                         (area);
-                        (volume);
-                        (perimeter);
-                        (width);
-                        (height);
-                        (sum);
+                    { svelteHTML.createElement("div", {});                         area;
+                        volume;
+                        perimeter;
+                        width;
+                        height;
+                        sum;
                     }
                 }
             }
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, width, height } = __svn_inst_fe.$$slot_def["box2"]; $$_$$;
-                void width;
-                void height;
                 { svelteHTML.createElement("svelte:fragment", {});                     const {area, volume} = calculate(width, height, constant);
-                    void area;
-                    void volume;
                     const perimeter = (width + height) * constant;
-                    void perimeter;
                     const [_width, _height, sum] = [width * constant, height, width * constant + height];
-                    void _width;
-                    void _height;
-                    void sum;
-                    { svelteHTML.createElement("div", {});                         (area);
-                        (volume);
-                        (perimeter);
-                        (_width);
-                        (_height);
-                        (sum);
+                    { svelteHTML.createElement("div", {});                         area;
+                        volume;
+                        perimeter;
+                        _width;
+                        _height;
+                        sum;
                     }
                 }
             }
-            { svelteHTML.createElement("svelte:fragment", {});                 {
-                    let box: any;
-                    void box;
-                    const {area, volume} = calculate(width, height, constant);
-                    void area;
-                    void volume;
+            {
+                const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, box: {width, height} } = __svn_inst_fe.$$slot_def.default; $$_$$;
+                { svelteHTML.createElement("svelte:fragment", {});                     const {area, volume} = calculate(width, height, constant);
                     const perimeter = (width + height) * constant;
-                    void perimeter;
                     const [_width, _height, sum] = [width * constant, height, width * constant + height];
-                    void _width;
-                    void _height;
-                    void sum;
-                    { svelteHTML.createElement("div", {});                         (area);
-                        (volume);
-                        (perimeter);
-                        (_width);
-                        (_height);
-                        (sum);
+                    { svelteHTML.createElement("div", {});                         area;
+                        volume;
+                        perimeter;
+                        _width;
+                        _height;
+                        sum;
                     }
                 }
             }
         }
         {
             const __svn_C_530 = __svn_ensure_component(Component);
-            const __svn_inst_530 = new __svn_C_530({ target: __svn_any(), props: {box, children: () => __svn_snippet_return()} });
+            const __svn_inst_530 = new __svn_C_530({ target: __svn_any(), props: {children: () => __svn_snippet_return(), box} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, box } = __svn_inst_530.$$slot_def.default; $$_$$;
-                void box;
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, box } = __svn_inst_530.$$slot_def["box1"]; $$_$$;
-                    void box;
                     { svelteHTML.createElement("div", {});                         const {area, volume} = calculate(box.width, box.height, constant);
-                        void area;
-                        void volume;
                         const perimeter = (box.width + box.height) * constant;
-                        void perimeter;
                         const [width, height, sum] = [box.width * constant, box.height, box.width * constant + box.height];
-                        void width;
-                        void height;
-                        void sum;
-                        { svelteHTML.createElement("div", {});                             (area);
-                            (volume);
-                            (perimeter);
-                            (width);
-                            (height);
-                            (sum);
+                        { svelteHTML.createElement("div", {});                             area;
+                            volume;
+                            perimeter;
+                            width;
+                            height;
+                            sum;
                         }
                     }
                 }
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, width, height } = __svn_inst_530.$$slot_def["box2"]; $$_$$;
-                    void width;
-                    void height;
                     { svelteHTML.createElement("div", {});                         const {area, volume} = calculate(width, height, constant);
-                        void area;
-                        void volume;
                         const perimeter = (width + height) * constant;
-                        void perimeter;
                         const [_width, _height, sum] = [width * constant, height, width * constant + height];
-                        void _width;
-                        void _height;
-                        void sum;
-                        { svelteHTML.createElement("div", {});                             (area);
-                            (volume);
-                            (perimeter);
-                            (_width);
-                            (_height);
-                            (sum);
+                        { svelteHTML.createElement("div", {});                             area;
+                            volume;
+                            perimeter;
+                            _width;
+                            _height;
+                            sum;
                         }
                     }
                 }
                 const {area, volume} = calculate(box.width, box.height, constant);
-                void area;
-                void volume;
                 const perimeter = (box.width + box.height) * constant;
-                void perimeter;
                 const [width, height, sum] = [box.width * constant, box.height, box.width * constant + box.height];
-                void width;
-                void height;
-                void sum;
-                { svelteHTML.createElement("div", {});                     (area);
-                    (volume);
-                    (perimeter);
-                    (width);
-                    (height);
-                    (sum);
+                { svelteHTML.createElement("div", {});                     area;
+                    volume;
+                    perimeter;
+                    width;
+                    height;
+                    sum;
                 }
             }
         }
         {
             const __svn_C_911 = __svn_ensure_component(Component);
-            const __svn_inst_911 = new __svn_C_911({ target: __svn_any(), props: {box, children: () => __svn_snippet_return()} });
+            const __svn_inst_911 = new __svn_C_911({ target: __svn_any(), props: {children: () => __svn_snippet_return(), box} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, box: {width, height} } = __svn_inst_911.$$slot_def.default; $$_$$;
                 const {area, volume} = calculate(width, height, constant);
-                void area;
-                void volume;
                 const perimeter = (width + height) * constant;
-                void perimeter;
                 const [_width, _height, sum] = [width * constant, height, width * constant + height];
-                void _width;
-                void _height;
-                void sum;
-                { svelteHTML.createElement("div", {});                     (area);
-                    (volume);
-                    (perimeter);
-                    (_width);
-                    (_height);
-                    (sum);
+                { svelteHTML.createElement("div", {});                     area;
+                    volume;
+                    perimeter;
+                    _width;
+                    _height;
+                    sum;
                 }
             }
         }
     });
     void box;
     void constant;
-    return { props: /** @type {{ box?: typeof box; constant?: typeof constant; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ box: typeof box; constant: typeof constant; }} */ ({}) };
+    return { props: /** @type {{ box?: typeof box; constant?: typeof constant; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
- */
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
- */
-/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
+/** @type {__SvnIsomorphicComponent<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */
 export const __svn_component_default = /** @type {any} */ (null);
-/** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
+/** @typedef {InstanceType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;
 

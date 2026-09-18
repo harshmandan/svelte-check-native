@@ -5,7 +5,7 @@ function $$render_45b70543() {
     const count = $state.raw<number>('not a number')
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (count);
+        { svelteHTML.createElement("p", {});             count;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
@@ -35,8 +35,8 @@ function $$render_e40e2c10() {
         { svelteHTML.createElement("button", {
             "onclick": (() => select('alpha')),
         });
-            (selected.has('alpha') ? 'Selected' : 'Select');
-            (previous?.has('alpha') ? '(previously selected)' : '');
+            selected.has('alpha') ? 'Selected' : 'Select';
+            previous?.has('alpha') ? '(previously selected)' : '';
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "src/H01.svelte",
+            "line": 3,
+            "column": 0,
+            "code": "state_invalid_placement"
+        },
+        {
+            "file": "src/H02.svelte",
+            "line": 3,
+            "column": 0,
+            "code": "state_invalid_placement"
+        }
+    ],
+    "_note": "An each item named $state or $derived is rejected with state_invalid_placement on the whole each block. Verified against upstream svelte-check."
+}

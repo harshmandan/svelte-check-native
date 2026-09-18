@@ -35,6 +35,10 @@ fn installed_svelte_owns_state_raw_overloads() {
         svelte.join("index.d.ts"),
         r#"export type Component<Props = any, Exports = any, Bindings = any> =
     (internals: unknown, props: Props) => Exports;
+export interface ComponentConstructorOptions<Props = Record<string, any>> {
+    target: any;
+    props?: Props;
+}
 export declare class SvelteComponent<
     Props = Record<string, any>,
     Events = Record<string, any>,

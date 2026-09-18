@@ -1,0 +1,23 @@
+{
+    "errors": [
+        {
+            "file": "src/A.svelte",
+            "line": 5,
+            "column": 2,
+            "code": 2578
+        },
+        {
+            "file": "src/A.svelte",
+            "line": 7,
+            "column": 30,
+            "code": 2345
+        },
+        {
+            "file": "src/A.svelte",
+            "line": 11,
+            "column": 2,
+            "code": 2578
+        }
+    ],
+    "_note": "JS comments inside a component start tag are threaded onto the prop or event they sit next to, as svelte2tsx does: a comment directly before an attribute is written on the line above that prop, and a comment after the tag's last attribute follows it. A `// @ts-expect-error` above a bad prop therefore suppresses its error, and one above a valid prop (or trailing the tag with nothing after it that errs) reports TS2578. Before, component in-tag comments were dropped, so the excess prop still errored and no TS2578 fired."
+}

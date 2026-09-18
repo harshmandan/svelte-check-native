@@ -25,9 +25,9 @@ use crate::emit_is_ts;
 use crate::emit_template_body;
 use crate::nodes::action::emit_legacy_action_attrs;
 use crate::process_instance_script_content::ExportedLocalInfo;
-use crate::props_emit::{synthesise_js_props_typedef_body, write_slots_field_type};
+use crate::props_emit::write_slots_field_type;
 use crate::svelte4;
-use svn_analyze::{TemplateSummary, scan_jsdoc_typedef_name, should_synthesise_js_props};
+use svn_analyze::TemplateSummary;
 
 /// Emit the `async function __svn_tpl_check() { … }` wrapper that
 /// carries every template expression as real TypeScript. The walk
@@ -54,6 +54,22 @@ pub(crate) fn emit_template_check_fn(
     has_strict_slots_decl: bool,
     root_snippets_hoisted: bool,
 ) {
+    let full_fragment = fragment;
+    // When the template has any `<slot>` element (root snippets
+    // included), declare `__svn_create_slot` once in the render
+    // function, outside the check body, where upstream declares
+    // `__sveltets_createSlot`: a root snippet that stays in the render
+    // function sees it, one hoisted to module scope does not. With
+    // `interface $$Slots` declared, the helper's generic narrows to it;
+    // without, the `Record<string, Record<string, any>>` default keeps
+    // Svelte-4 components silent.
+    if svelte4::compat::fragment_contains_slot(full_fragment) {
+        if is_ts && has_strict_slots_decl {
+            buf.push_str("    const __svn_create_slot = __svn_create_create_slot<$$Slots>();\n");
+        } else {
+            buf.push_str("    const __svn_create_slot = __svn_create_create_slot();\n");
+        }
+    }
     let without_root_snippets;
     let fragment = if root_snippets_hoisted {
         without_root_snippets = svn_parser::Fragment {
@@ -77,25 +93,19 @@ pub(crate) fn emit_template_check_fn(
     // which collapses any `let project = ... ; project = X ?? Y;`
     // narrowing back to the declared union type. The arrow-expression
     // form preserves narrowing — see design/gap_c_assignment_narrowing/.
-    buf.push_str("    ;(async () => {\n");
-    buf.push_str("        // template type-check body (incremental)\n");
-    // R-Conv #20 (B2 #3): when the template has any `<slot>` element,
-    // declare `__svn_create_slot` once at the top of the check body
-    // so per-slot emit downstream can call it. With `interface
-    // $$Slots` declared, the helper's generic narrows to it; without,
-    // the `Record<string, Record<string, any>>` default keeps Svelte-4
-    // components silent. Mirrors upstream svelte2tsx's `;const
-    // __sveltets_createSlot = __sveltets_2_createCreateSlot<$$Slots>();`
-    // emission at `htmlxtojsx_v2/nodes/Slot.ts` + `addComponentExport.ts`.
-    if is_ts && svelte4::compat::fragment_contains_slot(fragment) {
-        if has_strict_slots_decl {
-            buf.push_str(
-                "        const __svn_create_slot = __svn_create_create_slot<$$Slots>();\n",
-            );
-        } else {
-            buf.push_str("        const __svn_create_slot = __svn_create_create_slot();\n");
-        }
+    // svelte2tsx writes the `;` that ends the script body over the
+    // instance script's `</script>`, so a syntax error the body leaves
+    // open (a stray `<!--`, say) is reported at that tag.
+    buf.push_str("    ");
+    match &doc.instance_script {
+        Some(s) => buf.append_with_source(
+            ";",
+            svn_core::Range::new(s.close_tag_range.start, s.close_tag_range.start + 1),
+        ),
+        None => buf.push_str(";"),
     }
+    buf.push_str("(async () => {\n");
+    buf.push_str("        // template type-check body (incremental)\n");
     emit_legacy_action_attrs(buf.raw_string_mut(), summary, is_ts);
     emit_bind_pair_declarations(buf.raw_string_mut(), summary, is_ts);
     // Index component instantiations by source byte offset so the
@@ -108,15 +118,75 @@ pub(crate) fn emit_template_check_fn(
     let instantiations_by_start = instantiation_index(summary);
     let mut action_counter: usize = 0;
     buf.resync_current_line();
-    emit_template_body(
-        buf,
-        doc.source,
-        fragment,
-        2,
-        &instantiations_by_start,
-        &mut action_counter,
-    );
+    let verbatim = VERBATIM_TEMPLATE_TEXT.with(|v| v.borrow().clone());
+    if verbatim.is_empty() {
+        emit_template_body(
+            buf,
+            doc.source,
+            fragment,
+            2,
+            &instantiations_by_start,
+            &mut action_counter,
+        );
+    } else {
+        // Script text svelte2tsx does not treat as a script sits among
+        // the template's top-level nodes in source order.
+        let mut rest: &[svn_parser::Node] = &fragment.nodes;
+        for range in &verbatim {
+            let split = rest
+                .iter()
+                .position(|n| n.range().start >= range.end)
+                .unwrap_or(rest.len());
+            let (before, after) = rest.split_at(split);
+            let part = svn_parser::Fragment {
+                nodes: before.to_vec(),
+                ..fragment.clone()
+            };
+            emit_template_body(
+                buf,
+                doc.source,
+                &part,
+                2,
+                &instantiations_by_start,
+                &mut action_counter,
+            );
+            buf.push_str("        ");
+            buf.append_with_source(range.slice(doc.source), *range);
+            buf.push_str("\n");
+            rest = after;
+        }
+        let part = svn_parser::Fragment {
+            nodes: rest.to_vec(),
+            ..fragment.clone()
+        };
+        emit_template_body(
+            buf,
+            doc.source,
+            &part,
+            2,
+            &instantiations_by_start,
+            &mut action_counter,
+        );
+    }
     buf.push_str("    });\n");
+}
+
+thread_local! {
+    /// Source ranges of script blocks svelte2tsx leaves in the template
+    /// as text (see `verbatim_scripts`), set for one document's emit.
+    static VERBATIM_TEMPLATE_TEXT: std::cell::RefCell<Vec<svn_core::Range>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Run `f` with `ranges` written verbatim into the template check body.
+pub(crate) fn with_verbatim_template_text<R>(
+    ranges: Vec<svn_core::Range>,
+    f: impl FnOnce() -> R,
+) -> R {
+    let previous = VERBATIM_TEMPLATE_TEXT.with(|v| std::mem::replace(&mut *v.borrow_mut(), ranges));
+    let out = f();
+    VERBATIM_TEMPLATE_TEXT.with(|v| *v.borrow_mut() = previous);
+    out
 }
 
 /// Emit `$$render_<hash>`'s return statement at the tail of its body.
@@ -149,25 +219,27 @@ pub(crate) fn emit_render_body_return(
     synth_events_alias_body: Option<&str>,
     exports_object: Option<&str>,
     export_type_infos: &[ExportedLocalInfo],
-    dollar_props_name_range: Option<svn_core::Range>,
     props_info: &svn_analyze::PropsInfo,
+    js_props_typedef_synthesised: bool,
     slot_defs: &[svn_analyze::SlotDef],
     has_strict_events_decl: bool,
     has_strict_slots_decl: bool,
+    runes_mode: bool,
+    ambients: svn_analyze::AmbientRefs,
 ) {
     // JS overlay: always emit a return so the default-export's
     // `Awaited<ReturnType<typeof $$render>>['props']` extraction
-    // resolves to a real Props type. When the script has a
-    // `/** @typedef {Object} Props */` block and
-    // `/** @type {Props} */ let {...} = $props()`, PropsInfo captures
-    // the root name ("Props"), and we reference it here via
-    // `/** @type {Props} */({})`. Without a Props name, fall back to
-    // `any` (degrades to no excess-prop check, but no regression).
+    // resolves to a real Props type. The props expression follows
+    // upstream's `ExportedNames.createPropsStr` for a JS component:
+    //
+    //   - runes mode: the synthesised `$$ComponentProps` typedef, else
+    //     the `@type` comment leading the `$props()` declaration, else
+    //     `Record<string, never>`;
+    //   - legacy mode: the component's exports, else `{}` when it reads
+    //     `$$props` / `$$restProps`, else `Record<string, never>`.
+    //
+    // Neither mode looks at unrelated JSDoc such as a `@typedef` block.
     if !emit_is_ts() {
-        // Prefer a TS-annotated Props name if PropsInfo captured one,
-        // else fall back to scanning the instance script for a JSDoc
-        // `@typedef {Object} <Name>` declaration — the standard
-        // Svelte-4/JS-Svelte props shape.
         let name_from_ts = prop_type_source.and_then(|ty| {
             let root = ty.trim();
             if !root.is_empty()
@@ -181,17 +253,11 @@ pub(crate) fn emit_render_body_return(
                 None
             }
         });
-        let name_from_jsdoc = doc
-            .instance_script
-            .as_ref()
-            .and_then(|s| scan_jsdoc_typedef_name(s.content));
         // Svelte-4 `export let` synthesis: PropsInfo captures a
-        // literal `{k: T, …}` type_text (PropsSource::SynthesisedFromExports)
-        // that doesn't match the named-type predicate above. Embed the
-        // literal body directly as the JSDoc `@type` so the default
-        // export's `Awaited<ReturnType<…>>['props']` resolves to the
-        // typed shape (e.g. `{b: any}`) — restoring the required-prop
-        // signal that powers TS2741 on consumers.
+        // literal `{k: T, …}` type_text (PropsSource::SynthesisedFromExports).
+        // Embed the literal body directly as the JSDoc `@type` so the
+        // default export's `Awaited<ReturnType<…>>['props']` resolves
+        // to the typed shape.
         let literal_from_exports = prop_type_source
             .filter(|_| {
                 matches!(
@@ -200,31 +266,24 @@ pub(crate) fn emit_render_body_return(
                 )
             })
             .map(|ty| ty.trim().to_string());
-        // Selection precedence — mirrors the synthesis decision in
-        // emit_render (must match or `$$ComponentProps` won't be in
-        // scope for this cast):
-        //   1. Synthesised `$$ComponentProps`.
-        //   2. TS-annotated Props name.
-        //   3. User-declared `@typedef {Object} <Name>` block.
-        //   4. Svelte-4 `export let` literal shape from PropsInfo.
-        //   5. `any` cast.
-        let script = doc
-            .instance_script
-            .as_ref()
-            .map(|s| s.content)
-            .unwrap_or("");
-        let synthesised_name = if should_synthesise_js_props(props_info, script) {
-            synthesise_js_props_typedef_body(props_info).map(|_| "$$ComponentProps".to_string())
+        let never = "/** @type {Record<string, never>} */ ({})".to_string();
+        let as_type = |body: String| format!("/** @type {{{body}}} */({{}})");
+        let props_expr = if runes_mode {
+            if js_props_typedef_synthesised {
+                as_type("$$ComponentProps".to_string())
+            } else if let Some(name) = name_from_ts {
+                as_type(name)
+            } else if let Some(comment) = props_info.props_type_comment.as_deref() {
+                format!("{comment}({{}})")
+            } else {
+                never
+            }
+        } else if let Some(body) = literal_from_exports.or(name_from_ts) {
+            as_type(body)
+        } else if ambients.props || ambients.rest_props {
+            "{}".to_string()
         } else {
-            None
-        };
-        let props_expr = match synthesised_name
-            .or(name_from_ts)
-            .or(name_from_jsdoc)
-            .or(literal_from_exports)
-        {
-            Some(body) => format!("/** @type {{{body}}} */({{}})"),
-            None => "/** @type {any} */({})".to_string(),
+            never
         };
         // Full projection, JS-safe: upstream createRenderFunction.ts
         // returns { props, exports, bindings, slots, events } for JS
@@ -234,18 +293,22 @@ pub(crate) fn emit_render_body_return(
         // consumers, so misuse (e.g. comparing a boolean export
         // against a string) goes undiagnosed. JSDoc casts replace
         // the TS-only `undefined as any as T` shape — validated at
-        // design/js_render_full_projection/. `$$Events` / `$$Slots`
-        // interfaces are TS-only declarations, so the events field
-        // is always the lax index signature here and the slots
-        // field always the synthesised literal.
+        // design/js_render_full_projection/. `$$Slots` interfaces are
+        // TS-only declarations, so the slots field is always the
+        // synthesised literal. The events field carries the same
+        // collected event map a TS component gets (upstream's
+        // ComponentEvents does not care about the script language),
+        // stated as a JSDoc type; with nothing collected it is the
+        // lax index signature.
         let exports_expr = match exports_object {
             Some(o) => format!("/** @type {{{o}}} */ ({{}})"),
             None => "{}".to_string(),
         };
+        let events_ty = synth_events_alias_body.unwrap_or("{ [evt: string]: CustomEvent<any> }");
         let bindings_field = build_bindings_field(props_info, false);
         let _ = write!(
             buf,
-            "    return {{ props: {props_expr}, events: /** @type {{{{ [evt: string]: CustomEvent<any> }}}} */ ({{}}), slots: ",
+            "    return {{ props: {props_expr}, events: /** @type {{{events_ty}}} */ ({{}}), slots: ",
         );
         write_slots_field_type(buf.raw_string_mut(), doc.source, slot_defs, false);
         let _ = writeln!(
@@ -351,22 +414,18 @@ pub(crate) fn emit_render_body_return(
     // an empty-typed call into `__svn_ensure_right_props<{<lets>}>(
     // __svn_any("") as $$Props)` so TS fires TS2345 when `$$Props`
     // is wider/narrower than the declared `export let X: T` shape.
+    //
+    // The call is generated code with no source position, so svelte-check
+    // drops that TS2345: the language server moves it onto the `$$Props`
+    // declaration, but the `--tsgo` path has no language service to do
+    // so and discards the unmapped diagnostic.
     if matches!(props_info.source, svn_analyze::PropsSource::LegacyInterface) {
         let lets_shape: String = build_exported_lets_shape(export_type_infos);
         let _ = write!(
             buf,
             "    return {{ props: {{ ...__svn_ensure_right_props<{lets_shape}>("
         );
-        // Anchor the cast expression to the source's `$$Props`
-        // declaration name. TS2345 fired on the type-assertion
-        // argument reverse-maps onto the interface's name span,
-        // matching upstream LS's `movePropsErrorRangeBackIfNecessary`.
-        let cast = "__svn_any(\"\") as $$Props";
-        if let Some(range) = dollar_props_name_range {
-            buf.append_with_source(cast, range);
-        } else {
-            buf.push_str(cast);
-        }
+        buf.push_str("__svn_any(\"\") as $$Props");
         let _ = write!(
             buf,
             ") }} as $$Props, events: undefined as any as {events_field}, slots: ",

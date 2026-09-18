@@ -1,0 +1,29 @@
+{
+    "errors": [
+        {
+            "file": "src/use.ts",
+            "line": 10,
+            "column": 18,
+            "code": 2554
+        },
+        {
+            "file": "src/use.ts",
+            "line": 10,
+            "column": 18,
+            "code": 7009
+        },
+        {
+            "file": "src/use.ts",
+            "line": 11,
+            "column": 18,
+            "code": 2554
+        },
+        {
+            "file": "src/use.ts",
+            "line": 11,
+            "column": 18,
+            "code": 7009
+        }
+    ],
+    "_note": "A runes component without slots is a plain Svelte 5 Component (callable only; new is TS2554/TS7009) unless its event map has an entry. A declared $$Events counts only the events it names, as upstream's extractEvents reads them: property signatures of an interface, of a type-literal alias, or of the literal members of an intersection alias. type $$Events = Base and an empty interface name none, so those components stay function components; an interface with a member or an intersection with a literal member makes the component isomorphic (new works). Verified against upstream svelte-check --tsgo with svelte 5.55."
+}

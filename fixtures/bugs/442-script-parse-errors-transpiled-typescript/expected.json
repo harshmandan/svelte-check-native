@@ -1,0 +1,30 @@
+{
+    "errors": [
+        {
+            "file": "src/OctalRewritten.svelte",
+            "line": 1,
+            "column": 14,
+            "code": 1121
+        },
+        {
+            "file": "src/Redeclared.svelte",
+            "line": 2,
+            "column": 7,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/StyleLangSuppresses.svelte",
+            "line": 1,
+            "column": 13,
+            "code": 1109
+        },
+        {
+            "file": "src/SuppressedSyntaxError.svelte",
+            "line": 1,
+            "column": 21,
+            "code": 1109
+        }
+    ],
+    "warnings": [],
+    "_note": "Without a Svelte config the language server transpiles `<script lang=\"ts\">` with TypeScript before compiling, and drops a parse error whose message contains \"expected\" when any script, style or template tag has a `lang` attribute: neither SuppressedSyntaxError nor StyleLangSuppresses (a plain script beside `<style lang=\"scss\">`) gets a `js_parse_error`. Errors the transpile keeps still come through at the mapped position (a redeclared const); the transpile rewrites legacy octal literals and removes a namespace holding only types, so those parse. Verified against upstream svelte-check."
+}

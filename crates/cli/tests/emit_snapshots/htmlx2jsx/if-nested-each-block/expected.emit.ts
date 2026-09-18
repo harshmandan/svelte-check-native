@@ -4,54 +4,39 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         if ((hello)) {
-            void [hello];
             for (let item of __svn_each_items(items)) {
-                /** @type {number} */ let i = 0;
+                let i = 1;
                 (item.id);
-                { svelteHTML.createElement("div", {});                     (item);
-                    (i);
+                { svelteHTML.createElement("div", {});                     item;
+                    i;
                 }
-                void item;
-                void i;
             }
             if ((hi && bye)) {
-                void [hi, bye];
                 for (let item of __svn_each_items(items)) {
-                    { svelteHTML.createElement("div", {});                         (item);
+                    { svelteHTML.createElement("div", {});                         item;
                     }
-                    void item;
                 }
                 { svelteHTML.createElement("p", {});                 }
             } else if ((cool)) {
-                void [cool];
                 for (let item of __svn_each_items(items)) {
-                    /** @type {number} */ let i = 0;
-                    { svelteHTML.createElement("div", {});                         (item);
-                        (i);
+                    let i = 1;
+                    { svelteHTML.createElement("div", {});                         item;
+                        i;
                     }
-                    void item;
-                    void i;
                 }
             } else {
                 for (let item of __svn_each_items(items)) {
-                    { svelteHTML.createElement("div", {});                         (item);
+                    { svelteHTML.createElement("div", {});                         item;
                     }
-                    void item;
                 }
             }
         }
     });
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
- */
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
- */
-/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
+/** @type {__SvnIsomorphicComponent<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */
 export const __svn_component_default = /** @type {any} */ (null);
-/** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
+/** @typedef {InstanceType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;
 

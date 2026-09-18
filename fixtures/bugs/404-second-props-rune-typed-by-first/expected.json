@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "src/PropsDuplicate.svelte",
+            "line": 0,
+            "column": 46,
+            "code": 2339
+        },
+        {
+            "file": "src/PropsDuplicate.svelte",
+            "line": 0,
+            "column": 52,
+            "code": "props_duplicate"
+        }
+    ],
+    "_note": "Each `$props()` declaration gets its own `$$ComponentProps`, and only the first alias declaration takes effect, so the second destructure is typed by the first and `b` is TS2339. Verified against svelte-check --tsgo."
+}

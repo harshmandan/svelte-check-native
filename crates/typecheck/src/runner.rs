@@ -17,7 +17,7 @@
 //! use, phase timings) is captured and returned for the CLI to print.
 
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
@@ -85,6 +85,8 @@ pub struct RunOutput {
     /// `@typescript/native-preview` exits 2, `typescript@7`'s `tsc`
     /// exits 1 — so only "non-zero" is portable, not any specific code.
     pub nonzero_exit: bool,
+    /// Every file tsgo loaded (`--listFiles`), in its order.
+    pub program_files: Vec<PathBuf>,
     /// `--extendedDiagnostics` block captured verbatim from tsgo's
     /// stdout tail. `Some(text)` iff the caller requested extended
     /// diagnostics AND tsgo emitted a recognizable block. Text is the
@@ -127,6 +129,8 @@ pub fn run(
         "--pretty".into(),
         "true".into(),
         "--noErrorTruncation".into(),
+        // The program's files, for the replay fingerprint.
+        "--listFiles".into(),
     ];
     if extended_diagnostics {
         args.push("--extendedDiagnostics".into());
@@ -232,7 +236,20 @@ pub fn run(
         diagnostics,
         extended_diagnostics: extended_diag_text,
         nonzero_exit: !matches!(status.code(), Some(0)),
+        program_files: listed_files(&stdout),
     })
+}
+
+/// The `--listFiles` lines of tsgo's output: one absolute path per
+/// line. Diagnostic headers and code frames never form a bare
+/// absolute path of an existing file.
+fn listed_files(stdout: &str) -> Vec<PathBuf> {
+    stdout
+        .lines()
+        .map(str::trim_end)
+        .filter(|l| Path::new(l).is_absolute() && !l.contains(" - ") && Path::new(l).is_file())
+        .map(PathBuf::from)
+        .collect()
 }
 
 /// Resolve the per-invocation tsgo timeout. `SVN_TSGO_TIMEOUT_SECS`

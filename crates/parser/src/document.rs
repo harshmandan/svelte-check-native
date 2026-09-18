@@ -146,3 +146,140 @@ pub struct Template {
     /// template content can be interleaved with script/style blocks.
     pub text_runs: Vec<Range>,
 }
+
+/// svelte-check's `isTsSvelte`: the component is TypeScript when ANY
+/// `<script …>` tag in its text — wherever it sits, comments included —
+/// carries `lang` `ts` or `typescript` (any case). A literal port of its
+/// two regular expressions:
+///
+/// ```text
+/// /<script\b((?:\s+[^=>'"\/\s]+(?:=(?:"[^"]*"|'[^']*'|[^>\s]+))?)*)\s*>/gi
+/// /\blang\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i
+/// ```
+pub fn is_ts_svelte(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = find_ascii_ci(&bytes[from..], b"<script") {
+        let start = from + rel;
+        from = start + 1;
+        if let Some(attrs) = script_tag_attrs(text, start + b"<script".len())
+            && let Some(lang) = lang_value(attrs)
+            && (lang.eq_ignore_ascii_case("ts") || lang.eq_ignore_ascii_case("typescript"))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn find_ascii_ci(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len())
+        .position(|w| w.eq_ignore_ascii_case(needle))
+}
+
+fn is_word_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+/// The attribute text of a `<script` tag whose name ends at `at`, when
+/// the rest of the tag matches the first expression. The expression
+/// admits exactly one way to match, so a greedy walk decides it.
+fn script_tag_attrs(text: &str, at: usize) -> Option<&str> {
+    let rest = &text[at..];
+    if rest.chars().next().is_some_and(is_word_char) {
+        return None;
+    }
+    let mut pos = 0;
+    loop {
+        let ws = rest[pos..].len() - rest[pos..].trim_start().len();
+        let name_start = pos + ws;
+        let name_len = rest[name_start..]
+            .find(|c: char| matches!(c, '=' | '>' | '\'' | '"' | '/') || c.is_whitespace())
+            .unwrap_or(rest.len() - name_start);
+        if ws == 0 || name_len == 0 {
+            break;
+        }
+        let mut end = name_start + name_len;
+        if rest[end..].starts_with('=') {
+            let value = &rest[end + 1..];
+            let len = match value.chars().next() {
+                Some(q @ ('"' | '\'')) => value[1..].find(q).map(|i| i + 2),
+                Some(_) => {
+                    let n = value
+                        .find(|c: char| c == '>' || c.is_whitespace())
+                        .unwrap_or(value.len());
+                    (n > 0).then_some(n)
+                }
+                None => None,
+            };
+            match len {
+                Some(len) => end += 1 + len,
+                // `=` with no value: the optional group can't match, and
+                // `=` can't start the closing `\s*>` either.
+                None => return None,
+            }
+        }
+        pos = end;
+    }
+    let closing = rest[pos..].trim_start();
+    closing.starts_with('>').then(|| &rest[..pos])
+}
+
+/// The first `lang=value` match in a tag's attribute text.
+fn lang_value(attrs: &str) -> Option<&str> {
+    let lower = attrs.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find("lang") {
+        let at = from + rel;
+        from = at + 1;
+        if attrs[..at].chars().next_back().is_some_and(is_word_char) {
+            continue;
+        }
+        let after = attrs[at + 4..].trim_start();
+        let Some(after) = after.strip_prefix('=') else {
+            continue;
+        };
+        let value = after.trim_start();
+        let found = match value.chars().next() {
+            Some(q @ ('"' | '\'')) => value[1..].find(q).map(|i| &value[1..=i]),
+            Some(_) => {
+                let n = value
+                    .find(|c: char| {
+                        c.is_whitespace() || matches!(c, '"' | '\'' | '=' | '<' | '>' | '`')
+                    })
+                    .unwrap_or(value.len());
+                (n > 0).then(|| &value[..n])
+            }
+            None => None,
+        };
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod is_ts_svelte_tests {
+    use super::is_ts_svelte;
+
+    #[test]
+    fn follows_svelte_checks_expressions() {
+        assert!(is_ts_svelte(r#"<script lang="ts">x</script>"#));
+        assert!(is_ts_svelte(r#"<SCRIPT LANG='TypeScript'>"#));
+        assert!(is_ts_svelte("<script context=module lang=ts >"));
+        assert!(is_ts_svelte(
+            r#"<script module lang="ts"></script><script>let a</script>"#
+        ));
+        assert!(is_ts_svelte(
+            r#"<!-- <script lang="ts"> --><script></script>"#
+        ));
+        assert!(is_ts_svelte(r#"<script data-x="lang=ts">"#));
+        assert!(!is_ts_svelte("<script>let lang = 'ts'</script>"));
+        assert!(!is_ts_svelte(r#"<scripts lang="ts">"#));
+        assert!(!is_ts_svelte(r#"<script lang="ts" />"#));
+        assert!(!is_ts_svelte(r#"<script lang="js">"#));
+        assert!(!is_ts_svelte(r#"<script xlang="ts">"#));
+        assert!(is_ts_svelte(r#"<script x-lang="ts">"#));
+    }
+}

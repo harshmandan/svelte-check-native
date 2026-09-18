@@ -1,0 +1,18 @@
+{
+    "errors": [],
+    "warnings": [
+        {
+            "file": "src/A.svelte",
+            "line": 0,
+            "column": 0,
+            "code": "options_deprecated_accessors"
+        },
+        {
+            "file": "src/A.svelte",
+            "line": 0,
+            "column": 0,
+            "code": "options_removed_hydratable"
+        }
+    ],
+    "_note": "Deprecated and removed-but-ignored compile options warn through the compiler's process-wide warn-once set, so only the first component svelte-check compiles (A.svelte) shows them. Verified against upstream svelte-check."
+}

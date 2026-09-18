@@ -1,0 +1,29 @@
+{
+    "errors": [
+        {
+            "file": "src/F01.svelte",
+            "line": 4,
+            "column": 1,
+            "code": "reactive_declaration_cycle"
+        },
+        {
+            "file": "src/F04.svelte",
+            "line": 3,
+            "column": 1,
+            "code": "reactive_declaration_cycle"
+        },
+        {
+            "file": "src/F05.svelte",
+            "line": 2,
+            "column": 1,
+            "code": "reactive_declaration_cycle"
+        },
+        {
+            "file": "src/F08.svelte",
+            "line": 3,
+            "column": 1,
+            "code": "reactive_declaration_cycle"
+        }
+    ],
+    "_note": "Legacy-mode $: statements whose assignments and dependencies form a cycle (reactive_declaration_cycle, on the first statement assigning the cycle's first name). Plain = targets, including a member's object, are no dependency; compound assignments, updates and destructuring targets are. F06 has no cycle: the arrow's parameter shadows x. Verified against upstream svelte-check."
+}

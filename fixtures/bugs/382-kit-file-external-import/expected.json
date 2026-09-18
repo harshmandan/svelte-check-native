@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "src/routes/+layout.ts",
+            "line": 0,
+            "column": 91,
+            "code": 2339
+        },
+        {
+            "file": "src/routes/+page.ts",
+            "line": 1,
+            "column": 48,
+            "code": 2339
+        }
+    ],
+    "warnings": []
+}

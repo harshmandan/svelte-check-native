@@ -23,11 +23,10 @@
 //! in the UNCHANGED direction is a wrong result — when in doubt,
 //! include more.
 //!
-//! - **Program files** — every path listed in the tsbuildinfo's
-//!   `fileNames` (the closure tsgo actually loaded last run,
-//!   including node_modules `.d.ts`), stat-compared by
-//!   `(mtime, size)`. Catches edits to any file already in the
-//!   program.
+//! - **Program files** — every file the last run's tsgo listed
+//!   (`--listFiles`: the closure it actually loaded, including
+//!   node_modules `.d.ts`), stat-compared by `(mtime, size)`. Catches
+//!   edits to any file already in the program.
 //! - **Include-root directory walks** — the buildinfo only lists
 //!   files that EXISTED last run. A newly created file matched by an
 //!   include glob joins the program without any listed file
@@ -75,7 +74,7 @@ use crate::output::RawDiagnostic;
 
 /// Bump when the fingerprint structure or semantics change — a
 /// mismatched schema is treated as no cache.
-const SCHEMA: u32 = 1;
+const SCHEMA: u32 = 2;
 
 /// File extensions that can enter a TypeScript program through an
 /// include-glob walk. Broader than strictly necessary — extra
@@ -123,9 +122,9 @@ pub(crate) struct ReplayContext {
 
 impl ReplayContext {
     /// Compute the current fingerprint. Returns `None` when replay is
-    /// disabled (`SVN_DISABLE_REPLAY`), extended diagnostics were
-    /// requested, or there is no buildinfo yet (first run — nothing
-    /// to validate the program list against).
+    /// disabled (`SVN_DISABLE_REPLAY`) or extended diagnostics were
+    /// requested. Without a previous run the program list is empty, so
+    /// the fingerprint cannot match and tsgo runs.
     pub(crate) fn compute(
         layout: &CacheLayout,
         overlay_text: &str,
@@ -140,7 +139,8 @@ impl ReplayContext {
         if std::env::var("SVN_DISABLE_REPLAY").is_ok_and(|v| !v.is_empty()) {
             return None;
         }
-        let program = program_stats(layout)?;
+        let cache_path = layout.root.join("replay.json");
+        let program = previous_program(&cache_path);
         let overlay: serde_json::Value = serde_json::from_str(overlay_text).ok()?;
         let walked = walk_include_roots(&overlay, layout);
         let mut hasher = std::hash::DefaultHasher::new();
@@ -161,7 +161,7 @@ impl ReplayContext {
             walked,
         };
         Some(ReplayContext {
-            cache_path: layout.root.join("replay.json"),
+            cache_path,
             fingerprint,
         })
     }
@@ -174,19 +174,14 @@ impl ReplayContext {
         (cache.fingerprint == self.fingerprint).then_some(cache.diagnostics)
     }
 
-    /// Persist this run's diagnostics under the computed fingerprint.
-    /// Best-effort: a failed write only costs the next run its
-    /// short-circuit.
-    ///
-    /// tsgo may have rewritten the buildinfo during the run just
-    /// finished, so the program list is re-statted here rather than
-    /// reusing the pre-run stats — otherwise the very next run would
-    /// see the buildinfo-derived entries drift and never replay.
-    pub(crate) fn save(mut self, layout: &CacheLayout, diagnostics: &[RawDiagnostic]) {
-        let Some(program) = program_stats(layout) else {
+    /// Persist this run's diagnostics under the computed fingerprint,
+    /// with the program list tsgo just reported. Best-effort: a failed
+    /// write only costs the next run its short-circuit.
+    pub(crate) fn save(mut self, diagnostics: &[RawDiagnostic], program_files: &[PathBuf]) {
+        if program_files.is_empty() {
             return;
-        };
-        self.fingerprint.program = program;
+        }
+        self.fingerprint.program = stat_all(program_files.iter().map(PathBuf::as_path));
         let cache = ReplayCache {
             fingerprint: self.fingerprint,
             diagnostics: diagnostics.to_vec(),
@@ -215,36 +210,30 @@ fn stat_file(path: &Path) -> Option<FileStat> {
     })
 }
 
-/// Stat every file the last run's buildinfo lists. `None` when the
-/// buildinfo is missing/unreadable (first run) — and note a listed
-/// file that no longer exists is NOT a bail: it simply drops out of
-/// the list, which changes the fingerprint (deletion detected).
-fn program_stats(layout: &CacheLayout) -> Option<Vec<FileStat>> {
-    let text = std::fs::read_to_string(&layout.tsbuildinfo).ok()?;
-    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let names = json.get("fileNames")?.as_array()?;
-    let base = layout.tsbuildinfo.parent()?;
-    let mut stats: Vec<FileStat> = names
-        .par_iter()
-        .filter_map(|v| v.as_str())
-        .filter_map(|name| {
-            // Bundled default-lib names (`lib.es2015.d.ts`) have no
-            // path separator — they live inside the compiler, keyed
-            // by the engine stat instead.
-            if !name.contains('/') && !name.contains('\\') {
-                return None;
-            }
-            let p = Path::new(name);
-            let abs = if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                base.join(p)
-            };
-            stat_file(&crate::path_utils::lexical_normalise(&abs))
-        })
-        .collect();
+/// Re-stat the program files recorded by the previous run. A listed
+/// file that no longer exists drops out of the list, which changes the
+/// fingerprint (deletion detected).
+fn previous_program(cache_path: &Path) -> Vec<FileStat> {
+    let Some(previous) = std::fs::read_to_string(cache_path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<ReplayCache>(&text).ok())
+    else {
+        return Vec::new();
+    };
+    stat_all(
+        previous
+            .fingerprint
+            .program
+            .iter()
+            .map(|f| Path::new(&f.path)),
+    )
+}
+
+fn stat_all<'a>(paths: impl Iterator<Item = &'a Path>) -> Vec<FileStat> {
+    let paths: Vec<&Path> = paths.collect();
+    let mut stats: Vec<FileStat> = paths.par_iter().filter_map(|p| stat_file(p)).collect();
     stats.sort_by(|a, b| a.path.cmp(&b.path));
-    Some(stats)
+    stats
 }
 
 fn chain_stats(user_tsconfig: &Path) -> Vec<FileStat> {

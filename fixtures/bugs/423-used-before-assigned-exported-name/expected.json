@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "src/Input.svelte",
+            "line": 3,
+            "column": 48,
+            "code": 2454
+        }
+    ],
+    "_note": "TS2454 is dropped when the flagged source text is a name the instance script exports, as svelte-check's isNoUsedBeforeAssigned compares text rather than declarations: a local that shadows the `el` prop is dropped too, while an unrelated local is reported. Verified against svelte-check --tsgo."
+}

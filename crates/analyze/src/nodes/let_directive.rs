@@ -8,12 +8,10 @@ use smol_str::SmolStr;
 use svn_core::Range;
 use svn_parser::Attribute;
 
-use crate::nodes::destructure::{
-    apply_default_narrow, default_typeof_expr, leading_identifier, project_destructure_path,
-};
-use crate::template_scope::BoundIdent;
+use crate::nodes::destructure::leading_identifier;
+use crate::template_scope::{BoundIdent, DestructureSeg};
 use crate::walker::{
-    AnalyzeVisitor, ResolvedSlotExpr, ResolverStack, SlotAttr, SlotAttrExpr, SlotDef,
+    AnalyzeVisitor, LetOwnerInfo, ResolvedSlotExpr, ResolverStack, SlotAttr, SlotAttrExpr, SlotDef,
     TemplateSummary,
 };
 
@@ -94,6 +92,18 @@ fn collect_expression_attr(
     }
 }
 
+/// The name an attribute is written with (a directive's name follows
+/// its `prefix:`); `None` for spreads and comments.
+fn attribute_name(attr: &Attribute) -> Option<&str> {
+    match attr {
+        Attribute::Plain(p) => Some(p.name.as_str()),
+        Attribute::Expression(e) => Some(e.name.as_str()),
+        Attribute::Shorthand(s) => Some(s.name.as_str()),
+        Attribute::Directive(d) => Some(d.name.as_str()),
+        Attribute::Spread(_) | Attribute::Comment(_) => None,
+    }
+}
+
 /// Capture a `<slot [name="X"] [attr=…]>` site into
 /// `summary.slot_defs`. Skips attrs whose expression references a
 /// name in the active shadow stack — those need full scope
@@ -108,18 +118,26 @@ pub(crate) fn collect_slot_def(
     summary: &mut TemplateSummary,
 ) {
     use svn_parser::{AttrValuePart, Attribute as A};
-    let mut slot_name = SmolStr::new("default");
+    // svelte2tsx's `handleSlot` names the slot after the raw text of the
+    // first attribute called `name`'s first value chunk; a `{…}` value
+    // has no raw text, which makes the key `undefined`.
+    let slot_name = match attrs.iter().find(|a| attribute_name(a) == Some("name")) {
+        None => SmolStr::new("default"),
+        Some(A::Plain(p)) => match p.value.as_ref().map(|v| v.parts.first()) {
+            Some(Some(AttrValuePart::Text { range })) => SmolStr::from(range.slice(source)),
+            Some(None) => SmolStr::default(),
+            _ => SmolStr::new("undefined"),
+        },
+        Some(_) => SmolStr::new("undefined"),
+    };
     let mut entries: Vec<SlotAttr> = Vec::new();
     for attr in attrs {
+        // Every attribute called `name` names the slot and is not a
+        // slot prop.
+        if attribute_name(attr) == Some("name") {
+            continue;
+        }
         match attr {
-            A::Plain(p) if p.name.as_str() == "name" => {
-                if let Some(v) = &p.value
-                    && v.parts.len() == 1
-                    && let AttrValuePart::Text { range } = &v.parts[0]
-                {
-                    slot_name = SmolStr::from(range.slice(source));
-                }
-            }
             A::Plain(p) => {
                 // Plain literal attrs on `<slot>` other than `name=`
                 // (e.g. `<slot kind="header">`). Single-text-part
@@ -257,49 +275,145 @@ pub(crate) fn collect_slot_def(
     }
 }
 
-/// `<Comp let:foo>` / `<el let:foo>` scope — SlotHandler PLAN Stage 4.
-/// Resolves each binding to
-/// `__SvnComponentSlots<typeof Comp>['default']['foo']` (with
-/// destructure-path projection). Reads `pending_let_owner` stashed by
-/// `visit_component` / `visit_svelte_element`; falls through as
-/// unresolvable when None (consumer-wrapper with `slot=`, dynamic
-/// `<svelte:component this={EXPR}>` whose root isn't typeable,
-/// plain DOM element with `let:`) so the slot-attr collector drops
-/// references rather than splicing module scope.
-///
-/// Round-7 follow-up #2: each binding carries its own `slot_key_path`
-/// (set by `collect_let_directive_bindings`). For shorthand and
-/// bare-ident-alias forms the path is the directive name (e.g.
-/// `["foo"]` for both `let:foo` and `let:foo={bar}`). Pre-fix native
-/// used the BoundIdent's `name` as the slot key, so an alias
-/// `let:foo={bar}` resolved `bar` to `…['default']['bar']` instead
-/// of `…['default']['foo']`. Bindings without a path (today: any
-/// destructure leaf) drop to None.
+/// `<Comp let:foo>` / `<el slot="x" let:foo>` scope. svelte2tsx's slot
+/// resolver (`slot.ts` `resolveLet` / `resolveDestructuringAssignmentForLet`)
+/// resolves each name at value level against the owning component's
+/// instance: `__sveltets_2_instanceOf(Comp).$$slot_def['slot'].foo`,
+/// and a destructured leaf as `((PATTERN) => leaf)(<that>)`, so TS
+/// types the leaf from the real destructure. `<svelte:component>` and
+/// `<svelte:self>` resolve through an undeclared helper, i.e. `any`.
+/// With no owner (an element that fills no named slot of a component)
+/// svelte2tsx does not track the names, and nothing is pushed.
 pub(crate) fn enter(v: &mut AnalyzeVisitor<'_>, bindings: &[BoundIdent]) {
-    let owner = v.pending_let_owner.take();
+    let Some(owner) = v.pending_let_owner.take() else {
+        return;
+    };
     for b in bindings {
-        let resolved = owner.as_ref().and_then(|info| {
-            let path = b.slot_key_path.as_ref()?;
-            if path.is_empty() {
-                return None;
+        let Some(path) = b.slot_key_path.as_ref() else {
+            continue;
+        };
+        let Some(DestructureSeg::Key(let_name)) = path.first() else {
+            continue;
+        };
+        // svelte2tsx turns only the outermost `{…}` / `[…]` of the
+        // directive's expression into a pattern before collecting its
+        // identifiers, so only a plain identifier directly inside it is
+        // declared; nested patterns, defaults and rests keep their names
+        // as written.
+        let declared = match path.len() {
+            1 => true,
+            2 => {
+                matches!(
+                    path[1],
+                    DestructureSeg::Key(_) | DestructureSeg::KeyTypeof(_)
+                ) && !b.has_default
+                    && !b.inside_rest
             }
-            let root_expr = format!(
-                "__SvnComponentSlots<typeof {root}>[{slot:?}]",
-                root = info.component_root.as_str(),
-                slot = info.slot_name.as_str(),
+            _ => false,
+        };
+        if !declared {
+            continue;
+        }
+        let resolved = match &owner.component {
+            None => ResolvedSlotExpr::Type("any".to_string()),
+            Some(component) => {
+                let slot = owner.slot_name.replace('\\', "\\\\").replace('\'', "\\'");
+                let base =
+                    format!("__svn_instance_of({component}).$$slot_def['{slot}'].{let_name}");
+                match destructure_pattern(v.source, b) {
+                    Some(pattern) => ResolvedSlotExpr::Value(format!(
+                        "(({pattern}) => {leaf})({base})",
+                        leaf = b.name.as_str(),
+                    )),
+                    None => ResolvedSlotExpr::Value(base),
+                }
+            }
+        };
+        v.shadow.entries.push((b.name.clone(), Some(resolved)));
+    }
+}
+
+/// The destructure pattern a `let:NAME={PATTERN}` binding is a leaf of;
+/// `None` for the shorthand and plain-alias forms.
+fn destructure_pattern<'s>(source: &'s str, b: &BoundIdent) -> Option<&'s str> {
+    let range = b.pattern_source_range?;
+    let pattern = source.get(range.start as usize..range.end as usize)?.trim();
+    let is_plain_identifier = !pattern.is_empty()
+        && pattern
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '$');
+    (!is_plain_identifier).then_some(pattern)
+}
+
+/// svelte2tsx's `getSlotName`: the raw text of the first value chunk of
+/// the first attribute called `slot`, when that is non-empty text.
+fn slot_name_of<'s>(attrs: &[Attribute], source: &'s str) -> Option<&'s str> {
+    let first = attrs.iter().find(|a| attribute_name(a) == Some("slot"))?;
+    let Attribute::Plain(p) = first else {
+        return None;
+    };
+    match p.value.as_ref()?.parts.first()? {
+        svn_parser::AttrValuePart::Text { range } => {
+            Some(range.slice(source)).filter(|t| !t.is_empty())
+        }
+        svn_parser::AttrValuePart::Expression { .. } => None,
+    }
+}
+
+pub(crate) fn has_let_directive(attrs: &[Attribute]) -> bool {
+    attrs
+        .iter()
+        .any(|a| matches!(a, Attribute::Directive(d) if d.kind == svn_parser::DirectiveKind::Let))
+}
+
+/// Owner bookkeeping for a component-like node (`<Comp>`,
+/// `<svelte:component>`, `<svelte:self>`) about to have its children
+/// walked. svelte2tsx's `handleComponentLet` resolves the component's
+/// own `let:` directives against its default slot, and those of each
+/// direct child that names a slot against that slot — the latter first
+/// (the resolution a child's own component would give is never used).
+pub(crate) fn enter_component_like(
+    v: &mut AnalyzeVisitor<'_>,
+    start: u32,
+    attrs: &[Attribute],
+    children: &svn_parser::Fragment,
+    component: Option<SmolStr>,
+) {
+    let registered = v.slot_let_owners.remove(&start);
+    if has_let_directive(attrs) {
+        v.pending_let_owner = Some(registered.unwrap_or_else(|| LetOwnerInfo {
+            component: component.clone(),
+            slot_name: SmolStr::new("default"),
+        }));
+    }
+    for child in &children.nodes {
+        let child_attrs = match child {
+            svn_parser::Node::Element(e) => &e.attributes,
+            svn_parser::Node::Component(c) => &c.attributes,
+            svn_parser::Node::SvelteElement(e) => &e.attributes,
+            _ => continue,
+        };
+        if !has_let_directive(child_attrs) {
+            continue;
+        }
+        if let Some(slot) = slot_name_of(child_attrs, v.source) {
+            v.slot_let_owners.insert(
+                child.range().start,
+                LetOwnerInfo {
+                    component: component.clone(),
+                    slot_name: SmolStr::new(slot),
+                },
             );
-            let projected = project_destructure_path(&root_expr, path);
-            let default_t = b.default_value_range.and_then(|r| {
-                v.source
-                    .get(r.start as usize..r.end as usize)
-                    .and_then(default_typeof_expr)
-            });
-            Some(ResolvedSlotExpr::Type(apply_default_narrow(
-                projected,
-                b.has_default,
-                default_t,
-            )))
-        });
-        v.shadow.entries.push((b.name.clone(), resolved));
+        }
+    }
+}
+
+/// Owner bookkeeping for a node that is not component-like: its `let:`
+/// directives are resolved only when its parent component registered
+/// it as filling a named slot.
+pub(crate) fn enter_element_like(v: &mut AnalyzeVisitor<'_>, start: u32, attrs: &[Attribute]) {
+    let registered = v.slot_let_owners.remove(&start);
+    if has_let_directive(attrs) {
+        v.pending_let_owner = registered;
     }
 }

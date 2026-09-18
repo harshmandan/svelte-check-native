@@ -3,89 +3,72 @@
 
     let module = true;
     import { imported } from './x';
-const hoistable1 = (): any => { async () => {
+const hoistable1 = (): ReturnType<import('svelte').Snippet> => { async () => {
     { svelteHTML.createElement("div", {});     }
     };
-    return null as any;
+    return __svn_any(0);
 };
-void hoistable1;
-const hoistable2 = (bar): any => { async () => {
-    { svelteHTML.createElement("div", {});         (bar);
+const hoistable2 = (bar): ReturnType<import('svelte').Snippet> => { async () => {
+    { svelteHTML.createElement("div", {});         bar;
     }
     };
-    void bar;
-    return null as any;
+    return __svn_any(0);
 };
-void hoistable2;
-const hoistable3 = (bar: string): any => { async () => {
-    { svelteHTML.createElement("div", {});         (bar);
+const hoistable3 = (bar: string): ReturnType<import('svelte').Snippet> => { async () => {
+    { svelteHTML.createElement("div", {});         bar;
     }
     };
-    void bar;
-    return null as any;
+    return __svn_any(0);
 };
-void hoistable3;
-const hoistable4 = (foo): any => { async () => {
-    { svelteHTML.createElement("div", {});         (foo);
+const hoistable4 = (foo): ReturnType<import('svelte').Snippet> => { async () => {
+    { svelteHTML.createElement("div", {});         foo;
     }
     };
-    void foo;
-    return null as any;
+    return __svn_any(0);
 };
-void hoistable4;
-const hoistable5 = (): any => { async () => {
+const hoistable5 = (): ReturnType<import('svelte').Snippet> => { async () => {
     { svelteHTML.createElement("button", {
         "onclick": (e => e),
     });
     }
     };
-    return null as any;
+    return __svn_any(0);
 };
-void hoistable5;
-const hoistable6 = (): any => { async () => {
-    { svelteHTML.createElement("div", {});         (module);
+const hoistable6 = (): ReturnType<import('svelte').Snippet> => { async () => {
+    { svelteHTML.createElement("div", {});         module;
     }
     };
-    return null as any;
+    return __svn_any(0);
 };
-void hoistable6;
-const hoistable8 = (): any => { async () => {
-    { svelteHTML.createElement("div", {});         (global);
+const hoistable8 = (): ReturnType<import('svelte').Snippet> => { async () => {
+    { svelteHTML.createElement("div", {});         global;
     }
     };
-    return null as any;
+    return __svn_any(0);
 };
-void hoistable8;
-const hoistable9 = (props: HTMLAttributes<HTMLDivElement>): any => { async () => {
+const hoistable9 = (props: HTMLAttributes<HTMLDivElement>): ReturnType<import('svelte').Snippet> => { async () => {
     };
-    void props;
-    return null as any;
+    return __svn_any(0);
 };
-void hoistable9;
-const hoistable10 = (foo): any => { async () => {
+const hoistable10 = (foo): ReturnType<import('svelte').Snippet> => { async () => {
     const bar = foo;
-    void bar;
-    (bar);
+    bar;
     };
-    void foo;
-    return null as any;
+    return __svn_any(0);
 };
-void hoistable10;
 function $$render_e40e2c10() {
-    const hoistable7 = (): any => { async () => {
-        { svelteHTML.createElement("div", {});             (imported);
+    const hoistable7 = (): ReturnType<import('svelte').Snippet> => { async () => {
+        { svelteHTML.createElement("div", {});             imported;
         }
         };
-        return null as any;
+        return __svn_any(0);
     };
-    void hoistable7;
-    const not_hoistable = (): any => { async () => {
-        { svelteHTML.createElement("div", {});             (foo);
+    const not_hoistable = (): ReturnType<import('svelte').Snippet> => { async () => {
+        { svelteHTML.createElement("div", {});             foo;
         }
         };
-        return null as any;
+        return __svn_any(0);
     };
-    void not_hoistable;
 
                                    
     let foo = true;
@@ -97,7 +80,7 @@ function $$render_e40e2c10() {
 $$render_e40e2c10;
 interface $$IsomorphicComponent {
     new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings'] } & Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'];
-    (internal: unknown, props: Awaited<ReturnType<typeof $$render_e40e2c10>>['props']): Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'] & { $set?: any; $on?: any };
+    (internal: unknown, props: Awaited<ReturnType<typeof $$render_e40e2c10>>['props'] extends Record<string, never> ? { $$events?: Awaited<ReturnType<typeof $$render_e40e2c10>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_e40e2c10>>['slots'] } : Awaited<ReturnType<typeof $$render_e40e2c10>>['props'] & { $$events?: Awaited<ReturnType<typeof $$render_e40e2c10>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_e40e2c10>>['slots'] }): Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;

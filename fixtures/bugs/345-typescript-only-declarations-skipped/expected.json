@@ -1,0 +1,12 @@
+{
+    "errors": [
+        {
+            "file": "src/Declare.svelte",
+            "line": 0,
+            "column": 18,
+            "code": 1184
+        }
+    ],
+    "warnings": [],
+    "_note": "The compiler deletes TypeScript-only nodes (import type, import { type x }, declare const/let/class/function, declare fields, abstract methods) before building scopes, so a type-only `state` import or a `declare const state` does not turn `$state` into a store subscription (no store_rune_conflict). The TS1184 on `declare` inside the component body is what upstream svelte-check reports too."
+}

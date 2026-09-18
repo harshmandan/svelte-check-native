@@ -1,0 +1,36 @@
+{
+  "_doc": "Per-target recipe bench.mjs --mode parity applies before comparing with upstream. Keys are target paths relative to <repo>/bench. `tsconfig` compiler options are layered over the target's tsconfig.json in a generated tsconfig.svn-parity.json that both tools check. `patches` edit rig sources in place for the run and are always reverted; each `find` must occur exactly once. They exist because upstream svelte-check --tsgo otherwise type-checks nothing on these rigs: one syntax error in its generated TypeScript makes tsgo skip semantic checking for the whole program, and composite projects abort with TS6379.",
+  "control-svelte-4/src/apps/admin-app": {
+    "tsconfig": {
+      "composite": false,
+      "incremental": false,
+      "declaration": false,
+      "declarationMap": false,
+      "emitDeclarationOnly": false
+    },
+    "patches": [
+      {
+        "file": "src/lib/components/icon-button/IconButton.svelte",
+        "find": "export { dataTid as 'data-tid' }",
+        "replace": "",
+        "why": "svelte2tsx writes the string-named export as unparsable TypeScript"
+      },
+      {
+        "file": "src/lib/components/tile/Tile.svelte",
+        "find": "  on:draggingTile\n  on:drop\n",
+        "replace": "\n\n",
+        "why": "svelte2tsx writes bare on: forwards on <svelte:component> as unparsable TypeScript"
+      }
+    ]
+  },
+  "control-svelte-5/src/apps/admin-app": {
+    "tsconfig": {
+      "composite": false,
+      "incremental": false,
+      "declaration": false,
+      "declarationMap": false,
+      "emitDeclarationOnly": false
+    },
+    "patches": []
+  }
+}

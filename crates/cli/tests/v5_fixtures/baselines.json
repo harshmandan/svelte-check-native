@@ -2,8 +2,14 @@
     "_doc": "Per-fixture baselines for the v5 fixtures suite. Listed fixtures are expected to produce the EXACT `expected_errors` set (same count, same {file, line, column, code} per entry, optional message_contains substring). These fixtures test svelte2tsx's verbatim-emit behavior — they preserve user code character-for-character even when that user code doesn't type-check, so the errors below match what tsgo fires on the preserved source. Fixtures not in this list must produce zero errors to pass. Regenerate with `CAPTURE_BASELINES=1` on the runner when an emit change deliberately shifts the error shape; always `git diff` the result before committing.",
     "verbatim_emit_fixtures": {
         "runes-best-effort-types.v5": {
-            "reason": "let { g = foo } = $props() — `foo` is undefined; the fixture preserves the user's reference verbatim. svelte2tsx emits the same error in expectedv2.ts.",
+            "reason": "let { g = foo } = $props() — `foo` is undefined; the fixture preserves the user's reference verbatim, and the synthesised `$$ComponentProps` typedef carries `g?: typeof foo`, which upstream reports again at the declaration (after `let`).",
             "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 7,
+                    "code": 2304
+                },
                 {
                     "file": "src/input.svelte",
                     "line": 1,
@@ -13,8 +19,14 @@
             ]
         },
         "ts-runes-best-effort-types.v5": {
-            "reason": "Same as runes-best-effort-types but with extra TS-typed defaults (h = null as Bar, i = null as any as Baz). All three undefined references preserved verbatim.",
+            "reason": "Same as runes-best-effort-types but with extra TS-typed defaults (h = null as Bar, i = null as any as Baz). All three undefined references preserved verbatim. The script has no lang=\"ts\", so the compiler's JavaScript parser stops at the first `as` (js_parse_error), as upstream svelte-check reports.",
             "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 74,
+                    "code": "js_parse_error"
+                },
                 {
                     "file": "src/input.svelte",
                     "line": 1,
@@ -209,40 +221,6 @@
                 }
             ]
         },
-        "ts-runes-hoistable-props-false-2.v5": {
-            "reason": "`interface Props { [index: typeof a]: boolean }` — index-signature key whose type is `typeof a` (a const). TS1268 per spec: index signature parameters must be `string | number | symbol | template literal`. User-code error preserved verbatim.",
-            "expected_errors": [
-                {
-                    "file": "src/input.svelte",
-                    "line": 4,
-                    "column": 9,
-                    "code": 1268
-                },
-                {
-                    "file": "src/input.svelte",
-                    "line": 7,
-                    "column": 10,
-                    "code": 2339
-                }
-            ]
-        },
-        "ts-runes-hoistable-props-false-5.v5": {
-            "reason": "`type Shadowed` declared in both `<script module>` and `<script lang=\"ts\">` — duplicate identifier in the composed overlay. Our hoist emits both into the same module scope; upstream scopes module-script types separately. Deferred.",
-            "expected_errors": [
-                {
-                    "file": "src/input.svelte",
-                    "line": 1,
-                    "column": 9,
-                    "code": 2300
-                },
-                {
-                    "file": "src/input.svelte",
-                    "line": 5,
-                    "column": 9,
-                    "code": 2300
-                }
-            ]
-        },
         "ts-runes-hoistable-props-false-7.v5": {
             "reason": "`let { destructured } = {}; type Props = { prop: typeof destructured };` — property access on `{}` fires TS2339. User-code pattern, verbatim.",
             "expected_errors": [
@@ -254,29 +232,6 @@
                 }
             ]
         },
-        "ts-runes-hoistable-props-false-14.v5": {
-            "reason": "`<script module>enum A {}</script>` + `<script lang=\"ts\">interface A { Abc: number }</script>` — enum + interface share the same name across module and instance scripts. TS2567 fires because both get hoisted into the same overlay scope. Same root cause as hoistable-props-false-5; deferred.",
-            "expected_errors": [
-                {
-                    "file": "src/input.svelte",
-                    "line": 1,
-                    "column": 9,
-                    "code": 2567
-                },
-                {
-                    "file": "src/input.svelte",
-                    "line": 6,
-                    "column": 10,
-                    "code": 2567
-                },
-                {
-                    "file": "src/input.svelte",
-                    "line": 10,
-                    "column": 5,
-                    "code": 2339
-                }
-            ]
-        },
         "ts-runes-hoistable-props-false-15.v5": {
             "reason": "`import { store } from './foo'` with './foo' missing — verbatim preservation of unresolved import.",
             "expected_errors": [
@@ -284,6 +239,104 @@
                     "file": "src/input.svelte",
                     "line": 4,
                     "column": 22,
+                    "code": 2307
+                }
+            ]
+        },
+        "jsdoc-sveltekit-autotypes-runes.v5": {
+            "reason": "SvelteKit route component with no generated `./$types` beside it. Upstream types the route props (JS `$props()` destructure: data, form) and the exported `snapshot` from `./$types.js`, so each of those references fires TS2307 in this sandbox; upstream svelte-check reports the same set at the same positions.",
+            "expected_errors": [
+                {
+                    "file": "src/+page.svelte",
+                    "line": 1,
+                    "column": 7,
+                    "code": 2307
+                },
+                {
+                    "file": "src/+page.svelte",
+                    "line": 1,
+                    "column": 7,
+                    "code": 2307
+                },
+                {
+                    "file": "src/+page.svelte",
+                    "line": 2,
+                    "column": 17,
+                    "code": 2307
+                }
+            ]
+        },
+        "sveltekit-autotypes-$props-rune.v5": {
+            "reason": "SvelteKit route component with no generated `./$types` beside it. Upstream types the route props (JS `$props()` destructure: data, form, params) and the exported `snapshot` from `./$types.js`, so each of those references fires TS2307 in this sandbox; upstream svelte-check reports the same set at the same positions.",
+            "expected_errors": [
+                {
+                    "file": "src/+page.svelte",
+                    "line": 1,
+                    "column": 7,
+                    "code": 2307
+                },
+                {
+                    "file": "src/+page.svelte",
+                    "line": 1,
+                    "column": 7,
+                    "code": 2307
+                },
+                {
+                    "file": "src/+page.svelte",
+                    "line": 1,
+                    "column": 7,
+                    "code": 2307
+                },
+                {
+                    "file": "src/+page.svelte",
+                    "line": 2,
+                    "column": 17,
+                    "code": 2307
+                }
+            ]
+        },
+        "ts-sveltekit-autotypes-$props-rune.v5": {
+            "reason": "SvelteKit route component with no generated `./$types` beside it. Upstream types the route props (JS `$props()` destructure: data, form) and the exported `snapshot` from `./$types.js`, so each of those references fires TS2307 in this sandbox; upstream svelte-check reports the same set at the same positions.",
+            "expected_errors": [
+                {
+                    "file": "src/+page.svelte",
+                    "line": 1,
+                    "column": 17,
+                    "code": 2307
+                },
+                {
+                    "file": "src/+page.svelte",
+                    "line": 2,
+                    "column": 7,
+                    "code": 2307
+                },
+                {
+                    "file": "src/+page.svelte",
+                    "line": 2,
+                    "column": 7,
+                    "code": 2307
+                }
+            ]
+        },
+        "jsdoc-sveltekit-autotypes.v5": {
+            "reason": "SvelteKit route component with no generated `./$types` beside it. Upstream types the route props (JS `export let data` / `export let form`) and the exported `snapshot` from `./$types.js`, so each of those references fires TS2307 in this sandbox; upstream svelte-check reports the same set at the same positions.",
+            "expected_errors": [
+                {
+                    "file": "src/+page.svelte",
+                    "line": 1,
+                    "column": 15,
+                    "code": 2307
+                },
+                {
+                    "file": "src/+page.svelte",
+                    "line": 2,
+                    "column": 15,
+                    "code": 2307
+                },
+                {
+                    "file": "src/+page.svelte",
+                    "line": 3,
+                    "column": 17,
                     "code": 2307
                 }
             ]

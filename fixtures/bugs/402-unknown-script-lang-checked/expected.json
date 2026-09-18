@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "src/A.svelte",
+            "line": 1,
+            "column": 5,
+            "code": 1109
+        }
+    ],
+    "_note": "A `<script lang=\"coffee\">` body is converted like any script, so tsgo reports its syntax errors. Verified against svelte-check --tsgo."
+}

@@ -1,0 +1,83 @@
+{
+    "errors": [
+        {
+            "file": "src/BlockComment.svelte",
+            "line": 2,
+            "column": 10,
+            "code": 6133
+        },
+        {
+            "file": "src/BlockComment.svelte",
+            "line": 2,
+            "column": 23,
+            "code": 2304
+        },
+        {
+            "file": "src/BlockComment.svelte",
+            "line": 1,
+            "column": 4,
+            "code": 6133
+        },
+        {
+            "file": "src/Direct.svelte",
+            "line": 2,
+            "column": 10,
+            "code": 6133
+        },
+        {
+            "file": "src/Direct.svelte",
+            "line": 2,
+            "column": 23,
+            "code": 2304
+        },
+        {
+            "file": "src/Direct.svelte",
+            "line": 1,
+            "column": 4,
+            "code": 6133
+        },
+        {
+            "file": "src/LineComment.svelte",
+            "line": 3,
+            "column": 10,
+            "code": 6133
+        },
+        {
+            "file": "src/LineComment.svelte",
+            "line": 3,
+            "column": 23,
+            "code": 2304
+        },
+        {
+            "file": "src/LineComment.svelte",
+            "line": 2,
+            "column": 4,
+            "code": 6133
+        },
+        {
+            "file": "src/Newline.svelte",
+            "line": 3,
+            "column": 10,
+            "code": 6133
+        },
+        {
+            "file": "src/Newline.svelte",
+            "line": 2,
+            "column": 4,
+            "code": 6133
+        },
+        {
+            "file": "src/NoImport.svelte",
+            "line": 1,
+            "column": 10,
+            "code": 6133
+        },
+        {
+            "file": "src/NoImport.svelte",
+            "line": 0,
+            "column": 22,
+            "code": 6133
+        }
+    ],
+    "warnings": []
+}

@@ -1,0 +1,23 @@
+{
+    "errors": [
+        {
+            "file": "src/Btn2.svelte",
+            "line": 1,
+            "column": 2,
+            "code": 1184
+        },
+        {
+            "file": "src/Parent.svelte",
+            "line": 8,
+            "column": 5,
+            "code": 2353
+        },
+        {
+            "file": "src/Parent.svelte",
+            "line": 9,
+            "column": 6,
+            "code": 2353
+        }
+    ],
+    "_note": "`type $$Props` and `export interface $$Props` declare the props like `interface $$Props`; the `$$Props` cross-check error is generated code svelte-check --tsgo drops, and an exported interface stays in the render function (TS1184). Verified against svelte-check --tsgo."
+}

@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "src/A.svelte",
+            "line": 1,
+            "column": 20,
+            "code": 2307
+        },
+        {
+            "file": "src/A.svelte",
+            "line": 2,
+            "column": 8,
+            "code": 6133
+        }
+    ],
+    "_note": "The overlay's rootDirs are the project's winning rootDirs declaration plus the overlay tree, as svelte-check writes them; the workspace root is not added. With rootDirs [src, generated], a component's `../shared/x` leaves every root once seen from the overlay tree, so it is TS2307 there, while the same import in a plain .ts file resolves normally. Verified against svelte-check --tsgo."
+}

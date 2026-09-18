@@ -31,9 +31,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
-use svn_core::tsconfig::{
-    FlattenedReference, TsConfigFile, flatten_references_from_chain, load_chain,
-};
+use svn_core::tsconfig::{TsConfigFile, load_chain};
 
 use crate::cache::CacheLayout;
 
@@ -48,6 +46,7 @@ pub fn build(
     layout: &CacheLayout,
     user_tsconfig: &Path,
     generated_files: &[std::path::PathBuf],
+    js_overlays: &[std::path::PathBuf],
     kit_overlay_sources: &[std::path::PathBuf],
     kit_types_mirror: Option<&Path>,
 ) -> Value {
@@ -75,30 +74,19 @@ pub fn build(
     // `node_modules/@tsconfig/...` walk-up for us.
     let chain: Vec<TsConfigFile> = load_chain(user_tsconfig).unwrap_or_default();
 
-    // When the CLI redirected from a solution-style root, pull sibling
-    // projects REFERENCED BY THE REDIRECT TARGET into the overlay so
-    // transitive imports across projects reach tsgo as part of the
-    // same program. Flattening the solution root's full references[]
-    // would over-include — for a monorepo-style repo where
-    // `tsconfig.json` coordinates console + functions + packages,
-    // type-checking console doesn't require functions code, yet
-    // including functions' tsconfig pulls its strict-mode errors
-    // into our output.
-    //
-    // The narrower rule: only follow `references[]` declared BY the
-    // redirect target (or its extends chain). That matches the
-    // user's own tsconfig's declaration of "these are the projects
-    // whose types I need." Skip a reference pointing at the current
-    // workspace — its own tsconfig chain already covers it via
-    // `chain`. Empty vec for flat-project runs.
-    let sibling_refs: Vec<FlattenedReference> = flatten_references_from_chain(user_tsconfig)
-        .into_iter()
-        .filter(|r| r.project_dir != layout.workspace)
-        .collect();
-    // Acknowledge but don't consume the solution root — the CLI
-    // still passes it down for future expansion (e.g.
-    // paths-level aliases from the solution root).
-    let _ = layout.solution_root_tsconfig.as_deref();
+    // JS overlays join `files` whenever the project accepts JavaScript.
+    // Reaching them only through `include` loses them to any `exclude`
+    // that covers `node_modules` — every SvelteKit tsconfig has one, and
+    // our cache lives there — after which they load only as imports of
+    // their sidecars, as unchecked library JavaScript. Without `allowJs`
+    // (on by default under `checkJs`) listing them is TS6504, and tsgo
+    // skips them through `include` anyway.
+    let allow_js = svn_core::tsconfig::winning_field(&chain, |f| f.compiler_options.allow_js)
+        .or_else(|| svn_core::tsconfig::winning_field(&chain, |f| f.compiler_options.check_js))
+        .is_some_and(|(_, on)| on);
+    if allow_js {
+        files.extend(js_overlays.iter().map(|p| p.to_string_lossy().into_owned()));
+    }
 
     let mut root_dirs: Vec<String> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -118,38 +106,52 @@ pub fn build(
     if let Some(dir) = kit_types_mirror {
         push_root(dir, &mut root_dirs, &mut seen);
     }
-    // Overlay svelte subdir — where generated files live.
-    push_root(layout.svelte_dir.as_path(), &mut root_dirs, &mut seen);
-    // Workspace root second — so any relative import from a generated
-    // overlay file (e.g. `import x from '../stores/util.ts'` written
-    // inside a .svelte) resolves through TS's rootDirs virtual merge
-    // back to the real source tree. Use the workspace explicitly: the
-    // cache root's parent is no longer the workspace ever since we
-    // moved the cache under node_modules/.cache/.
-    push_root(layout.workspace.as_path(), &mut root_dirs, &mut seen);
-    // UNION `rootDirs` across the whole extends chain. TS semantics
-    // REPLACE the field when a child declares it, but we need the
-    // widest possible virtual-merge in the overlay so every relative
-    // import the user could have written still resolves back to the
-    // real source tree.
-    for file in &chain {
-        let dir = file.config_dir();
-        for rd in &file.compiler_options.root_dirs {
-            let resolved = if Path::new(rd).is_absolute() {
-                PathBuf::from(rd)
-            } else {
-                dir.join(rd)
-            };
-            push_root(normalize(&resolved).as_path(), &mut root_dirs, &mut seen);
+    // The project's own `rootDirs` next, then the overlay's svelte
+    // subdir, as svelte-check writes them: the WINNING declaration in the
+    // extends chain (TypeScript replaces the field, it never merges), each
+    // entry anchored on the config that declared it — or, when no config
+    // declares one, the entry tsconfig's own directory. A relative import
+    // written in a component then resolves from its overlay through this
+    // virtual merge exactly where the compiler resolves it for the source,
+    // and nowhere else: a `../shared/x` that leaves every root is TS2307.
+    match svn_core::tsconfig::winning_field(&chain, |f| {
+        (!f.compiler_options.root_dirs.is_empty()).then_some(&f.compiler_options.root_dirs)
+    }) {
+        Some((file, dirs)) => {
+            let dir = file.config_dir();
+            for rd in dirs {
+                let resolved = if Path::new(rd).is_absolute() {
+                    PathBuf::from(rd)
+                } else {
+                    dir.join(rd)
+                };
+                push_root(normalize(&resolved).as_path(), &mut root_dirs, &mut seen);
+            }
+        }
+        None => {
+            let entry_dir = user_tsconfig.parent().unwrap_or(layout.workspace.as_path());
+            push_root(normalize(entry_dir).as_path(), &mut root_dirs, &mut seen);
+            // The overlay tree mirrors the workspace, so the workspace is
+            // the directory it stands in for. svelte-check's default root
+            // is the tsconfig's directory, which is the same directory
+            // whenever the tsconfig sits at the workspace root; a
+            // tsconfig elsewhere (`--tsconfig ../tsconfig.json`) still
+            // needs the workspace for a component's relative imports to
+            // land beside the component.
+            push_root(layout.workspace.as_path(), &mut root_dirs, &mut seen);
         }
     }
+    push_root(layout.svelte_dir.as_path(), &mut root_dirs, &mut seen);
 
-    // Path aliases. Prepend a cache-mirror candidate to each value-list
-    // so a path-mapped import like `$lib/foo/Bar.svelte.ts` first tries
-    // our generated overlay file and falls back to the source location
-    // if not found. Without this, path-mapped Svelte imports skip
-    // rootDirs entirely and never reach our overlay (rootDirs only
-    // kicks in for raw relative paths).
+    // Path aliases. Each value keeps its place and is followed by its
+    // cache-mirror candidate, the order svelte-check writes them in: a
+    // path-mapped import resolves against the source tree first — so a
+    // `Foo.svelte.ts` runes module beside `Foo.svelte` wins for
+    // `$lib/Foo.svelte`, as the compiler's extension probing decides —
+    // and reaches the component's overlay declaration only when nothing
+    // in the source tree matches. Path-mapped specifiers skip `rootDirs`
+    // entirely, so without the mirror candidate they would never reach
+    // an overlay at all.
     let mut paths_map: serde_json::Map<String, Value> = serde_json::Map::new();
     let mut paths_keys_order: Vec<String> = Vec::new();
     // Ordered Vec for emit-stable output alongside a parallel HashSet so
@@ -211,24 +213,17 @@ pub fn build(
 
     for pattern in paths_keys_order {
         let (values, _) = paths_accumulated.remove(&pattern).unwrap_or_default();
-        // Each pattern's value list runs through two passes: the
-        // mirror-into-overlay rewriting first (so overlay-cache paths
-        // win on lookup) and the original paths second (so out-of-cache
-        // imports keep resolving). `seen` deduplicates across both
-        // passes; the entry-side set above only deduplicates within
-        // the input `values` per sibling.
         let mut merged: Vec<String> = Vec::with_capacity(values.len() * 2);
         let mut seen: HashSet<String> = HashSet::with_capacity(values.len() * 2);
-        for v in &values {
-            if let Some(m) = mirror_into_overlay(layout, v)
+        for v in values {
+            let mirrored = mirror_into_overlay(layout, &v);
+            if seen.insert(v.clone()) {
+                merged.push(v);
+            }
+            if let Some(m) = mirrored
                 && seen.insert(m.clone())
             {
                 merged.push(m);
-            }
-        }
-        for v in values {
-            if seen.insert(v.clone()) {
-                merged.push(v);
             }
         }
         paths_map.insert(
@@ -258,11 +253,19 @@ pub fn build(
     // resolution doesn't need it (handled by `allowArbitraryExtensions`
     // + the `.d.svelte.ts` ambient sidecars whose `.ts` re-exports are
     // legal under declaration-file rules regardless of the flag).
-    compiler_options.insert("incremental".into(), json!(true));
-    compiler_options.insert(
-        "tsBuildInfoFile".into(),
-        json!(layout.tsbuildinfo.to_string_lossy()),
-    );
+    // Incremental only on request, as upstream (`incremental.ts`).
+    let incremental = crate::incremental();
+    compiler_options.insert("incremental".into(), json!(incremental));
+    if incremental {
+        compiler_options.insert(
+            "tsBuildInfoFile".into(),
+            json!(layout.tsbuildinfo.to_string_lossy()),
+        );
+    }
+    // A composite project inherits `composite` untouched. With
+    // incremental compilation off that is TS6379, and the compiler then
+    // checks nothing — exactly what svelte-check's overlay produces, so
+    // that one error is the whole report.
     // `skipLibCheck` is INHERITED, not forced. Per CLAUDE.md ("not
     // stricter or lax-er than upstream"), the user's tsconfig setting
     // wins — when unset, tsgo defaults to `false` and type-checks
@@ -287,43 +290,23 @@ pub fn build(
     // configured. Per the parity rule we are neither stricter nor
     // laxer than upstream, and this was laxer.
     compiler_options.insert("rootDirs".into(), json!(root_dirs));
-    // Filter the user's `types` to drop entries that don't resolve.
-    // tsgo treats a missing `types` entry as a fatal TS2688 and stops
-    // emitting diagnostics for the rest of the program — so a single
-    // stale path (a build-time-generated .d.ts that hasn't been
-    // regenerated yet, a typo, etc.) silently zeros our error count.
-    // We override the inherited `types` with the surviving entries so
-    // the user's intent is preserved without the fatal-abort.
-    // `types`: inner wins (first config in the BFS chain that declares
-    // the field). Filter against tsgo's resolution rules so a stale
-    // entry can't fatally TS2688 and zero out our error count.
+    // `types` is inherited as written, the way svelte-check's overlay
+    // inherits it. An entry that does not resolve is a fatal TS2688 there:
+    // the compiler abandons the program and svelte-check reports nothing,
+    // and so do we.
     //
-    // Sibling-project union: when the redirect solution pulls files
-    // from a sibling reference into the program (via the include
-    // merge below), that sibling's ambient-type declarations must
-    // reach the overlay too. A `web/` project referencing an
-    // `extension/` project that declares `"types": ["chrome"]` would
-    // otherwise see the extension's `.ts` files type-checked without
-    // the `chrome` namespace (TS2304 "Cannot find namespace 'chrome'"
-    // all over extension/background.ts). Union here, de-duped.
-    //
-    // Path-shaped entries anchor on the ENTRY config's directory, not on
-    // the directory of whichever config in the chain wrote them. TS
-    // resolves `types` against the root config being compiled — it is not
-    // one of the `isFilePath` options that `extends` rebases per-file —
-    // so a base config declaring `"./globals.d.ts"` means "next to the
-    // tsconfig the user is compiling", however deep the chain goes.
-    // Verified against tsgo: with the base in `cfg/`, a `../typedefs/x`
-    // entry (resolvable from `cfg/`) is TS2688, while `./typedefs/x`
-    // (resolvable from the entry dir) is clean.
-    let entry_dir = user_tsconfig.parent().unwrap_or(layout.workspace.as_path());
+    // TypeScript resolves a path-shaped entry against the directory of
+    // the ROOT config it compiles — `types` is not one of the options
+    // `extends` rebases — and under svelte-check that root is its overlay
+    // in `.svelte-check/`. Ours sits elsewhere, so path-shaped entries are
+    // re-anchored on svelte-check's overlay directory to resolve (or
+    // fail) exactly where they do there.
     // `typeRoots`, unlike `types`, IS an `isFilePath` option — TS rebases
     // it against the config that declared it during the extends merge, so
     // each entry anchors on its own declaring directory.
     //
-    // We resolve it for two reasons: the `types` filter below has to look
-    // where TS would look, and the resolved value is re-emitted so the
-    // overlay doesn't depend on TS re-deriving it. Re-emitting matters
+    // The resolved value is re-emitted so the overlay doesn't depend on
+    // TS re-deriving it. Re-emitting matters
     // because of `${configDir}`: TS substitutes that placeholder against
     // the ROOT config being compiled, which is our overlay, so an
     // inherited `"${configDir}/typings"` silently became a path inside
@@ -393,50 +376,25 @@ pub fn build(
             compiler_options.insert(key.clone(), value.clone());
         }
     }
-    let user_types: Option<Vec<String>> =
-        svn_core::tsconfig::winning_field(&chain, |f| f.compiler_options.types.as_deref()).map(
-            |(_, list)| {
-                list.iter()
-                    .filter(|t| is_resolvable_types_entry(t, entry_dir, &type_roots))
-                    .map(|t| overlay_types_entry(t, entry_dir))
-                    .collect::<Vec<_>>()
-            },
-        );
-    // Only override the inherited `types` when the user's chain
-    // explicitly set it — leaving it unset means "tsgo loads all
-    // available @types/*", and narrowing that to just sibling entries
-    // would silently hide ambients the user relied on.
-    if let Some(base) = user_types {
-        let mut merged_types = base;
-        for sibling in &sibling_refs {
-            let sibling_dir = sibling.project_dir.as_path();
-            for entry in &sibling.types {
-                // Probed in the SIBLING's own typeRoots: its `types`
-                // entries resolve in its compilation, not the entry
-                // chain's — with none declared, the empty list falls
-                // back to the default node_modules/@types walk-up from
-                // the sibling's directory.
-                if !is_resolvable_types_entry(entry, sibling_dir, &sibling.type_roots) {
-                    continue;
-                }
-                let resolved = overlay_types_entry(entry, sibling_dir);
-                // ...and again from the ENTRY anchor, because the union
-                // is emitted into one merged overlay that tsgo resolves
-                // from the entry program's context. A bare name
-                // satisfied only by the sibling's own node_modules
-                // chain (pnpm keeps transitive packages unhoisted) has
-                // no spelling that resolves here — carrying it verbatim
-                // just makes tsgo fail the entry, so it is dropped.
-                if !is_resolvable_types_entry(&resolved, entry_dir, &type_roots) {
-                    continue;
-                }
-                if merged_types.contains(&resolved) {
-                    continue;
-                }
-                merged_types.push(resolved);
-            }
-        }
-        compiler_options.insert("types".into(), json!(merged_types));
+    //
+    // Without a real `svelte` install our shim declares the `svelte`
+    // modules in its place, so a `svelte` entry is dropped there: it names
+    // exactly the package the shim stands in for.
+    let shim_stands_in = !crate::has_real_svelte(&layout.workspace);
+    let is_svelte_entry = |t: &str| t == "svelte" || t.starts_with("svelte/");
+    if let Some((_, list)) =
+        svn_core::tsconfig::winning_field(&chain, |f| f.compiler_options.types.as_deref())
+        && list
+            .iter()
+            .any(|t| is_filesystem_types_entry(t) || (shim_stands_in && is_svelte_entry(t)))
+    {
+        let anchor = crate::upstream_overlay::cache_dir(&layout.workspace);
+        let types: Vec<String> = list
+            .iter()
+            .filter(|t| !(shim_stands_in && is_svelte_entry(t)))
+            .map(|t| overlay_types_entry(t, &anchor))
+            .collect();
+        compiler_options.insert("types".into(), json!(types));
     }
     if !paths_map.is_empty() {
         compiler_options.insert("paths".into(), Value::Object(paths_map));
@@ -494,38 +452,6 @@ pub fn build(
             }
         }
     }
-    // Sibling-project includes: add each reference's own include
-    // patterns, anchored at the reference's project_dir. Fall back to
-    // `**/*.ts` + `**/*.d.ts` for references that don't declare their
-    // own include (tsc's default when `include` is absent and `files`
-    // is absent). `.svelte` patterns are dropped per the same rule as
-    // the user's own includes. This is the sibling-visibility fix:
-    // without it, a transitive import from the redirect target into a
-    // sibling project fires tsgo's "File not listed within project".
-    for sibling in &sibling_refs {
-        let project_dir = sibling.project_dir.as_path();
-        if sibling.include.is_empty() {
-            for ext in ["ts", "d.ts"] {
-                let glob = format!("{}/**/*.{}", project_dir.to_string_lossy(), ext);
-                if !user_includes.contains(&glob) {
-                    user_includes.push(glob);
-                }
-            }
-        } else {
-            for pat in &sibling.include {
-                let resolved = if Path::new(pat).is_absolute() {
-                    PathBuf::from(pat)
-                } else {
-                    project_dir.join(pat)
-                };
-                let glob = normalize(&resolved).to_string_lossy().into_owned();
-                if !user_includes.contains(&glob) {
-                    user_includes.push(glob);
-                }
-            }
-        }
-    }
-
     // Per-pattern virtual projection. For every workspace-anchored
     // user/sibling include pattern, push a parallel pattern pointing
     // into `<cache>/svelte/` with `.svelte` rewritten to
@@ -551,40 +477,6 @@ pub fn build(
         }
     }
     user_includes.extend(projected);
-    // Baseline catch-all for cache overlays. Required because our
-    // cache lives under `node_modules/.cache/svelte-check-native/`,
-    // and TypeScript's default include scan hardcodes `node_modules`
-    // exclusion. Without an explicit `include` glob into the cache,
-    // overlays NEVER reach the program for tsconfigs that omit
-    // `include` entirely (LS-fixture style: just `compilerOptions`
-    // + `exclude`). Upstream svelte-check sidesteps this — their
-    // cache lives at `<workspace>/.svelte-check/`, outside any
-    // default-excluded path, so default scan finds overlays even
-    // with no `include`. Different cache location is the structural
-    // divergence; this glob is its workaround. Documented as the
-    // third intentional divergence in `notes/PARITY_REFACTOR.md`.
-    //
-    // It is emitted ONLY when the user's chain declares neither
-    // `include` nor `files`, which is exactly the case TypeScript
-    // answers by scanning everything under the config directory. When
-    // they DO declare one, the projection above already covers every
-    // overlay their config admits, and adding the catch-all on top
-    // re-admits the ones it doesn't: a `.svelte` file under an
-    // `exclude`d directory, or outside a narrow `include`, came back
-    // into the program through its `.d.svelte.ts` sidecar and got
-    // type-checked anyway. That inflated both the error count and the
-    // FILES denominator on any project whose include is narrower than
-    // its workspace.
-    let declares_file_set = svn_core::tsconfig::winning_patterns(&chain, |f| f.include.as_deref())
-        .is_some()
-        || svn_core::tsconfig::winning_patterns(&chain, |f| f.files.as_deref()).is_some();
-    if !declares_file_set {
-        let cache_dts_glob = format!("{}/**/*.d.svelte.ts", layout.svelte_dir.to_string_lossy());
-        if !user_includes.contains(&cache_dts_glob) {
-            user_includes.push(cache_dts_glob);
-        }
-    }
-
     // The user's `files`, rebased onto the config that declared them.
     //
     // `files` is replace-on-child, so the array we write shadows theirs
@@ -630,24 +522,6 @@ pub fn build(
         }
     }
 
-    // The entry config's `references` are deliberately NOT emitted
-    // into the overlay, even though upstream's overlay carries them.
-    // With them, tsgo enforces the composite contract on every import
-    // into a referenced project — TS6305 "output file has not been
-    // built" per import when the reference's outputs don't exist,
-    // plus knock-on resolution errors — 75 of them on one real
-    // monorepo bench. Neither upstream engine's OBSERVABLE output
-    // contains any of that: the default engine redirects references
-    // to their sources (language-service behaviour, no output
-    // enforcement), and the --tsgo overlay kills its own run with
-    // TS6379 (`incremental: false` against an inherited `composite`)
-    // before tsgo reports anything. Omitting the graph makes tsgo
-    // treat sibling files admitted by the include-widening below as
-    // ordinary sources — the same source-redirect semantics the
-    // default engine applies, verified against tsgo on the
-    // with/without shapes (composite entry included; the widened
-    // include is what keeps composite's file-list rule satisfied).
-
     let mut overlay = serde_json::Map::new();
     overlay.insert("extends".into(), Value::String(extends_rel));
     overlay.insert("compilerOptions".into(), Value::Object(compiler_options));
@@ -670,26 +544,6 @@ pub fn build(
     // empty `exclude` field in our overlay would clobber the user's
     // inherited exclude with an empty list.
     let mut excludes: Vec<String> = winning_patterns_absolute(&chain, |f| f.exclude.as_deref());
-    // Each sibling reference's own `exclude` patterns, anchored at
-    // that reference's project_dir. Critical for preserving user
-    // intent — app's tsconfig.playwright.json excludes binary
-    // `.ts` files under `./playwright/fixtures/videos/**/*`; without
-    // propagating that, our widened include would pull them in and
-    // fire tsgo "file appears to be binary" errors.
-    for sibling in &sibling_refs {
-        let project_dir = sibling.project_dir.as_path();
-        for pat in &sibling.exclude {
-            let resolved = if Path::new(pat).is_absolute() {
-                PathBuf::from(pat)
-            } else {
-                project_dir.join(pat)
-            };
-            let glob = normalize(&resolved).to_string_lossy().into_owned();
-            if !excludes.contains(&glob) {
-                excludes.push(glob);
-            }
-        }
-    }
     // Project the excludes into the cache tree, the same way includes
     // are projected. Without this counterpart an `exclude` never
     // reached the generated overlays: the pattern named the user's
@@ -727,6 +581,28 @@ pub fn build(
     // full-output diff on the same buildinfo-warm cache).
     if !excludes.is_empty() {
         overlay.insert("exclude".into(), json!(excludes));
+    }
+    // The entry config's own `references` (they are never inherited
+    // through `extends`), as svelte-check's overlay carries them. An
+    // import into a referenced project then resolves to that project's
+    // build output, and an unbuilt one is TS6305 at the import.
+    if let Some(entry) = chain.first()
+        && !entry.references.is_empty()
+    {
+        let dir = entry.config_dir();
+        let references: Vec<Value> = entry
+            .references
+            .iter()
+            .map(|r| {
+                let path = if Path::new(&r.path).is_absolute() {
+                    PathBuf::from(&r.path)
+                } else {
+                    dir.join(&r.path)
+                };
+                json!({ "path": normalize(&path).to_string_lossy() })
+            })
+            .collect();
+        overlay.insert("references".into(), Value::Array(references));
     }
     Value::Object(overlay)
 }
@@ -821,130 +697,17 @@ where
         .collect()
 }
 
-/// True when a `types` entry will resolve under tsgo's lookup rules.
-///
-/// Entries fall into two buckets:
-///
-/// **Filesystem paths** — start with `.`, `..`, or `/`. Must point at an
-/// existing file. tsgo's `types` lookup for relative entries does NOT
-/// add `.d.ts` automatically when the path already includes an
-/// extension, so we test the literal path first and `<path>.d.ts` as a
-/// fallback. This is the narrow case where `types: ["./foo"]` is a
-/// literal file reference.
-///
-/// **Package entries** — everything else. Includes:
-///   - Bare names: `"node"`, `"svelte"`.
-///   - Scoped names: `"@types/foo"`, `"@sveltejs/kit"`.
-///   - Package-subpath entries: `"vite/client"`, `"vitest/globals"`,
-///     `"@sveltejs/kit/types"`. The subpath component is resolved
-///     internally by the package (via its `exports` map,
-///     `typesVersions`, or bundled .d.ts layout) — we don't try to
-///     second-guess which file it lands on. Checking that the package
-///     itself is installed in the workspace's `node_modules` chain is
-///     sufficient; tsgo does the rest.
-///
-/// This filtering exists because SvelteKit's auto-generated
-/// `.svelte-kit/tsconfig.json` declares `types: ["node"]` even when the
-/// host project doesn't actually depend on `@types/node` — without it,
-/// tsgo treats the missing entry as fatal TS2688 and stops emitting
-/// diagnostics for the entire program. The classifier has to keep
-/// genuinely-installed entries (including subpaths like `vite/client`)
-/// or user code loses its ambient types.
-///
-/// `type_roots` is the effective `compilerOptions.typeRoots`, already
-/// absolutised. When the user declares it, it REPLACES the default
-/// `node_modules/@types` walk-up as the place bare entries are looked
-/// for — so a probe that only knows about `node_modules` would classify
-/// a perfectly good entry as dead and drop it. Dropping one entry also
-/// empties the list when it was the only one, and an empty `types` array
-/// suppresses automatic @types inclusion outright, so the cost of a
-/// wrong "unresolvable" verdict is every ambient in the project.
-fn is_resolvable_types_entry(entry: &str, anchor_dir: &Path, type_roots: &[PathBuf]) -> bool {
-    if is_filesystem_types_entry(entry) {
-        let candidate = if Path::new(entry).is_absolute() {
-            PathBuf::from(entry)
-        } else {
-            anchor_dir.join(entry)
-        };
-        if candidate.is_file() {
-            return true;
-        }
-        let mut as_dts = candidate.clone();
-        as_dts.as_mut_os_string().push(".d.ts");
-        return as_dts.is_file();
-    }
-    if type_roots.iter().any(|root| {
-        let candidate = root.join(type_root_lookup_name(entry, root).as_ref());
-        types_package_dir_resolves(&candidate) || {
-            let mut as_dts = candidate.into_os_string();
-            as_dts.push(".d.ts");
-            PathBuf::from(as_dts).is_file()
-        }
-    }) {
-        return true;
-    }
-    // A user-declared `typeRoots` replaces the default lookup, so once
-    // we've missed there, the node_modules probes below would be looking
-    // somewhere TypeScript isn't. Keep them for the unset case only.
-    if !type_roots.is_empty() {
-        return false;
-    }
-    if package_like_types_dir_resolves(entry, anchor_dir) {
-        return true;
-    }
-    let (pkg, _subpath) = split_package_entry(entry);
-    package_types_entry_resolves(pkg, anchor_dir)
-}
-
-/// True when `dir` is a directory TypeScript would accept as a types
-/// package: it ships an `index.d.ts`, or a `package.json` naming the
-/// declaration entry point.
-fn types_package_dir_resolves(dir: &Path) -> bool {
-    dir.join("index.d.ts").is_file() || dir.join("package.json").is_file()
-}
-
-/// The directory name a `types` entry is looked up under within one
-/// typeRoot. TS mangles scoped names — `@scope/pkg` becomes
-/// `scope__pkg`, first separator only — when and only when the root is
-/// a `node_modules/@types` directory (`getCandidateFromTypeRoot`).
-fn type_root_lookup_name<'e>(entry: &'e str, root: &Path) -> std::borrow::Cow<'e, str> {
-    let mut comps = root.components().rev();
-    let is_at_types_root = matches!(
-        (comps.next(), comps.next()),
-        (Some(std::path::Component::Normal(a)), Some(std::path::Component::Normal(b)))
-            if a == "@types" && b == "node_modules"
-    );
-    if is_at_types_root
-        && let Some(scoped) = entry.strip_prefix('@')
-        && scoped.contains('/')
-    {
-        std::borrow::Cow::Owned(scoped.replacen('/', "__", 1))
-    } else {
-        std::borrow::Cow::Borrowed(entry)
-    }
-}
-
-/// Rewrite one surviving `types` entry into the form the overlay
-/// tsconfig must carry.
+/// Rewrite one `types` entry into the form the overlay tsconfig must
+/// carry.
 ///
 /// TypeScript resolves a path-shaped `types` entry (`"./worker.d.ts"`,
 /// `"../shared/globals"`) against the directory of the ROOT config being
-/// compiled. Our overlay tsconfig lives somewhere else entirely —
-/// `<workspace>/node_modules/.cache/svelte-check-native/` (or
-/// `<workspace>/.svelte-check/`) — and, being what tsgo is pointed at, it
-/// IS that root. So copying the entry across verbatim silently repoints
-/// it at the cache directory, where the file doesn't exist. tsgo then
-/// fires a fatal TS2688 ("Cannot find type definition file for ...") and
-/// stops emitting diagnostics for the rest of the program, so every real
-/// error in the project disappears at once.
-///
-/// `anchor_dir` is therefore the directory of the user's entry tsconfig —
-/// the root tsgo would have compiled had we not interposed — which
-/// reproduces the meaning the user wrote wherever the overlay sits.
-/// Package-style entries (`"node"`, `"vite/client"`, `"@types/foo"`) are
-/// left alone: they resolve by walking `node_modules` upwards, and the
-/// cache dir is nested inside the workspace, so that walk still reaches
-/// the same packages.
+/// compiled, so the entry is anchored on `anchor_dir` — the directory of
+/// the root config the entry is meant to be read from. Package-style
+/// entries (`"node"`, `"vite/client"`, `"@types/foo"`) are left alone:
+/// they resolve by walking `node_modules` upwards, and every candidate
+/// overlay directory is nested inside the workspace, so that walk reaches
+/// the same packages. Absolute entries are unambiguous wherever they sit.
 fn overlay_types_entry(entry: &str, anchor_dir: &Path) -> String {
     if !is_filesystem_types_entry(entry) {
         return entry.to_string();
@@ -958,122 +721,12 @@ fn overlay_types_entry(entry: &str, anchor_dir: &Path) -> String {
         .into_owned()
 }
 
-/// True when the entry names a directory under `node_modules` that ships
-/// an `index.d.ts` (or a sibling `.d.ts` of the same name), even though
-/// no `package.json` declares it a package.
-///
-/// Node-style directory resolution finds such a folder, so tsgo accepts
-/// the entry and the `package.json`-based check below would wrongly drop
-/// it. The case that forced this: SvelteKit 3 generates
-/// `node_modules/$app/types/index.d.ts` and puts `"types": ["$app/types"]`
-/// in its generated config, but writes no `package.json` alongside it.
-/// Dropping the entry costs the project its `App.*` interfaces and the
-/// `svelte/elements` augmentation.
-fn package_like_types_dir_resolves(entry: &str, declaring_dir: &Path) -> bool {
-    svn_core::walk_up_dirs(declaring_dir, |dir| {
-        let candidate = dir.join(svn_core::NODE_MODULES_DIR).join(entry);
-        if candidate.join("index.d.ts").is_file() {
-            return Some(());
-        }
-        let mut as_dts = candidate.into_os_string();
-        as_dts.push(".d.ts");
-        if PathBuf::from(as_dts).is_file() {
-            return Some(());
-        }
-        None
-    })
-    .is_some()
-}
-
 /// True when the entry should be treated as a filesystem path rather
 /// than a package spec. Filesystem paths begin with `./`, `../`, or `/`
 /// (POSIX-style absolute). Everything else — bare names, scoped names,
 /// package subpaths — resolves through `node_modules`.
 fn is_filesystem_types_entry(entry: &str) -> bool {
     entry.starts_with('.') || entry.starts_with('/')
-}
-
-/// Split a package-style `types` entry into its package root and the
-/// (possibly empty) subpath.
-///
-/// Examples:
-///   - `"node"` → `("node", "")`
-///   - `"vite/client"` → `("vite", "client")`
-///   - `"vitest/globals"` → `("vitest", "globals")`
-///   - `"@sveltejs/kit"` → `("@sveltejs/kit", "")`
-///   - `"@sveltejs/kit/types"` → `("@sveltejs/kit", "types")`
-///
-/// The package root is always the portion that lives directly under
-/// `node_modules/`: for unscoped packages it's everything before the
-/// first `/`, for scoped packages it's the first two segments.
-fn split_package_entry(entry: &str) -> (&str, &str) {
-    if let Some(rest) = entry.strip_prefix('@') {
-        // Scoped package: @<scope>/<name>[/<subpath>]. Find the second
-        // slash — that marks the boundary between package and subpath.
-        let scope_end = match rest.find('/') {
-            Some(idx) => idx,
-            None => return (entry, ""),
-        };
-        let after_scope = &rest[scope_end + 1..];
-        match after_scope.find('/') {
-            Some(idx) => {
-                let pkg_end = 1 + scope_end + 1 + idx;
-                (&entry[..pkg_end], &entry[pkg_end + 1..])
-            }
-            None => (entry, ""),
-        }
-    } else {
-        match entry.split_once('/') {
-            Some((pkg, sub)) => (pkg, sub),
-            None => (entry, ""),
-        }
-    }
-}
-
-/// True when a package-name `types` entry resolves to either an `@types`
-/// package or a runtime package shipping its own .d.ts files in the
-/// workspace's `node_modules` chain. Walks up from the declaring
-/// tsconfig's directory; first match wins.
-///
-/// pnpm workspace layout: `node_modules/@types/<name>/` often does NOT
-/// exist because pnpm puts peer-dep-only packages under the hoisted
-/// `node_modules/.pnpm/node_modules/@types/<name>/` location instead.
-/// tsgo resolves that path too (via its own node_modules walk), so we
-/// include it in the check to match. Missing this check caused
-/// SvelteKit projects using pnpm to fall through to `types: []` in
-/// our emitted overlay — which suppressed auto-inclusion of the TS
-/// libraries that tsgo relies on for default-export inference, leading
-/// to spurious TS1192 errors on `<Component>.svelte` imports that
-/// sit beside a `<Component>.svelte.ts` mountpoint (Svelte 5 pattern).
-fn package_types_entry_resolves(name: &str, declaring_dir: &Path) -> bool {
-    svn_core::walk_up_dirs(declaring_dir, |dir| {
-        let nm = dir.join(svn_core::NODE_MODULES_DIR);
-        if !nm.is_dir() {
-            return None;
-        }
-        // Conventional types package: node_modules/@types/<name>.
-        if nm.join("@types").join(name).join("package.json").is_file() {
-            return Some(());
-        }
-        // Runtime package shipping its own types: node_modules/<name>.
-        if nm.join(name).join("package.json").is_file() {
-            return Some(());
-        }
-        // pnpm hoisted: node_modules/.pnpm/node_modules/@types/<name>.
-        let pnpm_root = nm.join(".pnpm").join(svn_core::NODE_MODULES_DIR);
-        if pnpm_root.is_dir()
-            && (pnpm_root
-                .join("@types")
-                .join(name)
-                .join("package.json")
-                .is_file()
-                || pnpm_root.join(name).join("package.json").is_file())
-        {
-            return Some(());
-        }
-        None
-    })
-    .is_some()
 }
 
 /// Collapse `..` segments without touching the filesystem. Pure path
@@ -1182,20 +835,21 @@ mod tests {
         let gen_files = vec![PathBuf::from(
             "/projects/app/.svelte-check/svelte/++Index.svelte.ts",
         )];
-        let overlay = build(&layout, &user_ts, &gen_files, &[], None);
+        let overlay = build(&layout, &user_ts, &gen_files, &[], &[], None);
 
         let opts = &overlay["compilerOptions"];
         assert_eq!(opts["noEmit"], json!(true));
         assert_eq!(opts["allowArbitraryExtensions"], json!(true));
-        assert_eq!(opts["incremental"], json!(true));
-        assert!(opts["tsBuildInfoFile"].is_string());
+        // Incremental only under `--incremental`, as upstream.
+        assert_eq!(opts["incremental"], json!(false));
+        assert!(opts.get("tsBuildInfoFile").is_none());
     }
 
     #[test]
     fn build_overlay_extends_user_tsconfig_relatively() {
         let layout = CacheLayout::for_workspace("/projects/app");
         let user_ts = PathBuf::from("/projects/app/tsconfig.json");
-        let overlay = build(&layout, &user_ts, &[], &[], None);
+        let overlay = build(&layout, &user_ts, &[], &[], &[], None);
         // extends should point ../tsconfig.json (overlay is in
         // /projects/app/.svelte-check/, user ts in /projects/app/).
         assert_eq!(overlay["extends"], json!("../tsconfig.json"));
@@ -1209,7 +863,7 @@ mod tests {
             PathBuf::from("/projects/app/.svelte-check/svelte/++A.svelte.ts"),
             PathBuf::from("/projects/app/.svelte-check/svelte/sub/++B.svelte.ts"),
         ];
-        let overlay = build(&layout, &user_ts, &gen_files, &[], None);
+        let overlay = build(&layout, &user_ts, &gen_files, &[], &[], None);
         let files = overlay["files"].as_array().unwrap();
         // 2 generated + 1 svelte-shims.d.ts = 3.
         assert_eq!(files.len(), 3);
@@ -1225,7 +879,7 @@ mod tests {
         // svelte/* modules.
         let layout = CacheLayout::for_workspace("/projects/app");
         let user_ts = PathBuf::from("/projects/app/tsconfig.json");
-        let overlay = build(&layout, &user_ts, &[], &[], None);
+        let overlay = build(&layout, &user_ts, &[], &[], &[], None);
         let files = overlay["files"].as_array().unwrap();
         assert_eq!(files.len(), 1);
         assert!(files[0].as_str().unwrap().ends_with("svelte-shims.d.ts"));
@@ -1283,7 +937,7 @@ mod tests {
         );
 
         let layout = CacheLayout::for_workspace(&ws);
-        let overlay = build(&layout, &user_ts, &[], &[], None);
+        let overlay = build(&layout, &user_ts, &[], &[], &[], None);
 
         let opts = &overlay["compilerOptions"];
         // rootDirs union includes svelte cache, workspace, AND the
@@ -1359,7 +1013,7 @@ mod tests {
         write_file(&user_ts, r#"{ "extends": "../configs/base.json" }"#);
 
         let layout = CacheLayout::for_workspace(&project_dir);
-        let overlay = build(&layout, &user_ts, &[], &[], None);
+        let overlay = build(&layout, &user_ts, &[], &[], &[], None);
 
         let opts = &overlay["compilerOptions"];
 
@@ -1442,7 +1096,7 @@ mod tests {
         write_file(&user_ts, r#"{ "extends": ["./a.json", "./b.json"] }"#);
 
         let layout = CacheLayout::for_workspace(&ws);
-        let overlay = build(&layout, &user_ts, &[], &[], None);
+        let overlay = build(&layout, &user_ts, &[], &[], &[], None);
 
         let paths = overlay["compilerOptions"]["paths"].as_object().unwrap();
         assert!(
@@ -1458,207 +1112,6 @@ mod tests {
     }
 
     #[test]
-    fn build_overlay_flattens_sibling_refs_on_solution_redirect() {
-        // Solution root at /root with references to src/console (the
-        // redirect target) and src/services (a sibling). Services has
-        // its own include/exclude/paths. Overlay built around console
-        // should carry the services' include/exclude/paths so
-        // transitive imports into services don't fire tsgo's "File
-        // not listed within project".
-        let tmp = tempdir().unwrap();
-        let root = tmp.path().canonicalize().unwrap();
-
-        // The redirect target. Declares `../services` in its OWN
-        // references[] — that's how the overlay discovers which
-        // siblings to flatten. Solution root coordinates via its
-        // own references[] (for `tsc -b` ordering) but the overlay
-        // follows the sub-project's declared dependencies, not the
-        // solution root's (pulling every solution-root sibling
-        // would over-include; see overlay.rs comment).
-        write_file(
-            &root.join("src/console/tsconfig.json"),
-            r#"{
-                "compilerOptions": {
-                    "baseUrl": ".",
-                    "paths": { "@": ["./src"] }
-                },
-                "include": ["**/*.ts"],
-                "references": [{ "path": "../services" }]
-            }"#,
-        );
-
-        // The sibling project — referenced from the console config.
-        write_file(
-            &root.join("src/services/tsconfig.json"),
-            r#"{
-                "compilerOptions": {
-                    "baseUrl": ".",
-                    "paths": { "~/*": ["./*"] }
-                },
-                "include": ["**/*.ts"],
-                "exclude": ["fixtures/**/*"]
-            }"#,
-        );
-
-        // Solution root — coordinates via references (mirrors a real
-        // monorepo's `tsc -b` wiring).
-        write_file(
-            &root.join("tsconfig.json"),
-            r#"{
-                "files": [],
-                "references": [
-                    { "path": "./src/console" },
-                    { "path": "./src/services" }
-                ]
-            }"#,
-        );
-
-        let console_dir = root.join("src/console");
-        let console_ts = console_dir.join("tsconfig.json");
-        let layout = CacheLayout::for_workspace_with_solution_root(
-            &console_dir,
-            Some(root.join("tsconfig.json")),
-        );
-        let overlay = build(&layout, &console_ts, &[], &[], None);
-
-        // `include`: the services' `**/*.ts`, anchored at services'
-        // project_dir.
-        let includes: Vec<&str> = overlay["include"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
-        let services_dir = root.join("src/services");
-        let expected_services_include = services_dir.join("**/*.ts").to_string_lossy().into_owned();
-        assert!(
-            includes.iter().any(|v| *v == expected_services_include),
-            "expected sibling-services include {expected_services_include:?}, got {includes:?}",
-        );
-
-        // `exclude`: the services' `fixtures/**/*` resolved absolute.
-        let excludes: Vec<&str> = overlay["exclude"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
-        let expected_services_exclude = services_dir
-            .join("fixtures/**/*")
-            .to_string_lossy()
-            .into_owned();
-        assert!(
-            excludes.iter().any(|v| *v == expected_services_exclude),
-            "expected sibling-services exclude {expected_services_exclude:?}, got {excludes:?}",
-        );
-
-        // `paths`: console's own `@` survives, and services' `~/*` is
-        // NOT merged in. A referenced project's `paths` have no effect
-        // on the project being compiled — TypeScript applies only the
-        // compiling project's own map — so merging them made specifiers
-        // resolve that the compiler reports TS2307 on.
-        //
-        // The sibling include/exclude widening asserted above is a
-        // different mechanism and stays: it keeps a transitive import
-        // into a sibling's SOURCE from tripping "File not listed within
-        // project", without changing how any specifier resolves.
-        let paths = overlay["compilerOptions"]["paths"].as_object().unwrap();
-        assert!(
-            paths.contains_key("@"),
-            "console's @ missing: {:?}",
-            paths.keys().collect::<Vec<_>>()
-        );
-        assert!(
-            !paths.contains_key("~/*"),
-            "services' ~/* must not be merged into console's paths: {:?}",
-            paths.keys().collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn build_overlay_skips_self_reference_in_sibling_flatten() {
-        // The solution root references the redirect target itself.
-        // That reference should be skipped when flattening siblings —
-        // the target's own chain already covers it; re-adding via
-        // flatten would duplicate includes.
-        let tmp = tempdir().unwrap();
-        let root = tmp.path().canonicalize().unwrap();
-
-        write_file(
-            &root.join("app/tsconfig.json"),
-            r#"{ "include": ["src/**/*.ts"] }"#,
-        );
-        write_file(
-            &root.join("tsconfig.json"),
-            r#"{
-                "files": [],
-                "references": [{ "path": "./app" }]
-            }"#,
-        );
-
-        let app_dir = root.join("app");
-        let layout = CacheLayout::for_workspace_with_solution_root(
-            &app_dir,
-            Some(root.join("tsconfig.json")),
-        );
-        let overlay = build(&layout, &app_dir.join("tsconfig.json"), &[], &[], None);
-
-        // `include` should contain the app's own pattern EXACTLY
-        // once (anchored at app_dir via the chain walk).
-        let includes: Vec<&str> = overlay["include"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
-        let own_include = app_dir.join("src/**/*.ts").to_string_lossy().into_owned();
-        let matches = includes.iter().filter(|v| **v == own_include).count();
-        assert_eq!(
-            matches, 1,
-            "self-reference should not duplicate the include; got {includes:?}",
-        );
-    }
-
-    #[test]
-    fn split_package_entry_unscoped_bare_name() {
-        assert_eq!(split_package_entry("node"), ("node", ""));
-    }
-
-    #[test]
-    fn split_package_entry_unscoped_subpath() {
-        assert_eq!(split_package_entry("vite/client"), ("vite", "client"));
-        assert_eq!(split_package_entry("vitest/globals"), ("vitest", "globals"),);
-        assert_eq!(
-            split_package_entry("swiper/css/navigation"),
-            ("swiper", "css/navigation"),
-        );
-    }
-
-    #[test]
-    fn split_package_entry_scoped_bare_name() {
-        assert_eq!(split_package_entry("@sveltejs/kit"), ("@sveltejs/kit", ""),);
-    }
-
-    #[test]
-    fn split_package_entry_scoped_subpath() {
-        assert_eq!(
-            split_package_entry("@sveltejs/kit/types"),
-            ("@sveltejs/kit", "types"),
-        );
-        assert_eq!(
-            split_package_entry("@types/node/fs/promises"),
-            ("@types/node", "fs/promises"),
-        );
-    }
-
-    #[test]
-    fn split_package_entry_malformed_scoped_stays_whole() {
-        // A bare `@scope` with no slash has no package root to split from.
-        // Return it unchanged rather than crash.
-        assert_eq!(split_package_entry("@scope"), ("@scope", ""));
-    }
-
-    #[test]
     fn is_filesystem_types_entry_picks_relative_and_absolute() {
         assert!(is_filesystem_types_entry("./foo"));
         assert!(is_filesystem_types_entry("../foo/bar.d.ts"));
@@ -1668,78 +1121,7 @@ mod tests {
         assert!(!is_filesystem_types_entry("@scope/pkg/sub"));
     }
 
-    #[test]
-    fn is_resolvable_types_entry_keeps_installed_package_subpath() {
-        // Repro of the real bug: a tsconfig declares `types: ["vite/client"]`
-        // and `node_modules/vite/package.json` exists. Pre-fix the entry
-        // was classified as a relative filesystem path, not found on
-        // disk, and silently dropped — which erased the ambient types
-        // user code depends on (`import.meta.env`, CSS module imports).
-        let tmp = tempfile::tempdir().unwrap();
-        let pkg = tmp.path().join("node_modules").join("vite");
-        std::fs::create_dir_all(&pkg).unwrap();
-        std::fs::write(pkg.join("package.json"), "{}").unwrap();
-        assert!(is_resolvable_types_entry("vite/client", tmp.path(), &[]));
-        assert!(is_resolvable_types_entry("vite", tmp.path(), &[]));
-    }
-
-    #[test]
-    fn is_resolvable_types_entry_keeps_installed_scoped_subpath() {
-        let tmp = tempfile::tempdir().unwrap();
-        let pkg = tmp
-            .path()
-            .join("node_modules")
-            .join("@sveltejs")
-            .join("kit");
-        std::fs::create_dir_all(&pkg).unwrap();
-        std::fs::write(pkg.join("package.json"), "{}").unwrap();
-        assert!(is_resolvable_types_entry(
-            "@sveltejs/kit/types",
-            tmp.path(),
-            &[]
-        ));
-    }
-
-    /// SvelteKit 3 writes `node_modules/$app/types/index.d.ts` and
-    /// declares `types: ["$app/types"]`, but never writes a
-    /// `package.json` beside it. Node-style directory resolution still
-    /// finds it, so tsgo accepts the entry — dropping it would cost the
-    /// project its `App.*` interfaces and `svelte/elements` augmentation.
-    #[test]
-    fn is_resolvable_types_entry_keeps_generated_dir_without_package_json() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("node_modules").join("$app").join("types");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("index.d.ts"), "export {};").unwrap();
-        assert!(is_resolvable_types_entry("$app/types", tmp.path(), &[]));
-    }
-
-    #[test]
-    fn is_resolvable_types_entry_drops_uninstalled_package() {
-        // The filtering's whole point: SvelteKit writes `types: ["node"]`
-        // into `.svelte-kit/tsconfig.json` even when @types/node isn't
-        // installed; if we kept it tsgo would fire fatal TS2688 and zero
-        // our error count. Same applies to uninstalled subpaths.
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join("node_modules")).unwrap();
-        assert!(!is_resolvable_types_entry("node", tmp.path(), &[]));
-        assert!(!is_resolvable_types_entry("vite/client", tmp.path(), &[]));
-    }
-
-    #[test]
-    fn is_resolvable_types_entry_keeps_relative_dts() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dts = tmp.path().join("types.d.ts");
-        std::fs::write(&dts, "").unwrap();
-        assert!(is_resolvable_types_entry("./types.d.ts", tmp.path(), &[]));
-        // Extensionless form also accepted (tsgo appends .d.ts).
-        assert!(is_resolvable_types_entry("./types", tmp.path(), &[]));
-    }
-
-    /// The overlay tsconfig lives in a cache directory, not beside the
-    /// user's tsconfig, and it is the root tsgo compiles — so a relative
-    /// entry copied across verbatim anchors on the cache dir and fatally
-    /// TS2688s. The anchor passed here is the user's entry-config dir.
+    /// A relative entry is anchored on the directory passed in.
     #[test]
     fn overlay_types_entry_absolutises_relative_paths() {
         let dir = Path::new("/proj/apps/dash");
@@ -1767,53 +1149,5 @@ mod tests {
             overlay_types_entry("/abs/globals.d.ts", dir),
             "/abs/globals.d.ts"
         );
-    }
-
-    /// A user-declared `typeRoots` is where TS looks for bare entries.
-    /// Probing only `node_modules` classified these as dead and dropped
-    /// them, emptying `types` and taking every ambient with it.
-    #[test]
-    fn is_resolvable_types_entry_honours_declared_type_roots() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("typings");
-        let pkg = root.join("globals");
-        std::fs::create_dir_all(&pkg).unwrap();
-        std::fs::write(pkg.join("index.d.ts"), "declare const G: string;").unwrap();
-        // Sibling `.d.ts` form, no directory.
-        std::fs::write(root.join("flat.d.ts"), "declare const F: string;").unwrap();
-        let roots = vec![root];
-
-        assert!(is_resolvable_types_entry("globals", tmp.path(), &roots));
-        assert!(is_resolvable_types_entry("flat", tmp.path(), &roots));
-        assert!(!is_resolvable_types_entry("absent", tmp.path(), &roots));
-        // Without the typeRoots the same entry is correctly unresolvable.
-        assert!(!is_resolvable_types_entry("globals", tmp.path(), &[]));
-    }
-
-    /// A declared `typeRoots` REPLACES the default `node_modules/@types`
-    /// lookup, so an installed package that isn't under one of the roots
-    /// is genuinely unresolvable — keeping it would re-introduce the
-    /// fatal TS2688 the filter exists to prevent.
-    #[test]
-    fn is_resolvable_types_entry_declared_type_roots_replace_node_modules() {
-        let tmp = tempfile::tempdir().unwrap();
-        let pkg = tmp.path().join("node_modules").join("@types").join("node");
-        std::fs::create_dir_all(&pkg).unwrap();
-        std::fs::write(pkg.join("package.json"), "{}").unwrap();
-        let root = tmp.path().join("typings");
-        std::fs::create_dir_all(&root).unwrap();
-
-        assert!(is_resolvable_types_entry("node", tmp.path(), &[]));
-        assert!(!is_resolvable_types_entry("node", tmp.path(), &[root]));
-    }
-
-    #[test]
-    fn is_resolvable_types_entry_drops_missing_relative_file() {
-        let tmp = tempfile::tempdir().unwrap();
-        assert!(!is_resolvable_types_entry(
-            "./does-not-exist",
-            tmp.path(),
-            &[]
-        ));
     }
 }

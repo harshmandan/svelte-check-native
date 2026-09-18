@@ -1,4 +1,4 @@
-//! `{#await}` then-branch and the `{:then}` / `{:catch}` branch helper.
+//! `{#await}` blocks.
 //!
 //! Mirrors upstream svelte2tsx's
 //! `language-tools/packages/svelte2tsx/src/htmlxtojsx_v2/nodes/AwaitPendingCatchBlock.ts`.
@@ -6,166 +6,28 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
-use svn_parser::Fragment;
-
 use crate::emit_buffer::EmitBuffer;
-use crate::{emit_template_body, pattern_binding_names};
+use crate::emit_template_body;
 
-/// Walk `{:then v}` / `{:catch e}` body in a fresh lexical scope that
-/// declares the branch's context binding as `any`. Without the
-/// declaration, references to the bound name inside the branch (a
-/// component-prop check that passes `v` as a prop, a subsequent
-/// `{#each v as item}`) fire TS2304.
-///
-/// Supports destructure patterns (`{:then { a, b }}`, `{:then [x]}`)
-/// via `pattern_binding_names`. An absent context range (`{:then}` with no
-/// binding) skips the scope and just walks the body inline.
-pub(crate) fn emit_branch_with_binding(
-    buf: &mut EmitBuffer,
-    source: &str,
-    context_range: Option<&svn_core::Range>,
-    body: &Fragment,
-    depth: usize,
-    insts: &HashMap<u32, &svn_analyze::ComponentInstantiation>,
-    action_counter: &mut usize,
-) {
-    let Some(range) = context_range else {
-        emit_template_body(buf, source, body, depth, insts, action_counter);
-        return;
-    };
-    let binding_text = source
-        .get(range.start as usize..range.end as usize)
-        .unwrap_or("")
-        .trim();
-    if binding_text.is_empty() {
-        emit_template_body(buf, source, body, depth, insts, action_counter);
-        return;
-    }
-    let idents = pattern_binding_names(binding_text);
-    let indent = "    ".repeat(depth);
-    let _ = writeln!(buf, "{indent}{{");
-    // Upstream binds the catch error as `const <err> = __sveltets_2_any();`
-    // (AwaitPendingCatchBlock.ts:64) — no annotation, identical in JS/TS. The
-    // old JS path `= undefined` inferred type `undefined`, so any property
-    // access on the binding fired a spurious diagnostic in `.svelte.js` files.
-    // The pattern is spliced as written, so a computed key (`{ [k]: v }`)
-    // keeps its reference to `k`.
-    let _ = writeln!(buf, "{indent}    const {binding_text} = __svn_any();");
-    emit_template_body(buf, source, body, depth + 1, insts, action_counter);
-    for ident in &idents {
-        let _ = writeln!(buf, "{indent}    void {ident};");
-    }
-    let _ = writeln!(buf, "{indent}}}");
-}
-
-/// Emit `{:then v}` branch with upstream's await-binding shape:
+/// Emit `{#await PROMISE}…{:then v}…{:catch e}…{/await}` the way
+/// `handleAwait` does:
 ///
 /// ```text
-///     { const $$_promise = (PROMISE_EXPR);
-///     const $$_await = await $$_promise; const v = $$_await;
-///     ...body... }
+/// {
+///     …pending…
+///     try {
+///         const $$_value = await (PROMISE);
+///         { const v = $$_value; …then… }
+///     } catch($$_e) { const e = __svn_any(); …catch… }
+/// }
 /// ```
 ///
-/// so `v`'s type flows from the promise's resolved value (matches
-/// upstream svelte2tsx's `AwaitPendingCatchBlock.ts`). The `await` is
-/// emitted INLINE — no wrapping closure — so control-flow narrowing
-/// from enclosing template blocks (`{#if changelog}` around
-/// `{#await changelog.page}`) survives into the branch body; a
-/// closure here re-widened reassigned `let`s and fired TS18048 on
-/// accesses upstream accepts. The async context comes from the
-/// surroundings, exactly as upstream arranges it: the render function
-/// is `async`, and snippet bodies open their own inner `async () =>`
-/// wrapper (see `snippet_block.rs`, mirroring upstream
-/// `SnippetBlock.ts`'s "inner async function for potential #await
-/// blocks").
-///
-/// For `{:then {a, b, c}}` destructure patterns the binding text is
-/// emitted verbatim as the destructure target.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn emit_await_then_branch(
-    buf: &mut EmitBuffer,
-    source: &str,
-    promise_range: svn_core::Range,
-    context_range: Option<&svn_core::Range>,
-    body: &Fragment,
-    depth: usize,
-    insts: &HashMap<u32, &svn_analyze::ComponentInstantiation>,
-    action_counter: &mut usize,
-) {
-    let promise_text = source
-        .get(promise_range.start as usize..promise_range.end as usize)
-        .unwrap_or("")
-        .trim();
-    if promise_text.is_empty() {
-        emit_branch_with_binding(
-            buf,
-            source,
-            context_range,
-            body,
-            depth,
-            insts,
-            action_counter,
-        );
-        return;
-    }
-    let indent = "    ".repeat(depth);
-    let inner = "    ".repeat(depth + 1);
-    let binding_text = context_range
-        .and_then(|r| source.get(r.start as usize..r.end as usize))
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-
-    // Capture the promise expression BEFORE entering the async
-    // arrow. TS resets control-flow narrowing at function-expression
-    // boundaries — `{#await currentActiveSlide.videoUrl then v}`
-    // inside `{#if currentActiveSlide.videoUrl}` would otherwise see
-    // the property re-widened inside the arrow, and `await` would
-    // resolve to `Awaited<T | undefined>` instead of `T`. Pre-
-    // capturing as `$$_promise` keeps the narrowed type alive across
-    // the arrow boundary. The arrow itself is necessary because
-    // `{#await}` may appear inside a sync snippet/slot callback
-    // where bare `await` would fire TS1308.
-    // Splice the promise expression via `append_with_source` so a
-    // diagnostic firing INSIDE it (e.g. TS18047 "X is possibly null"
-    // on a not-narrowed identifier inside `{#await EXPR then v}`)
-    // reverse-maps onto the user's source position. Pre-fix the
-    // expression went through plain string formatting, so its overlay
-    // bytes had no token-map coverage and the diagnostic mapper
-    // dropped it as synth scaffolding.
-    let _ = write!(buf, "{indent}{{ const $$_promise = (");
-    buf.append_with_source(promise_text, promise_range);
-    buf.push_str(");\n");
-    match binding_text {
-        Some(bind) => {
-            let idents = pattern_binding_names(bind);
-            let _ = writeln!(
-                buf,
-                "{inner}const $$_await = await $$_promise; const {bind} = $$_await;"
-            );
-            emit_template_body(buf, source, body, depth + 1, insts, action_counter);
-            for ident in &idents {
-                let _ = writeln!(buf, "{inner}void {ident};");
-            }
-        }
-        None => {
-            let _ = writeln!(
-                buf,
-                "{inner}const $$_await = await $$_promise; void $$_await;"
-            );
-            emit_template_body(buf, source, body, depth + 1, insts, action_counter);
-        }
-    }
-    let _ = writeln!(buf, "{indent}}}");
-}
-
-/// Dispatch a full `{#await PROMISE}…{:then v}…{:catch e}…{/await}`
-/// block: walk the pending body inline (no binding), then the
-/// `{:then}` branch with the await-binding shape, then `{:catch}`
-/// with the plain branch-binding helper.
-///
-/// Errors don't carry shape info in JS, so the catch's binding is
-/// typed via the plain `const e: any = undefined;` shape rather
-/// than the `await`-resolved-value shape used for `{:then}`.
+/// The `try` appears only with a `{:catch}`, `$$_value` only with a
+/// `then` binding. The `await` is inline — no wrapping closure — so
+/// narrowing from enclosing blocks survives into the branches; the
+/// async context comes from the render function and snippet bodies.
+/// The `then` body is emitted when the block has no pending body, or
+/// when the `{:then}` branch has children.
 pub(crate) fn emit_await_block(
     buf: &mut EmitBuffer,
     source: &str,
@@ -174,35 +36,76 @@ pub(crate) fn emit_await_block(
     insts: &HashMap<u32, &svn_analyze::ComponentInstantiation>,
     action_counter: &mut usize,
 ) {
-    if let Some(p) = &b.pending {
-        emit_template_body(buf, source, p, depth, insts, action_counter);
-    }
-    // Upstream always emits `await (EXPR);` — with no `{:then}` the
-    // promise expression is still a read of whatever it names.
-    let empty = Fragment::default();
-    let (context_range, then_body) = match &b.then_branch {
-        Some(t) => (t.context_range.as_ref(), &t.body),
-        None => (None, &empty),
+    let indent = "    ".repeat(depth);
+    let inner = "    ".repeat(depth + 1);
+    let binding = |range: Option<&svn_core::Range>| {
+        range.and_then(|r| {
+            let raw = source.get(r.start as usize..r.end as usize)?;
+            let text = raw.trim();
+            (!text.is_empty()).then(|| {
+                let start = r.start + (raw.len() - raw.trim_start().len()) as u32;
+                (text, svn_core::Range::new(start, start + text.len() as u32))
+            })
+        })
     };
-    emit_await_then_branch(
-        buf,
-        source,
-        b.expression_range,
-        context_range,
-        then_body,
-        depth,
-        insts,
-        action_counter,
+    let value = binding(
+        b.then_branch
+            .as_ref()
+            .and_then(|t| t.context_range.as_ref()),
     );
-    if let Some(c) = &b.catch_branch {
-        emit_branch_with_binding(
-            buf,
-            source,
-            c.context_range.as_ref(),
-            &c.body,
-            depth,
-            insts,
-            action_counter,
-        );
+    let error = binding(
+        b.catch_branch
+            .as_ref()
+            .and_then(|c| c.context_range.as_ref()),
+    );
+    let has_catch = b.catch_branch.is_some();
+
+    let _ = writeln!(buf, "{indent}{{");
+    if let Some(p) = &b.pending {
+        emit_template_body(buf, source, p, depth + 1, insts, action_counter);
     }
+    buf.push_str(&inner);
+    if has_catch {
+        buf.push_str("try { ");
+    }
+    if value.is_some() {
+        buf.push_str("const $$_value = ");
+    }
+    buf.push_str("await (");
+    let promise_raw = source
+        .get(b.expression_range.start as usize..b.expression_range.end as usize)
+        .unwrap_or("");
+    let promise = promise_raw.trim();
+    let promise_start =
+        b.expression_range.start + (promise_raw.len() - promise_raw.trim_start().len()) as u32;
+    buf.append_with_source(
+        promise,
+        svn_core::Range::new(promise_start, promise_start + promise.len() as u32),
+    );
+    buf.push_str(");\n");
+    if let Some((text, range)) = value {
+        let _ = write!(buf, "{inner}{{ const ");
+        buf.append_with_source(text, range);
+        buf.push_str(" = $$_value;\n");
+    }
+    if let Some(t) = &b.then_branch
+        && (b.pending.is_none() || !t.body.nodes.is_empty())
+    {
+        emit_template_body(buf, source, &t.body, depth + 1, insts, action_counter);
+    }
+    if value.is_some() {
+        let _ = writeln!(buf, "{inner}}}");
+    }
+    if let Some(c) = &b.catch_branch {
+        let _ = write!(buf, "{inner}}} catch ($$_e) {{");
+        if let Some((text, range)) = error {
+            buf.push_str(" const ");
+            buf.append_with_source(text, range);
+            buf.push_str(" = __svn_any();");
+        }
+        buf.push('\n');
+        emit_template_body(buf, source, &c.body, depth + 1, insts, action_counter);
+        let _ = writeln!(buf, "{inner}}}");
+    }
+    let _ = writeln!(buf, "{indent}}}");
 }

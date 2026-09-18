@@ -1,16 +1,7 @@
 //! `{#snippet}` analyze pass — mirrors upstream
-//! `htmlxtojsx_v2/nodes/SnippetBlock.ts`. Also handles the `Fragment`
-//! scope-bracket case: both push bindings as unresolvable (`None`)
-//! since they share the "no upstream-equivalent slot resolution"
-//! shape — Fragment scopes don't declare any bindings anyway.
-
-use crate::template_scope::BoundIdent;
-use crate::walker::AnalyzeVisitor;
-
-/// Push each binding as unresolved (`None`). Used by both the
-/// Snippet and Fragment scope arms of `enter_scope`.
-pub(crate) fn enter_unresolved(v: &mut AnalyzeVisitor<'_>, bindings: &[BoundIdent]) {
-    for b in bindings {
-        v.shadow.entries.push((b.name.clone(), None));
-    }
-}
+//! `htmlxtojsx_v2/nodes/SnippetBlock.ts`.
+//!
+//! Nothing to record: svelte2tsx's slot resolver (`slot.ts`) does not
+//! track snippet parameters, so a `<slot>` attribute naming one keeps
+//! the name as written. The walker's `enter_scope` therefore pushes no
+//! resolver entries for the snippet scope.

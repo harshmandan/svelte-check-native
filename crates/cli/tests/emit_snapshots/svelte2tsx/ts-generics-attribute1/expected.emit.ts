@@ -15,18 +15,18 @@ function $$render_e40e2c10<A, B extends keyof A, C extends boolean>() {
            function getA() {
         return a;
     }
+    const __svn_create_slot = __svn_create_create_slot();
     ;(async () => {
         // template type-check body (incremental)
-        const __svn_create_slot = __svn_create_create_slot();
         {
-            __svn_create_slot("default", { c: c });
+            __svn_create_slot("default", { c });
         }
     });
     void a;
     void b;
     void c;
     void getA;
-    return { props: undefined as any as ({ a: A; b: B; c: C; getA?: typeof getA; }), events: undefined as any as $$Events, slots: { 'default': { c: (c) } }, bindings: undefined as any as string, exports: undefined as any as ({ a: A; b: B; c: C; getA: typeof getA; }) };
+    return { props: undefined as any as ({ a: A; b: B; c: C; getA?: typeof getA; }), events: undefined as any as $$Events, slots: { 'default': { c: (c) } }, bindings: undefined as any as string, exports: undefined as any as ({ getA: typeof getA; }) };
 }
 $$render_e40e2c10;
 declare class __svn_Render_e40e2c10<A, B extends keyof A, C extends boolean> {
@@ -38,7 +38,7 @@ declare class __svn_Render_e40e2c10<A, B extends keyof A, C extends boolean> {
 }
 interface $$IsomorphicComponent {
     new <A, B extends keyof A, C extends boolean>(options: import('svelte').ComponentConstructorOptions<__SvnSvelte4SlotedProps<ReturnType<__svn_Render_e40e2c10<A, B, C>['props']>, ReturnType<__svn_Render_e40e2c10<A, B, C>['props']>>>): import('svelte').SvelteComponent<ReturnType<__svn_Render_e40e2c10<A, B, C>['props']>, ReturnType<__svn_Render_e40e2c10<A, B, C>['events']>, ReturnType<__svn_Render_e40e2c10<A, B, C>['slots']>> & { $$bindings?: ReturnType<__svn_Render_e40e2c10<A, B, C>['bindings']> } & ReturnType<__svn_Render_e40e2c10<A, B, C>['exports']>;
-    <A, B extends keyof A, C extends boolean>(internal: unknown, props: __SvnSvelte4SlotedProps<ReturnType<__svn_Render_e40e2c10<A, B, C>['props']>, ReturnType<__svn_Render_e40e2c10<A, B, C>['props']>>): ReturnType<__svn_Render_e40e2c10<A, B, C>['exports']> & { $set?: any; $on?: any };
+    <A, B extends keyof A, C extends boolean>(internal: unknown, props: __SvnSvelte4SlotedProps<ReturnType<__svn_Render_e40e2c10<A, B, C>['props']>, ReturnType<__svn_Render_e40e2c10<A, B, C>['props']>> extends Record<string, never> ? { $$events?: ReturnType<__svn_Render_e40e2c10<A, B, C>['events']>; $$slots?: ReturnType<__svn_Render_e40e2c10<A, B, C>['slots']> } : __SvnSvelte4SlotedProps<ReturnType<__svn_Render_e40e2c10<A, B, C>['props']>, ReturnType<__svn_Render_e40e2c10<A, B, C>['props']>> & { $$events?: ReturnType<__svn_Render_e40e2c10<A, B, C>['events']>; $$slots?: ReturnType<__svn_Render_e40e2c10<A, B, C>['slots']> }): ReturnType<__svn_Render_e40e2c10<A, B, C>['exports']> & { $set?: any; $on?: any };
     z_$$bindings?: ReturnType<__svn_Render_e40e2c10<any, any, any>['bindings']>;
 }
 const __svn_component_default: $$IsomorphicComponent & { readonly __svn_events: Awaited<ReturnType<typeof $$render_e40e2c10>>['events'] } = null as any;

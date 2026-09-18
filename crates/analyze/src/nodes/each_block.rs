@@ -3,7 +3,7 @@
 
 use crate::nodes::destructure::{destructured_value, resolve_template_expression};
 use crate::template_scope::BoundIdent;
-use crate::walker::{AnalyzeVisitor, ResolvedSlotExpr};
+use crate::walker::AnalyzeVisitor;
 
 pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, b: &svn_parser::EachBlock) {
     v.summary.each_block_count += 1;
@@ -36,15 +36,12 @@ pub(crate) fn enter(v: &mut AnalyzeVisitor<'_>, bindings: &[BoundIdent], has_ind
         .and_then(|r| v.source.get(r.start as usize..r.end as usize))
         .and_then(|items| resolve_template_expression(items, &v.shadow))
         .map(|items| format!("__svn_unwrap_arr({items})"));
-    for (i, b) in bindings.iter().enumerate() {
-        let resolved = if has_index && i == context_count {
-            // Index — always `number`.
-            Some(ResolvedSlotExpr::Type("number".to_string()))
-        } else {
-            items_value
-                .as_deref()
-                .map(|value| destructured_value(v.source, b, value))
-        };
+    // The index is not tracked (svelte2tsx resolves only the context),
+    // so a `<slot>` attribute naming it keeps the name as written.
+    for b in &bindings[..context_count] {
+        let resolved = items_value
+            .as_deref()
+            .map(|value| destructured_value(v.source, b, value));
         v.shadow.entries.push((b.name.clone(), resolved));
     }
 }

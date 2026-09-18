@@ -11,10 +11,14 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         ;(item.id);
-        { svelteHTML.createElement("p", {});             (item.id);
+        {
+            { svelteHTML.createElement("p", {});                 item.id;
+            }
         }
         ;(undefinedFoo);
-        { svelteHTML.createElement("p", {});         }
+        {
+            { svelteHTML.createElement("p", {});             }
+        }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }

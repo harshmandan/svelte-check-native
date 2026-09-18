@@ -1,3 +1,17 @@
 {
-    "clean": true
+    "errors": [
+        {
+            "file": "Component.svelte",
+            "line": 20,
+            "column": 14,
+            "code": 7006
+        },
+        {
+            "file": "Component.svelte",
+            "line": 20,
+            "column": 21,
+            "code": 7006
+        }
+    ],
+    "_note": "svelte-check types <svelte:boundary> through the svelteHTML catch-all ({ [name: string]: any }), since svelte2tsx's JSX typings have no svelte:boundary entry: its attributes and snippet props are not checked against svelte/elements, and snippet parameters are implicitly any. Verified against svelte-check --tsgo."
 }

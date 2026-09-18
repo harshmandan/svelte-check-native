@@ -1,0 +1,4 @@
+{
+  "bucket": "tsgo-divergence",
+  "reason": "the language server skips a `<script lang=\"coffee\">` body, but svelte-check --tsgo converts it like any script and reports its syntax errors; we follow --tsgo"
+}

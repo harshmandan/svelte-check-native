@@ -19,7 +19,8 @@
 'use strict';
 
 const { execFileSync } = require('child_process');
-const { readdirSync, readFileSync, statSync, rmSync, existsSync } = require('fs');
+const { readdirSync, readFileSync, statSync, rmSync, existsSync, mkdtempSync, writeFileSync } = require('fs');
+const os = require('os');
 const path = require('path');
 
 const BIN = process.env.SVELTE_CHECK_BIN;
@@ -160,7 +161,22 @@ function runBinary(fixtureDir) {
     rmSync(path.join(fixtureDir, '.svelte-kit'), { recursive: true, force: true });
 
     const fixtureTsconfig = path.join(fixtureDir, 'tsconfig.json');
-    const tsconfig = existsSync(fixtureTsconfig) ? fixtureTsconfig : SHARED_TSCONFIG;
+    const projectTsconfig = existsSync(fixtureTsconfig) ? fixtureTsconfig : SHARED_TSCONFIG;
+    // The language server checks the document it opens whatever the
+    // project's file set is, but these tsconfigs declare no `include`,
+    // and a `--tsgo` run then checks nothing (its overlay's own `files`
+    // list switches the compiler's default scan off). A wrapper config
+    // that extends the fixture's and includes the fixture directory
+    // reproduces the language server's view.
+    const wrapperDir = mkdtempSync(path.join(os.tmpdir(), 'svn-ls-fixture-'));
+    const tsconfig = path.join(wrapperDir, 'tsconfig.json');
+    writeFileSync(
+        tsconfig,
+        JSON.stringify({
+            extends: projectTsconfig,
+            include: [path.join(fixtureDir, '**/*')],
+        }),
+    );
 
     const args = [
         '--workspace', fixtureDir,
@@ -188,6 +204,7 @@ function runBinary(fixtureDir) {
         stdout = err.stdout || '';
         if (!stdout) crashed = err;
     }
+    rmSync(wrapperDir, { recursive: true, force: true });
     if (crashed) {
         return {
             crash: `signal=${crashed.signal} status=${crashed.status} msg=${crashed.message}`,

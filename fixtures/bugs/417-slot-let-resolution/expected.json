@@ -1,0 +1,65 @@
+{
+    "errors": [
+        {
+            "file": "src/Fwd.svelte",
+            "line": 11,
+            "column": 11,
+            "code": 2353
+        },
+        {
+            "file": "src/Fwd.svelte",
+            "line": 11,
+            "column": 37,
+            "code": 18004
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 1,
+            "column": 40,
+            "code": 2339
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 2,
+            "column": 36,
+            "code": 2339
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 3,
+            "column": 37,
+            "code": 2339
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 3,
+            "column": 46,
+            "code": 2339
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 6,
+            "column": 35,
+            "code": 2339
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 7,
+            "column": 36,
+            "code": 2339
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 9,
+            "column": 37,
+            "code": 2339
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 10,
+            "column": 44,
+            "code": 2339
+        }
+    ],
+    "_note": "Forwarded slot props follow svelte2tsx's slot resolver. A component's own `let:` names, and those of its direct children that name a slot, resolve at value level to `__sveltets_2_instanceOf(Comp).$$slot_def['slot'].name` (a destructured leaf through `((PATTERN) => leaf)(...)`) for any component, dotted names included, and to `any` under `<svelte:component>`. Only plain identifiers directly inside the destructure are resolved; nested patterns, defaults, each indexes, snippet parameters, `{@const}` names and `let:` on plain elements keep their names as written. A `let:` on an element outside any component is an ordinary attribute (TS2353) that declares nothing (TS18004), and an object spread in a resolved `let:` makes svelte2tsx throw, dropping the file (Spread.svelte)."
+}

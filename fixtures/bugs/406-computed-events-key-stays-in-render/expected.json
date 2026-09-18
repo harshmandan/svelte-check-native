@@ -1,0 +1,4 @@
+{
+    "errors": [],
+    "_note": "A declared `$$Events` stays in the render function beside the `const` its computed key reads (nothing is hoisted without a typed `$props()`), and the default export reads the events through the render function's return type, so neither the component nor its consumer reports anything. Verified against svelte-check --tsgo."
+}

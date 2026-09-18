@@ -25,7 +25,6 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use crate::emit_buffer::EmitBuffer;
-use crate::emit_is_ts;
 use crate::nodes::action::{
     emit_dom_action_decls, emit_dom_action_void_refs, emit_use_directives_inline_legacy,
 };
@@ -97,7 +96,7 @@ pub(crate) fn emit_element_node(
     // declaration lives at the top of the template-check fn body
     // (`emit_template_check_fn`) gated on
     // `fragment_contains_slot`.
-    if e.name.as_str() == "slot" && emit_is_ts() {
+    if e.name.as_str() == "slot" {
         emit_slot_check(buf, source, e, depth);
     }
     // Action declarations emitted BEFORE createElement so the
@@ -119,6 +118,7 @@ pub(crate) fn emit_element_node(
         emit_dom_element_open(
             buf,
             source,
+            e.range.start,
             e.name.as_str(),
             true,
             &e.attributes,
@@ -225,11 +225,8 @@ pub(crate) fn emit_svelte_element_node(
         // the hoist signal and named-slot child consumers got
         // dropped (their let-names became undeclared inside the
         // child walk).
-        let any_child_consumes_slot_let = s
-            .children
-            .nodes
-            .iter()
-            .any(|n| crate::nodes::let_directive::child_is_slot_let_consumer(source, n));
+        let any_child_consumes_slot_let =
+            crate::nodes::let_directive::fragment_has_slot_let_consumer(source, &s.children);
         crate::nodes::inline_component::emit_component_call(
             buf,
             source,
@@ -247,6 +244,7 @@ pub(crate) fn emit_svelte_element_node(
             let dest_depth = child_depth + 1;
             crate::nodes::let_directive::emit_let_slot_destructure(
                 buf,
+                source,
                 inst,
                 &let_destructures,
                 "default",
@@ -285,8 +283,24 @@ pub(crate) fn emit_svelte_element_node(
     }
     let dom_emit = dom_element_emit_enabled();
     let inner_depth = if dom_emit { depth + 1 } else { depth };
+    // The tag a `use:` / `transition:` / `animate:` directive sees as its
+    // element, as upstream's `Element` computes it: `<svelte:body>` is
+    // the document body, every other special element keeps its own
+    // `svelte:*` name, which types the element as `any`.
+    let directive_tag = if matches!(s.kind, SvelteElementKind::Body) {
+        "body".to_string()
+    } else {
+        format!("svelte:{}", s.kind.as_str())
+    };
     let action_indices = if dom_emit {
-        emit_dom_action_decls(buf, source, "", &s.attributes, inner_depth, action_counter)
+        emit_dom_action_decls(
+            buf,
+            source,
+            &directive_tag,
+            &s.attributes,
+            inner_depth,
+            action_counter,
+        )
     } else {
         let first = *action_counter;
         first..first
@@ -329,6 +343,7 @@ pub(crate) fn emit_svelte_element_node(
             emit_dom_element_open_with_snippet_props(
                 buf,
                 source,
+                s.range.start,
                 &tag,
                 true,
                 &s.attributes,
@@ -341,16 +356,24 @@ pub(crate) fn emit_svelte_element_node(
         } else {
             emit_svelte_element_open(buf, source, s, depth, &action_indices);
         }
-        emit_dom_directive_checks(buf, source, "", &s.attributes, inner_depth);
+        emit_dom_directive_checks(buf, source, &directive_tag, &s.attributes, inner_depth);
     }
-    emit_element_bind_checks_inline(buf, source, "", &s.attributes, inner_depth);
+    // `bind:this` assigns the element on `<svelte:body>` (as `body`) and
+    // `<svelte:element>`; elsewhere it is an attribute (`Binding.ts`'s
+    // `supportsBindThis`), which the open tag already wrote.
+    let bind_tag = match s.kind {
+        SvelteElementKind::Element => String::new(),
+        SvelteElementKind::Body => "body".to_string(),
+        other => format!("svelte:{}", other.as_str()),
+    };
+    emit_element_bind_checks_inline(buf, source, &bind_tag, &s.attributes, inner_depth);
     if dom_emit {
         emit_dom_action_void_refs(buf, &action_indices, inner_depth);
     } else {
         emit_use_directives_inline_legacy(
             buf,
             source,
-            "",
+            &directive_tag,
             &s.attributes,
             inner_depth,
             action_counter,
@@ -414,9 +437,11 @@ pub(crate) fn emit_svelte_element_node(
 /// the first arg is a quoted string literal (`"div"`) — set false for
 /// `svelte:element this={tag}` where the caller passes the expression
 /// verbatim as `tag_name`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_dom_element_open(
     buf: &mut EmitBuffer,
     source: &str,
+    tag_start: u32,
     tag_name: &str,
     tag_literal: bool,
     attributes: &[svn_parser::Attribute],
@@ -426,6 +451,7 @@ pub(crate) fn emit_dom_element_open(
     emit_dom_element_open_with_snippet_props(
         buf,
         source,
+        tag_start,
         tag_name,
         tag_literal,
         attributes,
@@ -454,6 +480,7 @@ pub(crate) fn emit_dom_element_open(
 pub(crate) fn emit_dom_element_open_with_snippet_props(
     buf: &mut EmitBuffer,
     source: &str,
+    tag_start: u32,
     tag_name: &str,
     tag_literal: bool,
     attributes: &[svn_parser::Attribute],
@@ -481,16 +508,28 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
         }
         format!("__svn_union({args}), ")
     };
+    // The call head stands in for the tag's `<` and a literal tag name
+    // is the source name, the way svelte2tsx's `Element.ts` writes them
+    // over the start tag. A diagnostic anywhere on the head maps to the
+    // `<`, and one on the punctuation after the name to the name.
+    let lt = svn_core::Range::new(tag_start, tag_start + 1);
+    buf.append_synthetic(&indent);
     if tag_literal {
-        let _ = write!(
-            buf,
-            "{indent}{{ svelteHTML.createElement(\"{tag_name}\", {union_prefix}{{"
-        );
+        buf.append_with_source("{ svelteHTML.createElement(\"", lt);
+        let name_start = tag_start as usize + 1;
+        let name_end = name_start + tag_name.len();
+        if source.get(name_start..name_end) == Some(tag_name) {
+            buf.append_with_source(
+                tag_name,
+                svn_core::Range::new(name_start as u32, name_end as u32),
+            );
+        } else {
+            buf.append_synthetic(tag_name);
+        }
+        let _ = write!(buf, "\", {union_prefix}{{");
     } else {
-        let _ = write!(
-            buf,
-            "{indent}{{ svelteHTML.createElement({tag_name}, {union_prefix}{{"
-        );
+        buf.append_with_source("{ svelteHTML.createElement(", lt);
+        let _ = write!(buf, "{tag_name}, {union_prefix}{{");
     }
     let mut any = false;
     // Attribute-name case-folding (upstream `transformAttributeCase`)
@@ -500,7 +539,7 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
     // tag contains `-`) or customized built-in (`<div is="x-y">`, an `is`
     // attribute whose value contains `-`). Mirrors upstream's
     // `Element.isCustomElement()` (Element.ts:263-275).
-    let is_custom_element = tag_name.contains('-')
+    let is_custom_element = (tag_literal && tag_name.contains('-'))
         || attributes.iter().any(|a| match a {
             svn_parser::Attribute::Plain(p) if p.name.as_str() == "is" => p
                 .value
@@ -515,21 +554,35 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
     // `namespace: 'foreign'` (svelte config) preserves ALL attribute
     // case — upstream `transformAttributeCase` is gated on `!preserveCase`
     // (htmlxtojsx_v2/index.ts:109). Mirror that here.
-    let should_lowercase = tag_literal && !is_custom_element && !crate::preserve_attribute_case();
+    // A `<svelte:window>`-style element is not an `Element` node to
+    // svelte2tsx, so its attribute names keep their case and its numeric
+    // attributes stay strings; `<svelte:element>` (passed with a
+    // non-literal tag) is one.
+    let svelte_element = !tag_literal;
+    let parent_is_element = !(tag_literal && tag_name.starts_with("svelte:"));
+    let should_lowercase =
+        parent_is_element && !is_custom_element && !crate::preserve_attribute_case();
     for attr in attributes {
         match attr {
             svn_parser::Attribute::Plain(p) => {
-                if should_skip(p.name.as_str()) {
+                if should_skip(p.name.as_str(), p.value.as_ref(), svelte_element) {
                     continue;
                 }
                 if !any {
                     buf.push_str("\n");
                     any = true;
                 }
-                emit_plain(buf, source, p, depth + 1, should_lowercase);
+                emit_plain(
+                    buf,
+                    source,
+                    p,
+                    depth + 1,
+                    should_lowercase,
+                    parent_is_element,
+                );
             }
             svn_parser::Attribute::Expression(e) => {
-                if should_skip(e.name.as_str()) {
+                if should_skip(e.name.as_str(), None, svelte_element) {
                     continue;
                 }
                 if !any {
@@ -539,14 +592,14 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
                 emit_expression(buf, source, e, depth + 1, should_lowercase);
             }
             svn_parser::Attribute::Shorthand(s) => {
-                if should_skip(s.name.as_str()) {
+                if should_skip(s.name.as_str(), None, svelte_element) {
                     continue;
                 }
                 if !any {
                     buf.push_str("\n");
                     any = true;
                 }
-                emit_shorthand(buf, source, s, depth + 1, should_lowercase);
+                emit_shorthand(buf, source, s, depth + 1);
             }
             svn_parser::Attribute::Comment(c) => {
                 // Thread an in-tag JS comment verbatim onto its own line
@@ -595,6 +648,18 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
             // "a"}>` with later `x === "b"` falsely fires TS2367
             // because flow-narrowing collapses x to its initial literal.
             svn_parser::Attribute::Directive(d) => {
+                // A `let:` no parent component destructured is an
+                // ordinary attribute to svelte2tsx (`Let.ts` →
+                // `handleAttribute`, named `let:NAME`).
+                if d.kind == svn_parser::DirectiveKind::Let
+                    && !crate::nodes::let_directive::lets_destructured_by_parent(attributes)
+                {
+                    if !any {
+                        buf.push_str("\n");
+                        any = true;
+                    }
+                    emit_let_attribute(buf, source, d, depth + 1, should_lowercase);
+                }
                 if d.kind == svn_parser::DirectiveKind::On {
                     if !any {
                         buf.push_str("\n");
@@ -608,7 +673,11 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
                 // the element's attribute type doesn't declare fires
                 // TS2353 there, and the expression is read.
                 if d.kind == svn_parser::DirectiveKind::Bind
-                    && crate::nodes::binding::is_untyped_binding(d.name.as_str())
+                    && (crate::nodes::binding::is_untyped_binding(d.name.as_str())
+                        || (d.name.as_str() == "this"
+                            && tag_literal
+                            && tag_name.starts_with("svelte:")
+                            && tag_name != "svelte:body"))
                     && let Some(parts) = dom_bind_attribute_parts(
                         source,
                         d,
@@ -737,8 +806,9 @@ fn dom_bind_attribute_parts<'a>(
             let eq = head.rfind('=')?;
             return Some(DomBindAttribute {
                 key_text: &head[..eq],
+                // A get/set key maps where the previous attribute ended.
                 key_anchor: match prev_end {
-                    Some(end) => end.saturating_sub(1),
+                    Some(end) => end,
                     None => d.range.start + eq as u32,
                 },
                 value: BindValue::GetSet {
@@ -936,6 +1006,7 @@ pub(crate) fn emit_svelte_element_open(
             emit_dom_element_open(
                 buf,
                 source,
+                s.range.start,
                 &tag,
                 true,
                 &s.attributes,
@@ -955,37 +1026,36 @@ pub(crate) fn emit_svelte_element_open(
             let _ = writeln!(buf, "{indent}{{");
         }
         Element => {
-            // Find `this={expr}` among attributes.
-            let this_expr = s.attributes.iter().find_map(|a| {
-                let svn_parser::Attribute::Expression(e) = a else {
-                    return None;
-                };
-                if e.name.as_str() != "this" {
-                    return None;
-                }
-                source
+            // The tag is `this`: an expression, a static string, or — when
+            // missing — the empty string, as `Element.ts` writes it.
+            let tag = s.attributes.iter().find_map(|a| match a {
+                svn_parser::Attribute::Expression(e) if e.name.as_str() == "this" => source
                     .get(e.expression_range.start as usize..e.expression_range.end as usize)
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
-                    .map(str::to_string)
+                    .map(|expr| format!("({expr})")),
+                svn_parser::Attribute::Plain(p) if p.name.as_str() == "this" => {
+                    let text = match p.value.as_ref().map(|v| v.parts.as_slice()) {
+                        Some([svn_parser::AttrValuePart::Text { range }]) => range.slice(source),
+                        _ => "",
+                    };
+                    Some(format!(
+                        "\"{}\"",
+                        text.replace('\\', "\\\\").replace('"', "\\\"")
+                    ))
+                }
+                _ => None,
             });
-            match this_expr {
-                Some(expr) => {
-                    emit_dom_element_open(
-                        buf,
-                        source,
-                        &format!("({expr})"),
-                        false,
-                        &s.attributes,
-                        depth,
-                        action_indices,
-                    );
-                }
-                None => {
-                    // Missing `this` — bare scope. Child emit still runs.
-                    let _ = writeln!(buf, "{indent}{{");
-                }
-            }
+            emit_dom_element_open(
+                buf,
+                source,
+                s.range.start,
+                tag.as_deref().unwrap_or("\"\""),
+                false,
+                &s.attributes,
+                depth,
+                action_indices,
+            );
         }
         SelfRef | Component => {
             // Not a DOM element — bare scope for children. The full
@@ -1009,6 +1079,45 @@ pub(crate) fn element_type_annotation(tag_name: &str) -> String {
         return "HTMLElement".to_string();
     }
     format!("HTMLElementTagNameMap['{tag_name}']")
+}
+
+/// Write a `let:NAME[={EXPR}]` directive as the attribute
+/// `"let:NAME": EXPR` (or `true`), keyed at the directive's start.
+fn emit_let_attribute(
+    buf: &mut EmitBuffer,
+    source: &str,
+    d: &svn_parser::Directive,
+    depth: usize,
+    should_lowercase: bool,
+) {
+    let name = format!("let:{}", d.name);
+    match &d.value {
+        Some(svn_parser::DirectiveValue::Expression {
+            expression_range, ..
+        }) => {
+            let attr = svn_parser::ExpressionAttr {
+                name: name.as_str().into(),
+                expression_range: *expression_range,
+                range: d.range,
+            };
+            emit_expression(buf, source, &attr, depth, should_lowercase);
+        }
+        _ => {
+            let key = if should_lowercase {
+                name.to_lowercase()
+            } else {
+                name.clone()
+            };
+            buf.push_str(&"    ".repeat(depth));
+            crate::nodes::attribute::write_attribute_key(
+                buf,
+                &key,
+                svn_core::Range::new(d.range.start, d.range.start + name.len() as u32),
+                false,
+            );
+            buf.push_str(" true,\n");
+        }
+    }
 }
 
 /// Emit a `__svn_create_slot("NAME", { prop1: <expr>, ... });` check
@@ -1035,49 +1144,79 @@ fn emit_slot_check(buf: &mut EmitBuffer, source: &str, e: &svn_parser::Element, 
     let inner = "    ".repeat(depth + 1);
     let outer = "    ".repeat(depth);
     let _ = writeln!(buf, "{outer}{{");
-    let _ = write!(buf, "{inner}__svn_create_slot(");
+    // The helper name maps to the `<` of `<slot`, as upstream's moved
+    // start tag does: a root snippet hoisted to module scope cannot see
+    // the helper declared in the render function (TS2304 there).
+    buf.push_str(&inner);
+    buf.append_with_source(
+        "__svn_create_slot",
+        svn_core::Range::new(e.range.start, e.range.start + 1),
+    );
+    buf.push('(');
     // Slot name: `name="X"` plain attr if present, else literal
     // `"default"`. Source range maps to the `name` attribute's full
     // span when present, or the `<slot` token's `slot` identifier
     // otherwise.
-    let name_attr = e.attributes.iter().find_map(|a| match a {
-        Attribute::Plain(p) if p.name.as_str() == "name" => Some(p),
-        _ => None,
+    // svelte2tsx takes the first value chunk of the first attribute
+    // called `name` and writes its source text in quotes: a text chunk
+    // without its quotes, a `{…}` chunk with its braces, a `{name}`
+    // shorthand as the bare name. An empty `name=""` writes nothing,
+    // leaving an argument-less call that tsgo rejects at the `<slot`.
+    let name_attr = e.attributes.iter().find(|a| match a {
+        Attribute::Plain(p) => p.name.as_str() == "name",
+        Attribute::Expression(x) => x.name.as_str() == "name",
+        Attribute::Shorthand(x) => x.name.as_str() == "name",
+        Attribute::Directive(d) => d.name.as_str() == "name",
+        Attribute::Spread(_) | Attribute::Comment(_) => false,
     });
-    if let Some(p) = name_attr {
-        let (name, value_range) = match &p.value {
-            Some(v) => {
-                let text = source
-                    .get(v.range.start as usize..v.range.end as usize)
-                    .unwrap_or("");
-                let stripped = text
-                    .trim_start_matches(['"', '\''].as_ref())
-                    .trim_end_matches(['"', '\''].as_ref());
-                // Anchor on the inner content (`invalid`), not the
-                // surrounding quote. Upstream's TS2345 for unknown
-                // slot names points at the first byte of the literal
-                // text — quote excluded.
-                let inner_range = if v.quoted {
-                    svn_core::Range::new(v.range.start + 1, v.range.end.saturating_sub(1))
-                } else {
-                    v.range
-                };
-                (stripped.to_string(), inner_range)
-            }
-            None => ("default".to_string(), p.range),
-        };
-        let literal = format!("\"{}\"", name.replace('"', "\\\""));
-        buf.append_with_source(&literal, value_range);
-    } else {
-        // `<slot>` with no `name=` attr — implicit `"default"` slot.
-        // Anchor on the `<slot` token (5 bytes from `e.range.start +
-        // 1`) so any TS2345 from a missing `default` key in $$Slots
-        // reverse-maps onto the user's `<slot>` site.
-        let name_start = e.range.start.saturating_add(1);
-        let name_end = name_start.saturating_add(4); // "slot"
-        buf.append_with_source("\"default\"", svn_core::Range::new(name_start, name_end));
+    let name_chunk: Option<svn_core::Range> = match name_attr {
+        None => None,
+        Some(Attribute::Plain(p)) => match p.value.as_ref().and_then(|v| v.parts.first()) {
+            Some(svn_parser::AttrValuePart::Text { range }) => Some(*range),
+            Some(svn_parser::AttrValuePart::Expression { range, .. }) => Some(*range),
+            None if p.value.is_some() => Some(svn_core::Range::new(p.range.end, p.range.end)),
+            None => Some(p.range),
+        },
+        Some(Attribute::Expression(x)) => {
+            let open = source
+                .get(x.range.start as usize..x.expression_range.start as usize)
+                .and_then(|s| s.rfind('{'))
+                .map_or(x.expression_range.start, |i| x.range.start + i as u32);
+            Some(svn_core::Range::new(open, x.range.end))
+        }
+        Some(Attribute::Shorthand(x)) => {
+            let inner = source
+                .get(x.range.start as usize + 1..x.range.end as usize)
+                .unwrap_or("");
+            let start = x.range.start + 1 + (inner.len() - inner.trim_start().len()) as u32;
+            Some(svn_core::Range::new(start, start + x.name.len() as u32))
+        }
+        Some(other) => Some(other.range()),
+    };
+    match name_chunk {
+        Some(range) if range.start == range.end => {
+            buf.append_with_source(
+                ", { ",
+                svn_core::Range::new(e.range.start, e.range.start + 1),
+            );
+        }
+        Some(range) => {
+            let name = range.slice(source);
+            let literal = format!("\"{}\"", name.replace('"', "\\\""));
+            buf.append_with_source(&literal, range);
+            buf.push_str(", { ");
+        }
+        None => {
+            // `<slot>` with no `name=` attr — implicit `"default"` slot.
+            // Anchor on the `<slot` token (5 bytes from `e.range.start +
+            // 1`) so any TS2345 from a missing `default` key in $$Slots
+            // reverse-maps onto the user's `<slot>` site.
+            let name_start = e.range.start.saturating_add(1);
+            let name_end = name_start.saturating_add(4); // "slot"
+            buf.append_with_source("\"default\"", svn_core::Range::new(name_start, name_end));
+            buf.push_str(", { ");
+        }
     }
-    buf.push_str(", { ");
     // Slot props: every attr that isn't `name=`, emitted as
     // `"propName": (expr)` with the propName carrying the source
     // attr-name range and the expression carrying its source range.
@@ -1085,6 +1224,8 @@ fn emit_slot_check(buf: &mut EmitBuffer, source: &str, e: &svn_parser::Element, 
     for a in &e.attributes {
         match a {
             Attribute::Plain(p) if p.name.as_str() == "name" => continue,
+            Attribute::Expression(x) if x.name.as_str() == "name" => continue,
+            Attribute::Shorthand(x) if x.name.as_str() == "name" => continue,
             Attribute::Plain(p) => {
                 // Value goes through the shared plain-attr value
                 // transform (same one element/component attribute
@@ -1139,9 +1280,9 @@ fn emit_slot_check(buf: &mut EmitBuffer, source: &str, e: &svn_parser::Element, 
                 let leading_ws = (inner_text.len() - inner_text.trim_start().len()) as u32;
                 let name_start = s.range.start + 1 + leading_ws;
                 let name_end = name_start + s.name.len() as u32;
+                // Written as a shorthand property, as svelte2tsx writes
+                // it, so a name with no value in scope is TS18004.
                 let name_range = svn_core::Range::new(name_start, name_end);
-                emit_slot_prop_key(buf, s.name.as_str(), name_range);
-                buf.push_str(": ");
                 buf.append_with_source(s.name.as_str(), name_range);
             }
             Attribute::Spread(sp) => {

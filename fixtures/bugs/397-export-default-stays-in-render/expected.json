@@ -1,0 +1,29 @@
+{
+    "errors": [
+        {
+            "file": "src/C.svelte",
+            "line": 2,
+            "column": 0,
+            "code": 1258
+        },
+        {
+            "file": "src/C.svelte",
+            "line": 2,
+            "column": 0,
+            "code": "module_illegal_default_export"
+        },
+        {
+            "file": "src/D.svelte",
+            "line": 2,
+            "column": 2,
+            "code": 1258
+        },
+        {
+            "file": "src/D.svelte",
+            "line": 2,
+            "column": 2,
+            "code": "module_illegal_default_export"
+        }
+    ],
+    "_note": "`export default` stays inside the render function as written, where TypeScript reports TS1258. Verified against svelte-check --tsgo."
+}

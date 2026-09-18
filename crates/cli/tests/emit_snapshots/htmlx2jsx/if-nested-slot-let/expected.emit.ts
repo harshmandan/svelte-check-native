@@ -4,37 +4,30 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         if ((hello)) {
-            void [hello];
             {
                 const __svn_C_10 = __svn_ensure_component(Comp);
                 const __svn_inst_10 = new __svn_C_10({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo } = __svn_inst_10.$$slot_def.default; $$_$$;
-                    void foo;
-                    (foo);
+                    foo;
                 }
             }
             if ((hi && bye)) {
-                void [hi, bye];
                 {
                     const __svn_C_55 = __svn_ensure_component(Comp);
                     const __svn_inst_55 = new __svn_C_55({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                     {
                         const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo: bar } = __svn_inst_55.$$slot_def.default; $$_$$;
-                        void bar;
-                        (bar);
+                        bar;
                     }
                 }
             } else if ((cool)) {
-                void [cool];
                 {
                     const __svn_C_a8 = __svn_ensure_component(Comp);
                     const __svn_inst_a8 = new __svn_C_a8({ target: __svn_any(), props: {} });
                     {
                         const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo, foo1 } = __svn_inst_a8.$$slot_def["named"]; $$_$$;
-                        void foo;
-                        void foo1;
-                        { svelteHTML.createElement("div", {});                             (foo);
+                        { svelteHTML.createElement("div", {});                             foo;
                         }
                     }
                 }
@@ -44,25 +37,18 @@ function $$render_e40e2c10() {
                     const __svn_inst_12c = new __svn_C_12c({ target: __svn_any(), props: {} });
                     {
                         const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo: bar } = __svn_inst_12c.$$slot_def["named"]; $$_$$;
-                        void bar;
-                        { svelteHTML.createElement("div", {});                             (bar);
+                        { svelteHTML.createElement("div", {});                             bar;
                         }
                     }
                 }
             }
         }
     });
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
- */
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
- */
-/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
+/** @type {__SvnIsomorphicComponent<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */
 export const __svn_component_default = /** @type {any} */ (null);
-/** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
+/** @typedef {InstanceType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;
 

@@ -9,7 +9,10 @@
 use crate::codes::Code;
 use crate::context::LintContext;
 use crate::messages;
-use crate::scope::{BindingKind, RefParentKind, Reference, ScopeTree, is_rune_name};
+use crate::scope::{
+    BindingKind, RefParentKind, Reference, ScopeTree, WriteOrigin, WriteViolation,
+    WriteViolationKind, is_rune_name,
+};
 
 /// Does `ref.ignored`'s snapshot include the rule's code? Port of
 /// upstream's `ignore_map.get(node)?.some(codes => codes.has(code))`.
@@ -43,41 +46,145 @@ pub fn visit_pre_options(ctx: &mut LintContext<'_>) {
     ctx.scope_tree = Some(tree);
 }
 
-/// Compiler error `global_reference_invalid` — upstream
-/// `2-analyze/index.js`, the store-subscription synthesis loop. For
-/// each `$`-prefixed name referenced anywhere in the component and
-/// not resolved to a binding: `$` alone or a `$$name` that is not one
-/// of the reserved ambients is illegal outright; a non-rune `$name`
-/// whose store name has no declaration and starts with a lowercase
-/// letter is illegal unless runes were switched off by option. Fires
-/// once per name, at its first reference.
+/// The compiler errors of the store-subscription loop (upstream
+/// `2-analyze/index.js`), which visits each `$`-prefixed name
+/// referenced in the component and not otherwise declared, in
+/// first-reference order:
+///
+/// - `$` alone, or a `$$name` that is not one of the reserved
+///   ambients, is `global_reference_invalid` outright;
+/// - a name the compiler treats as a store subscription (anything but
+///   a rune name, unless it is backed by a store or runes are off by
+///   option) is `store_invalid_scoped_subscription` when a reference
+///   sees its store declared below the top level (a function
+///   parameter, an each-block item, …); `global_reference_invalid`
+///   when no store of that lowercase name exists (unless runes are
+///   off by option); and `store_invalid_subscription` when it is
+///   referenced in `<script module>` other than as a rune call.
 fn global_reference_invalid(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
     const RESERVED: [&str; 3] = ["$$props", "$$restProps", "$$slots"];
-    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    let mut refs: Vec<&crate::scope_types::UnresolvedRef> = tree.unresolved_refs.iter().collect();
-    refs.sort_by_key(|r| r.range.start);
-    for r in refs {
-        let name = r.name.as_str();
-        if !name.starts_with('$') || RESERVED.contains(&name) || !seen.insert(name) {
+    let runes_off = ctx.runes_option == Some(false);
+    let mut firsts: Vec<(u32, &str, svn_core::Range)> = Vec::new();
+    for (name, range) in tree
+        .unresolved_refs
+        .iter()
+        .map(|r| (r.name.as_str(), r.range))
+        .chain(tree.store_refs.iter().map(|r| (r.name.as_str(), r.range)))
+    {
+        if !name.starts_with('$') || RESERVED.contains(&name) {
             continue;
         }
-        let illegal = if name.len() == 1 || name.as_bytes()[1] == b'$' {
-            true
-        } else {
-            let store_name = &name[1..];
-            ctx.runes_option != Some(false)
-                && !is_rune_name(name)
-                && tree.resolve(tree.instance_root, store_name).is_none()
-                && store_name.starts_with(|c: char| c.is_ascii_lowercase())
-        };
-        if illegal {
+        match firsts.iter_mut().find(|(_, n, _)| *n == name) {
+            Some(entry) if range.start < entry.0 => *entry = (range.start, name, range),
+            Some(_) => {}
+            None => firsts.push((range.start, name, range)),
+        }
+    }
+    firsts.sort_by_key(|(start, _, _)| *start);
+    for (_, name, first) in firsts {
+        if name.len() == 1 || name.as_bytes()[1] == b'$' {
             ctx.emit_error(
                 Code::global_reference_invalid,
                 messages::global_reference_invalid(name),
+                first,
+            );
+            continue;
+        }
+        let store_name = &name[1..];
+        let subscribed = tree
+            .all_bindings()
+            .any(|(_, b)| b.kind == BindingKind::StoreSub && b.name == name);
+        if !(runes_off || !is_rune_name(name) || subscribed) {
+            continue;
+        }
+        let refs = || tree.store_refs.iter().filter(move |r| r.name == name);
+        if let Some(r) = refs()
+            .filter(|r| r.nested_store)
+            .min_by_key(|r| r.range.start)
+        {
+            ctx.emit_error(
+                Code::store_invalid_scoped_subscription,
+                messages::store_invalid_scoped_subscription(),
+                r.range,
+            );
+        }
+        if !runes_off
+            && tree.resolve(tree.instance_root, store_name).is_none()
+            && store_name.starts_with(|c: char| c.is_ascii_lowercase())
+        {
+            ctx.emit_error(
+                Code::global_reference_invalid,
+                messages::global_reference_invalid(name),
+                first,
+            );
+        }
+        if let Some(module) = tree.module_script_range
+            && let Some(r) = refs()
+                .filter(|r| {
+                    r.range.start > module.start
+                        && r.range.end < module.end
+                        && !(r.parent_is_call && is_rune_name(name))
+                })
+                .min_by_key(|r| r.range.start)
+        {
+            ctx.emit_error(
+                Code::store_invalid_subscription,
+                messages::store_invalid_subscription(),
                 r.range,
             );
         }
     }
+}
+
+/// Compiler errors from `validate_assignment` (upstream
+/// `2-analyze/visitors/shared/utils.js`), raised where the compiler's
+/// walk meets the write: script writes before the template walk,
+/// template writes as the template walk reaches them. Emits and drops
+/// every pending violation `take` selects.
+fn flush_write_violations(ctx: &mut LintContext<'_>, take: impl Fn(&WriteViolation) -> bool) {
+    let Some(tree) = ctx.scope_tree.as_mut() else {
+        return;
+    };
+    let (due, kept): (Vec<WriteViolation>, Vec<WriteViolation>) =
+        std::mem::take(&mut tree.write_violations)
+            .into_iter()
+            .partition(|v| take(v));
+    tree.write_violations = kept;
+    for v in due {
+        let (code, message) = match v.kind {
+            WriteViolationKind::Constant { import } => {
+                let thing = if import { "import" } else { "constant" };
+                if v.is_binding {
+                    (Code::constant_binding, messages::constant_binding(thing))
+                } else {
+                    (
+                        Code::constant_assignment,
+                        messages::constant_assignment(thing),
+                    )
+                }
+            }
+            WriteViolationKind::EachItem if ctx.runes => (
+                Code::each_item_invalid_assignment,
+                messages::each_item_invalid_assignment(),
+            ),
+            WriteViolationKind::EachItem => continue,
+            WriteViolationKind::SnippetParameter => (
+                Code::snippet_parameter_assignment,
+                messages::snippet_parameter_assignment(),
+            ),
+        };
+        ctx.emit_error(code, message, v.range);
+    }
+}
+
+/// Raise the template write errors that start before `offset` (or at
+/// it, when `inclusive`) — everything the compiler's template walk has
+/// passed by the time it reaches that position.
+pub fn flush_template_write_violations(ctx: &mut LintContext<'_>, offset: u32, inclusive: bool) {
+    flush_write_violations(ctx, |v| {
+        v.origin == WriteOrigin::Template
+            && (v.range.start < offset || (inclusive && v.range.start == offset))
+    });
 }
 
 /// Walk-time pass: rules whose upstream counterparts fire DURING the
@@ -85,6 +192,7 @@ fn global_reference_invalid(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
 /// source position so interleaved anchors come out in walk order —
 /// upstream does not group `state_referenced_locally` per binding.
 pub fn visit(ctx: &mut LintContext<'_>) {
+    flush_write_violations(ctx, |v| v.origin != WriteOrigin::Template);
     // Take the tree out of the context so we can iterate its bindings
     // while still being able to `ctx.emit(...)`.
     let tree = match ctx.scope_tree.take() {
@@ -249,6 +357,10 @@ fn state_referenced_locally(tree: &ScopeTree, pending: &mut Vec<(svn_core::Range
 /// pattern doesn't need reactivity.
 fn non_reactive_update(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
     for (_, binding) in tree.all_bindings() {
+        // Only module- and instance-level declarations are checked.
+        if binding.scope != tree.module_root && binding.scope != tree.instance_root {
+            continue;
+        }
         if binding.kind != BindingKind::Normal || !binding.reassigned {
             continue;
         }

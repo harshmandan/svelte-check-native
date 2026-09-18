@@ -8,7 +8,7 @@ use smol_str::SmolStr;
 use svn_core::Range;
 use svn_parser::ast::{Comment, Node};
 
-use crate::codes::Code;
+use crate::codes::{COMPILER_ERROR_CODES, Code};
 use crate::context::LintContext;
 use crate::messages;
 
@@ -59,7 +59,7 @@ const LEGACY_RENAMES: &[(&str, &str)] = &[
 /// Returns the deduplicated list of ignore codes as SmolStr suitable
 /// for pushing into `LintContext::ignore_stack`.
 pub fn collect_preceding_comment_ignores(
-    nodes: &[Node],
+    nodes: &[&Node],
     idx: usize,
     ctx: &mut LintContext<'_>,
 ) -> Vec<SmolStr> {
@@ -71,7 +71,7 @@ pub fn collect_preceding_comment_ignores(
     // Walk backwards collecting codes until we see a non-Comment
     // non-Text sibling.
     for i in (0..idx).rev() {
-        match &nodes[i] {
+        match nodes[i] {
             Node::Comment(c) => {
                 for code in extract_from_comment(c, ctx) {
                     if !result.contains(&code) {
@@ -84,6 +84,16 @@ pub fn collect_preceding_comment_ignores(
         }
     }
     result
+}
+
+/// Does this comment's `svelte-ignore` list name `code`? Parsing the
+/// comment reports its `legacy_code` / `unknown_code` tokens again on
+/// every call, exactly as each upstream `extract_svelte_ignore` call
+/// does.
+pub fn comment_ignores_code(c: &Comment, code: Code, ctx: &mut LintContext<'_>) -> bool {
+    extract_from_comment(c, ctx)
+        .iter()
+        .any(|ignored| ignored.as_str() == code.as_str())
 }
 
 /// Extract `svelte-ignore CODE, CODE` codes from one comment, and
@@ -259,8 +269,10 @@ fn parse_ignore_codes(rest: &str, runes: bool) -> Vec<SmolStr> {
     out
 }
 
+/// The compiler's `/[\w$-]/` — ASCII only, so a multi-byte character
+/// ends a code rather than joining it.
 fn is_ident_char(b: u8) -> bool {
-    (b as char).is_alphanumeric() || matches!(b, b'_' | b'-' | b'$')
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'$')
 }
 
 /// Index of ALL comments in one script body, powering the
@@ -511,6 +523,7 @@ fn fuzzymatch_known_code(input: &str) -> Option<&'static str> {
     let candidates = crate::codes::CODES
         .iter()
         .copied()
+        .filter(|c| !COMPILER_ERROR_CODES.contains(c))
         .chain(IGNORABLE_RUNTIME_WARNINGS.iter().copied());
     for c in candidates {
         let sim = lev_similarity(&target, c);
@@ -543,8 +556,13 @@ fn lev_similarity(a: &str, b: &str) -> f64 {
     1.0 - prev[bc.len()] as f64 / max
 }
 
+/// A code a `svelte-ignore` comment can name: the compiler's warning
+/// codes plus the ignorable runtime warnings. Our catalog also lists
+/// the compiler errors the lint pass reports; those are not codes to
+/// the compiler's ignore parser.
 fn is_known_code(code: &str) -> bool {
-    Code::try_from_str(code).is_some() || IGNORABLE_RUNTIME_WARNINGS.contains(&code)
+    (Code::try_from_str(code).is_some() && !COMPILER_ERROR_CODES.contains(&code))
+        || IGNORABLE_RUNTIME_WARNINGS.contains(&code)
 }
 
 fn legacy_rename(code: &str) -> Option<&'static str> {

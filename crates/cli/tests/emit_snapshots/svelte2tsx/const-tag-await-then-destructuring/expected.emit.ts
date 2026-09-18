@@ -11,66 +11,45 @@ function $$render_e40e2c10() {
 	}
     ;(async () => {
         // template type-check body (incremental)
-        { const $$_promise = (promise1);
-            const $$_await = await $$_promise; const { width, height } = $$_await;
+        {
+            const $$_value = await (promise1);
+            { const { width, height } = $$_value;
             const {area, volume} = calculate(width, height, constant);
-            void area;
-            void volume;
             const perimeter = (width + height) * constant;
-            void perimeter;
             const [_width, _height, sum] = [width * constant, height, width * constant + height];
-            void _width;
-            void _height;
-            void sum;
-            { svelteHTML.createElement("div", {});                 (area);
-                (volume);
-                (perimeter);
-                (_width);
-                (_height);
-                (sum);
+            { svelteHTML.createElement("div", {});                 area;
+                volume;
+                perimeter;
+                _width;
+                _height;
+                sum;
             }
-            void width;
-            void height;
-        }
-        { const $$_promise = (promise2);
-            const $$_await = await $$_promise; void $$_await;
+            }
         }
         {
-            const { width, height } = __svn_any();
+            try { await (promise2);
+            } catch ($$_e) { const { width, height } = __svn_any();
             const {area, volume} = calculate(width, height, constant);
-            void area;
-            void volume;
             const perimeter = (width + height) * constant;
-            void perimeter;
             const [_width, _height, sum] = [width * constant, height, width * constant + height];
-            void _width;
-            void _height;
-            void sum;
-            { svelteHTML.createElement("div", {});                 (area);
-                (volume);
-                (perimeter);
-                (_width);
-                (_height);
-                (sum);
+            { svelteHTML.createElement("div", {});                 area;
+                volume;
+                perimeter;
+                _width;
+                _height;
+                sum;
             }
-            void width;
-            void height;
+            }
         }
     });
     void promise1;
     void promise2;
     void constant;
-    return { props: /** @type {{ promise1?: typeof promise1; promise2?: typeof promise2; constant?: typeof constant; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ promise1: typeof promise1; promise2: typeof promise2; constant: typeof constant; }} */ ({}) };
+    return { props: /** @type {{ promise1?: typeof promise1; promise2?: typeof promise2; constant?: typeof constant; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
- */
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
- */
-/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
+/** @type {__SvnIsomorphicComponent<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */
 export const __svn_component_default = /** @type {any} */ (null);
-/** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
+/** @typedef {InstanceType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;
 

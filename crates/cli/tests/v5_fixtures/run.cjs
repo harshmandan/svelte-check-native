@@ -81,7 +81,11 @@ function sortErrors(a, b) {
     if (a.file !== b.file) return a.file < b.file ? -1 : 1;
     if (a.line !== b.line) return a.line - b.line;
     if (a.column !== b.column) return a.column - b.column;
-    return a.code - b.code;
+    // Codes are numbers (TypeScript) or strings (Svelte); compare them
+    // as strings so the order is total and independent of input order.
+    const ca = String(a.code);
+    const cb = String(b.code);
+    return ca < cb ? -1 : ca > cb ? 1 : 0;
 }
 
 function errorShape(e) {

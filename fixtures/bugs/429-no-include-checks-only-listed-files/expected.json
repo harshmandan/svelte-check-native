@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "With no `include` anywhere in the tsconfig chain, the overlay tsconfig's own `files` list (which always holds the shim declarations) switches the compiler's default whole-directory scan off, so only entries the project lists in `files` are checked. svelte-check --tsgo therefore reports nothing for this project, neither for the component nor for the .ts file, and neither do we."
+}

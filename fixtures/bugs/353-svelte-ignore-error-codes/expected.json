@@ -1,0 +1,9 @@
+{
+    "clean": true,
+    "warnings": [
+        { "file": "src/ErrorCodes.svelte", "line": 3, "column": 19, "code": "unknown_code" },
+        { "file": "src/ErrorCodes.svelte", "line": 5, "column": 19, "code": "unknown_code" },
+        { "file": "src/ErrorCodes.svelte", "line": 7, "column": 43, "code": "unknown_code" }
+    ],
+    "_note": "A svelte-ignore comment only knows the compiler's warning codes (and the ignorable runtime warnings). In runes mode a compiler error code is an unknown code, and a typo is never matched against error codes for a suggestion. Legacy mode takes any token without reporting. Verified against svelte-check 4.4.6."
+}

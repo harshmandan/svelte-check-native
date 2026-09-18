@@ -26,11 +26,11 @@
 //! When a code is added to `PORTED_CODES`, its fixtures start
 //! enforcing; regressions fail loudly.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Codes for which we've implemented the rule and are ready to
 /// enforce upstream-fixture parity.
@@ -115,7 +115,7 @@ const PORTED_CODES: &[&str] = &[
     "svelte_element_invalid_this",
 ];
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 struct ExpectedWarning {
     code: String,
     message: String,
@@ -123,7 +123,7 @@ struct ExpectedWarning {
     end: LineCol,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 struct LineCol {
     line: u32,
     column: u32,
@@ -137,6 +137,11 @@ fn strip_link(message: &str) -> &str {
 }
 
 fn validator_samples_dir() -> PathBuf {
+    // A checkout whose submodule is not initialised (e.g. a secondary git
+    // worktree) can point at another clone of the svelte repo instead.
+    if let Some(root) = std::env::var_os("SVELTE_UPSTREAM_DIR") {
+        return PathBuf::from(root).join("packages/svelte/tests/validator/samples");
+    }
     // tests/ runs under the crate dir; reach the workspace root.
     let manifest = env!("CARGO_MANIFEST_DIR");
     let ws = PathBuf::from(manifest)
@@ -243,12 +248,16 @@ fn upstream_validator_fixtures() {
         enforced += 1;
 
         // Run our linter.
-        let warnings = svn_lint::lint_file(
-            &source,
-            &source_path,
-            None,
-            svn_lint::CompatFeatures::MODERN,
-        );
+        // The compiler runs these samples without a file name, which it
+        // reports as `(unknown)`; module samples keep theirs so the
+        // `.svelte.js` extension still selects runes mode.
+        let lint_path = if source_path.extension().is_some_and(|e| e == "svelte") {
+            std::path::PathBuf::from("(unknown)")
+        } else {
+            source_path.clone()
+        };
+        let warnings =
+            svn_lint::lint_file(&source, &lint_path, None, svn_lint::CompatFeatures::MODERN);
         // Upstream emits line-1-based, column-0-based; we store line
         // 1-based and column 0-based in LintContext::emit.
         let actual: Vec<ExpectedWarning> = warnings
@@ -366,3 +375,281 @@ fn upstream_validator_fixtures() {
 }
 
 fn _touch_path_unused(_: &Path) {}
+
+/// One diagnostic we produced, in the same shape as the expected
+/// entry plus the error/warning severity bit, so the report can tell
+/// "we fired the right code as a warning" from "we fired it as an
+/// error".
+#[derive(Debug, Clone, Serialize)]
+struct EmittedDiagnostic {
+    code: String,
+    is_error: bool,
+    message: String,
+    start: LineCol,
+    end: LineCol,
+}
+
+/// How one `errors.json` sample compares against our output.
+///
+/// The compiler throws on its first error, so `errors.json` holds at
+/// most one entry; an empty array means the sample compiles clean
+/// (its warnings, if any, are asserted by the warnings test). When a
+/// file has a compile error, svelte-check reports only that error and
+/// none of the file's warnings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ErrorSampleStatus {
+    /// Exactly one error from us, equal to the expected one, no warnings.
+    Match,
+    /// The expected error matched but we also produced extra output
+    /// (warnings upstream would suppress, or a second error).
+    MatchExtraOutput,
+    /// Same code, same range, different message text.
+    WrongMessage,
+    /// Same code, different range.
+    WrongPosition,
+    /// We produced an error, but never the expected code.
+    WrongCode,
+    /// Expected an error; we produced none.
+    Missing,
+    /// Expected `[]`; we produced an error.
+    Spurious,
+    /// Expected `[]`; we produced no error.
+    Clean,
+    /// A sample with neither an `input.svelte` nor an `input.svelte.js`.
+    SkippedModuleOnly,
+    /// `_config.js` uses compile options the linter doesn't model.
+    SkippedCompileOptions,
+}
+
+#[derive(Debug, Serialize)]
+struct ErrorSampleReport {
+    name: String,
+    status: ErrorSampleStatus,
+    expected: Vec<ExpectedWarning>,
+    ours: Vec<EmittedDiagnostic>,
+    /// Warnings we emitted on a sample upstream rejects with a compile
+    /// error — svelte-check would show none of these.
+    warnings_upstream_suppresses: Vec<EmittedDiagnostic>,
+}
+
+fn classify_error_sample(
+    expected: &[ExpectedWarning],
+    ours: &[EmittedDiagnostic],
+) -> ErrorSampleStatus {
+    let our_errors: Vec<&EmittedDiagnostic> = ours.iter().filter(|d| d.is_error).collect();
+    let Some(exp) = expected.first() else {
+        return if our_errors.is_empty() {
+            ErrorSampleStatus::Clean
+        } else {
+            ErrorSampleStatus::Spurious
+        };
+    };
+    if our_errors.is_empty() {
+        return ErrorSampleStatus::Missing;
+    }
+    let equal = |d: &EmittedDiagnostic| {
+        d.code == exp.code && d.message == exp.message && d.start == exp.start && d.end == exp.end
+    };
+    if our_errors.iter().any(|d| equal(d)) {
+        return if ours.len() == 1 {
+            ErrorSampleStatus::Match
+        } else {
+            ErrorSampleStatus::MatchExtraOutput
+        };
+    }
+    let same_code: Vec<&&EmittedDiagnostic> =
+        our_errors.iter().filter(|d| d.code == exp.code).collect();
+    if same_code.is_empty() {
+        return ErrorSampleStatus::WrongCode;
+    }
+    if same_code
+        .iter()
+        .any(|d| d.start == exp.start && d.end == exp.end)
+    {
+        ErrorSampleStatus::WrongMessage
+    } else {
+        ErrorSampleStatus::WrongPosition
+    }
+}
+
+/// Report-only survey of upstream's `errors.json` samples: how many of
+/// the compiler's *error* codes our linter reproduces. Never fails;
+/// writes a JSON report to `$LINT_ERRORS_REPORT` when set.
+#[test]
+fn upstream_validator_error_fixtures() {
+    let dir = validator_samples_dir();
+    assert!(
+        dir.is_dir(),
+        "upstream clone not available at {}. \
+         The svelte-upstream submodule is required: run \
+         `git submodule update --init --recursive .svelte-upstream/svelte` \
+         from the workspace root.",
+        dir.display()
+    );
+
+    let mut samples: Vec<ErrorSampleReport> = Vec::new();
+
+    for entry in fs::read_dir(&dir).unwrap() {
+        let sample_path = entry.unwrap().path();
+        if !sample_path.is_dir() {
+            continue;
+        }
+        let expected_path = sample_path.join("errors.json");
+        if !expected_path.is_file() {
+            continue;
+        }
+        let name = sample_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let expected: Vec<ExpectedWarning> =
+            serde_json::from_str(&fs::read_to_string(&expected_path).unwrap()).unwrap();
+        assert!(
+            expected.len() <= 1,
+            "{name}: errors.json has {} entries; the compiler throws on the first error",
+            expected.len()
+        );
+
+        let skipped = |status| ErrorSampleReport {
+            name: name.clone(),
+            status,
+            expected: expected.clone(),
+            ours: Vec::new(),
+            warnings_upstream_suppresses: Vec::new(),
+        };
+
+        let source_path = sample_path.join("input.svelte");
+        let module_path = sample_path.join("input.svelte.js");
+        // svelte-check compiles components only, but a rune module's
+        // rules are the same inside a component's `<script module>`:
+        // lint the module there, in runes mode, on a line of its own so
+        // positions shift by exactly one line.
+        let module_only = !source_path.is_file() && module_path.is_file();
+        if !source_path.is_file() && !module_only {
+            samples.push(skipped(ErrorSampleStatus::SkippedModuleOnly));
+            continue;
+        }
+        // Same compile-option gate as the warnings test.
+        let config_path = sample_path.join("_config.js");
+        if config_path.is_file()
+            && let Ok(cfg) = fs::read_to_string(&config_path)
+            && (cfg.contains("skip: true")
+                || cfg.contains("warningFilter")
+                || cfg.contains("customElement")
+                || cfg.contains("immutable"))
+        {
+            samples.push(skipped(ErrorSampleStatus::SkippedCompileOptions));
+            continue;
+        }
+
+        let raw_source = if module_only {
+            let module = fs::read_to_string(&module_path).unwrap();
+            format!("<svelte:options runes /><script module>\n{module}\n</script>")
+        } else {
+            fs::read_to_string(&source_path).unwrap()
+        };
+        let source = raw_source.trim_end().replace('\r', "");
+        let line_shift = u32::from(module_only);
+
+        let ours: Vec<EmittedDiagnostic> = svn_lint::lint_file(
+            &source,
+            &source_path,
+            None,
+            svn_lint::CompatFeatures::MODERN,
+        )
+        .into_iter()
+        .map(|w| EmittedDiagnostic {
+            code: w.code.as_str().to_string(),
+            is_error: w.is_error,
+            message: strip_link(&w.message).to_string(),
+            start: LineCol {
+                line: w.start_line.saturating_sub(line_shift),
+                column: w.start_column,
+            },
+            end: LineCol {
+                line: w.end_line.saturating_sub(line_shift),
+                column: w.end_column,
+            },
+        })
+        .collect();
+
+        let status = classify_error_sample(&expected, &ours);
+        let warnings_upstream_suppresses = if expected.is_empty() {
+            Vec::new()
+        } else {
+            ours.iter().filter(|d| !d.is_error).cloned().collect()
+        };
+        samples.push(ErrorSampleReport {
+            name,
+            status,
+            expected,
+            ours,
+            warnings_upstream_suppresses,
+        });
+    }
+    samples.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let mut by_status: BTreeMap<ErrorSampleStatus, usize> = BTreeMap::new();
+    // code → (samples, matched)
+    let mut by_code: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for s in &samples {
+        *by_status.entry(s.status).or_default() += 1;
+        if let Some(exp) = s.expected.first() {
+            let slot = by_code.entry(exp.code.clone()).or_default();
+            slot.0 += 1;
+            if s.status == ErrorSampleStatus::Match {
+                slot.1 += 1;
+            }
+        }
+    }
+    let suppressed: Vec<&ErrorSampleReport> = samples
+        .iter()
+        .filter(|s| !s.warnings_upstream_suppresses.is_empty())
+        .collect();
+
+    eprintln!("upstream validator error fixtures (report-only):");
+    eprintln!("  total with errors.json: {}", samples.len());
+    for (status, n) in &by_status {
+        eprintln!("  {status:?}: {n}");
+    }
+    eprintln!(
+        "  samples with warnings upstream would suppress: {}",
+        suppressed.len()
+    );
+    let mut codes: Vec<(&String, &(usize, usize))> = by_code.iter().collect();
+    codes.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(b.0)));
+    eprintln!("  per expected code (samples / matched):");
+    for (code, (total, matched)) in &codes {
+        eprintln!("    {code}: {total} / {matched}");
+    }
+
+    if let Ok(path) = std::env::var("LINT_ERRORS_REPORT") {
+        let report = serde_json::json!({
+            "submodule_sha": std::env::var("SVELTE_UPSTREAM_SHA").unwrap_or_default(),
+            "total_with_errors_json": samples.len(),
+            "by_status": by_status,
+            "by_code": codes
+                .iter()
+                .map(|(code, (total, matched))| {
+                    serde_json::json!({"code": code, "samples": total, "matched": matched})
+                })
+                .collect::<Vec<_>>(),
+            "warnings_upstream_suppresses": suppressed
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "name": s.name,
+                        "status": s.status,
+                        "warnings": s.warnings_upstream_suppresses,
+                    })
+                })
+                .collect::<Vec<_>>(),
+            "samples": samples,
+        });
+        let pretty = serde_json::to_string_pretty(&report).unwrap();
+        fs::write(&path, format!("{pretty}\n"))
+            .unwrap_or_else(|e| panic!("failed to write errors report to {path}: {e}"));
+        eprintln!("  wrote errors report → {path}");
+    }
+}

@@ -25,7 +25,6 @@
 //! and this 150-line analyze concern lives with its data.
 
 use std::collections::HashSet;
-use std::path::Path;
 
 use oxc_allocator::Allocator;
 use smol_str::SmolStr;
@@ -36,7 +35,6 @@ use svn_analyze::{
 use svn_parser::parse_script_body;
 
 use crate::process_instance_script_content;
-use crate::sveltekit;
 
 /// Props, store auto-subscribes, and template-referenced identifier
 /// buckets — see module docs.
@@ -47,39 +45,16 @@ pub(crate) struct ScriptAndTemplateAnalysis {
 }
 
 /// Run the cross-cutting analyze pass — see module docs for the
-/// shape produced.
-///
-/// Script-binding collection unions the module script, the instance
-/// script (original, with imports visible), and the rewritten
-/// content (so reactive-destructure-introduced names — `$: ({a, b}
-/// = expr)` → `let {a, b} = …` — participate in subsequent `$a`/`$b`
-/// store-alias detection).
-#[allow(clippy::too_many_arguments)]
+/// shape produced. `store_refs` comes from [`collect_store_refs`],
+/// which runs earlier because the script split needs it.
 pub(crate) fn analyze_script_and_template_refs<'alloc>(
     doc: &svn_parser::Document<'_>,
-    source_path: &Path,
-    fragment: &svn_parser::Fragment,
     parsed_instance: Option<&svn_parser::ParsedScript<'alloc>>,
     split: Option<&process_instance_script_content::SplitScript>,
-    rewritten_content: Option<&str>,
     props_info: &PropsInfo,
     effective_props_type_text: Option<&str>,
+    store_refs: Vec<SmolStr>,
 ) -> ScriptAndTemplateAnalysis {
-    // Parse the module script once up front; both `script_bindings`
-    // collection and the type-only-import scan below consume it.
-    // Allocator lives at function scope so the AST stays valid across
-    // both consumers.
-    let alloc_mod = Allocator::default();
-    let parsed_mod = doc
-        .module_script
-        .as_ref()
-        .map(|ms| parse_script_body(&alloc_mod, ms.content, ms.lang));
-
-    let mut script_bindings: HashSet<String> = HashSet::new();
-    if let Some(parsed) = &parsed_mod {
-        collect_top_level_bindings(&parsed.program, &mut script_bindings);
-    }
-
     // `local_only` leaves are excluded: upstream's `;prop;`-on-
     // $bindable emission only fires for simple top-level elements.
     let bindable_prop_names: Vec<SmolStr> = props_info
@@ -89,37 +64,57 @@ pub(crate) fn analyze_script_and_template_refs<'alloc>(
         .map(|p| p.local_name.clone())
         .collect();
 
-    let prop_type_source: Option<String> = if let (Some(_s), Some(instance), Some(parsed_orig)) =
-        (split, &doc.instance_script, parsed_instance)
-    {
-        // SvelteKit auto-typing: route components (+page.svelte,
-        // +layout.svelte) with an untyped `$props()` pick up
-        // `PageData` / `LayoutData` / `ActionData` from the file
-        // path + the list of destructured prop names. Only fires
-        // when PropsInfo saw no user-provided source.
-        let ty = effective_props_type_text
-            .map(|s| s.to_string())
-            .or_else(|| {
-                sveltekit::route_kind(source_path).and_then(|kind| {
-                    let names_borrow: Vec<&str> = props_info
-                        .destructures
-                        .iter()
-                        .map(|p| p.local_name.as_str())
-                        .collect();
-                    sveltekit::synthesize_route_props_type(kind, &names_borrow)
-                })
-            });
+    let prop_type_source: Option<String> = match (split, &doc.instance_script, parsed_instance) {
+        (Some(_), Some(_), Some(_)) => effective_props_type_text.map(|s| s.to_string()),
+        _ => None,
+    };
 
+    ScriptAndTemplateAnalysis {
+        bindable_prop_names,
+        prop_type_source,
+        store_refs,
+    }
+}
+
+/// `$store` auto-subscribe references from both script sides and the
+/// template, deduplicated, in encounter order.
+///
+/// Script-binding collection unions the module script, the instance
+/// script (original, with imports visible), and the rewritten
+/// content (so reactive-destructure-introduced names — `$: ({a, b}
+/// = expr)` → `let {a, b} = …` — participate in subsequent `$a`/`$b`
+/// store-alias detection).
+pub(crate) fn collect_store_refs<'alloc>(
+    doc: &svn_parser::Document<'_>,
+    fragment: &svn_parser::Fragment,
+    parsed_instance: Option<&svn_parser::ParsedScript<'alloc>>,
+    rewritten_content: Option<&str>,
+) -> Vec<SmolStr> {
+    let alloc_mod = Allocator::default();
+    let parsed_mod = doc
+        .module_script
+        .as_ref()
+        .map(|ms| parse_script_body(&alloc_mod, ms.content, ms.lang));
+
+    let mut script_bindings: HashSet<String> = HashSet::new();
+    // Type-only imports count too: upstream declares `$name` for any
+    // imported `name` it sees read that way (inside ignore comments,
+    // so a type that isn't a store just leaves `$name` as `any`).
+    let mut imports: HashSet<SmolStr> = HashSet::new();
+    if let Some(parsed) = &parsed_mod {
+        collect_top_level_bindings(&parsed.program, &mut script_bindings);
+        crate::store_subscriptions::import_local_names(&parsed.program, &mut imports);
+    }
+    if let (Some(instance), Some(parsed_orig)) = (&doc.instance_script, parsed_instance) {
         collect_top_level_bindings(&parsed_orig.program, &mut script_bindings);
+        crate::store_subscriptions::import_local_names(&parsed_orig.program, &mut imports);
         if let Some(rewritten) = rewritten_content {
             let alloc_rw = Allocator::default();
             let parsed_rw = parse_script_body(&alloc_rw, rewritten, instance.lang);
             collect_top_level_bindings(&parsed_rw.program, &mut script_bindings);
         }
-        ty
-    } else {
-        None
-    };
+    }
+    script_bindings.extend(imports.into_iter().map(String::from));
 
     // Store auto-subscribe scan happens AFTER both module + instance
     // bindings are collected, so a `$properties` use in instance can
@@ -190,9 +185,5 @@ pub(crate) fn analyze_script_and_template_refs<'alloc>(
         store_refs.retain(|r| r != "$derived");
     }
 
-    ScriptAndTemplateAnalysis {
-        bindable_prop_names,
-        prop_type_source,
-        store_refs,
-    }
+    store_refs
 }

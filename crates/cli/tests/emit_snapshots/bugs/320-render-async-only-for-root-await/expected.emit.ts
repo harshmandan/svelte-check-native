@@ -7,7 +7,7 @@ function $$render_e40e2c10() {
   if (data) { const more = await fetch('/more'); console.log(more); }
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (data);
+        { svelteHTML.createElement("p", {});             data;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

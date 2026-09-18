@@ -1,3 +1,11 @@
 {
-    "clean": true
+    "errors": [
+        {
+            "file": "Component.svelte",
+            "line": 53,
+            "column": 4,
+            "code": "inspect_trace_invalid_placement"
+        }
+    ],
+    "_note": "The compiler rejects the top-level `$inspect.trace(...)` (it must be the first statement of a function body) with inspect_trace_invalid_placement; svelte-check reports that compile error and the file's TypeScript stays clean (verified against upstream svelte-check)."
 }

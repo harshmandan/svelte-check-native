@@ -115,20 +115,17 @@ pub struct MapData {
     pub svelte_script_is_ts: bool,
     /// See [`CheckInput::kit_col_shifts`]. Sorted by line, then column.
     pub kit_col_shifts: Vec<(u32, u32, u32)>,
-    /// Byte-offset ranges (start, end) in the overlay where emit has
-    /// marked scaffolding with `IGNORE_START_MARKER` / `IGNORE_END_MARKER`.
-    /// Diagnostics whose start position falls inside any of these
-    /// ranges are dropped in `map_diagnostic`. Ranges are sorted by
-    /// start and non-overlapping (each `ignore_start` pairs with the
-    /// NEXT `ignore_end`).
-    pub ignore_regions: Vec<(u32, u32)>,
-    /// Source byte-offset ranges of top-level `<template lang="pug">…
-    /// </template>` containers. Mirrors upstream's
-    /// `isNoPugFalsePositive` gate: diagnostics whose post-translation
-    /// byte position falls inside any of these are dropped in
-    /// `map_diagnostic` (with TS6133/6192/6196 as the only exceptions
-    /// that still surface). Empty for non-pug Svelte files.
-    pub pug_template_ranges: Vec<(u32, u32)>,
+    /// Source byte range of the content of the file's top-level
+    /// `<template>` tag when its language is pug (`None` otherwise). In a
+    /// pug file `map_diagnostic` drops every diagnostic inside this range
+    /// and the file's unused-name diagnostics (TS6133 / TS6192), as
+    /// svelte-check does.
+    pub pug_template: Option<(u32, u32)>,
+    /// UTF-16 units svelte-check's mapper skews every diagnostic of this
+    /// component back by, because its script opens with a `@ts-check` /
+    /// `@ts-nocheck` comment — see [`crate::ts_check_shift`]. 0 for most
+    /// components and for identity-mapped inputs.
+    pub ts_check_prefix: u32,
 }
 
 /// One file to type-check.
@@ -142,7 +139,7 @@ pub struct CheckInput {
     /// with the caller via `Arc` (the CLI already holds the full
     /// corpus in memory for its own passes, so this adds no RSS and
     /// saves a per-file disk re-read inside [`crate::check`]). Empty
-    /// for KitFile / UserTsOverlay kinds — those are identity-mapped
+    /// for the KitFile kind — those are identity-mapped
     /// and the position helpers read the overlay text for both sides.
     pub source: std::sync::Arc<str>,
     /// Generated TypeScript that should be type-checked.
@@ -174,7 +171,7 @@ pub struct CheckInput {
     /// to `exclude` so tsgo only sees our injected-type overlay).
     pub kind: InputKind,
     /// Whether the generated overlay is TypeScript (`.svelte.svn.ts`)
-    /// or JavaScript (`.svelte.svn.js`). True for Kit/UserTsOverlay
+    /// or JavaScript (`.svelte.svn.js`). True for Kit
     /// kinds (always TS) and for Svelte sources whose
     /// `Document::script_lang()` resolves to `Ts`. False only when
     /// the JS-overlay branch is enabled AND the Svelte source has no
@@ -214,16 +211,6 @@ pub enum InputKind {
     /// the original source path into the overlay tsconfig's
     /// `exclude` list so tsgo reads only the typed version.
     KitFile,
-    /// User-authored `.ts` file that statically imports at least one
-    /// `.svelte` component whose directory ALSO contains a sibling
-    /// `.svelte.ts` runes module (the collision case that makes
-    /// tsgo's `rootDirs` resolution pick the runes module instead of
-    /// our overlay). We emit a mirror overlay at `kit_overlay_path`
-    /// with every `.svelte` specifier rewritten to `.svelte.svn.js`,
-    /// so the overlay resolves directly to the cache's generated TS.
-    /// Original source path is pushed into `exclude` so tsgo reads
-    /// only the rewritten version.
-    UserTsOverlay,
 }
 
 /// A single mapped-back diagnostic ready for presentation.
@@ -267,6 +254,10 @@ pub struct CheckDiagnostic {
 pub enum DiagnosticCode {
     Numeric(u32),
     Slug(String),
+    /// No code at all: the compiler crashed with a plain JavaScript
+    /// exception rather than a compile error, and svelte-check reports
+    /// the exception's message with no `code` field.
+    Missing,
 }
 
 impl std::fmt::Display for DiagnosticCode {
@@ -278,6 +269,7 @@ impl std::fmt::Display for DiagnosticCode {
             // Compiler slugs render as-is — matches the way svelte-
             // check shows `state_referenced_locally`.
             Self::Slug(s) => f.write_str(s),
+            Self::Missing => Ok(()),
         }
     }
 }
@@ -333,7 +325,7 @@ pub struct CheckOutput {
 }
 
 /// Marker (start) for emit-synthesised regions whose diagnostics
-/// should be muted. See `MapData::ignore_regions`.
+/// should be muted (`filters::is_in_generated_code`).
 pub const IGNORE_START_MARKER: &str = "/*svn:ignore_start*/";
 /// Marker (end) for emit-synthesised regions whose diagnostics should
 /// be muted.

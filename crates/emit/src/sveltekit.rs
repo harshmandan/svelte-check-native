@@ -72,155 +72,65 @@ pub fn route_kind(path: &Path) -> Option<RouteKind> {
     }
 }
 
-/// Return the full property declaration (including the optional `?`
-/// marker and the type source) for a kit-auto-typed prop name, or
-/// `None` when `name` is not auto-typed for this kind. Rendered as
-/// `<name>[?]: <type>`.
+/// Return the property declaration a SvelteKit route component's
+/// `$props()` destructure key contributes to the synthesised props
+/// type, or `None` when the key contributes nothing.
 ///
-/// Conservative by design: props this function doesn't recognize fall
-/// back to the existing `<name>?: any` shape in the caller. That keeps
-/// user-defined props like `let { data, heading } = $props()` in a
-/// route file working — `heading` stays `any`, `data` becomes
-/// `PageData`.
-///
-/// `params` is intentionally NOT auto-typed. Upstream emits
-/// `import('./$types.js').PageProps['params']`, but `PageProps` was
-/// only standardized in SvelteKit 2.16+; older projects that predate
-/// it fire TS2694 ("has no exported member 'PageProps'"). The
-/// user-defined-type fallback (`any`) is safe.
+/// Mirrors upstream svelte2tsx's `handle$propsRune`: on a route file
+/// ONLY the props SvelteKit itself passes are typed — `data`, `form`
+/// (pages only; a layout's `$types` has no `ActionData`) and `params`
+/// — and every other destructured key is left out of the type, so
+/// reading it off the typed destructure is an error. An error page
+/// types only `error`, from the app-wide `App.Error` ambient.
 pub fn kit_prop_decl(name: &str, kind: RouteKind) -> Option<&'static str> {
     match (kind, name) {
         (RouteKind::Page, "data") => Some("data: import('./$types.js').PageData"),
         (RouteKind::Page, "form") => Some("form: import('./$types.js').ActionData"),
+        (RouteKind::Page, "params") => Some("params: import('./$types.js').PageProps['params']"),
         (RouteKind::Layout, "data") => Some("data: import('./$types.js').LayoutData"),
-        // `children` is REQUIRED on layouts — SvelteKit always passes
-        // a children snippet to layout components at runtime, so
-        // `let { children } = $props()` followed by `{@render children()}`
-        // must type-check without an optional-chain. Mirrors upstream
-        // svelte2tsx synthesis: emits `children: import('svelte').Snippet`
-        // (no `?`). With `?:`, tsgo fires TS2722 "Cannot invoke an object
-        // which is possibly 'undefined'" on the bare call.
-        (RouteKind::Layout, "children") => Some("children: import('svelte').Snippet"),
-        // `+error.svelte` receives the error it renders as an `error`
-        // prop typed by the app-wide `App.Error` ambient interface
-        // (declared in the user's app.d.ts, defaulting to
-        // `{ message: string }` from @sveltejs/kit). Mirrors upstream
-        // svelte2tsx `ExportedNames.ts` `isKitErrorFile` handling.
-        // No `./$types.js` import here — App.Error is route-agnostic.
+        (RouteKind::Layout, "params") => {
+            Some("params: import('./$types.js').LayoutProps['params']")
+        }
         (RouteKind::Error, "error") => Some("error: App.Error"),
         _ => None,
     }
 }
 
-/// Return just the TYPE source (no name, no `:`) for a Kit-auto-typed
-/// Svelte-4 `export let <name>` declaration on a route file. The
-/// caller splices `: <type>` after the identifier in the overlay.
+/// Build the props type for a SvelteKit route component whose
+/// `$props()` destructure carries no type of its own, or `None` when
+/// the component's props end up untyped.
 ///
-/// Mirrors upstream `svelte2tsx/src/svelte2tsx/nodes/ExportedNames.ts`
-/// `handleTypeAssertion` (lines 424-440): when the exported local is
-/// one of `data` / `form` / `snapshot` on a Kit route file AND the
-/// user didn't already annotate it, upstream synthesizes
-/// `: import('./$types.js').<Type>`. We match the same set but widen
-/// `form`/`snapshot` with `| undefined` because `let X: T;` can't
-/// carry TS's object-member `?` optional marker — the declaration
-/// needs a value-position `T | undefined` union. `data` stays
-/// required (upstream emits `: PageData` without `| undefined` since
-/// the reassignment via `__sveltets_2_any(data)` loosens it
-/// downstream anyway; our `!` definite-assign has the same net
-/// effect).
-///
-/// Returns `None` for names that aren't kit-auto-typed — the caller
-/// falls back to `: any` (our legacy widen).
-///
-/// `form` is intentionally gated to `RouteKind::Page` only. A layout's
-/// `$types` exports no `ActionData` symbol, so widening `form` on a
-/// layout would emit a `import('./$types.js').ActionData` reference that
-/// fires TS2694 ("has no exported member 'ActionData'"). An `export let
-/// form` on a layout is itself nonsensical — layouts don't receive form
-/// action data — so the `: any` fallback is the correct, parity-safe
-/// behavior there.
-pub fn kit_widen_type(name: &str, kind: RouteKind) -> Option<&'static str> {
-    match (kind, name) {
-        (RouteKind::Page, "data") => Some("import('./$types.js').PageData"),
-        (RouteKind::Page, "form") => Some("import('./$types.js').ActionData"),
-        (RouteKind::Page, "snapshot") => Some("import('./$types.js').Snapshot | undefined"),
-        (RouteKind::Layout, "data") => Some("import('./$types.js').LayoutData"),
-        (RouteKind::Layout, "snapshot") => Some("import('./$types.js').Snapshot | undefined"),
-        _ => None,
+/// Mirrors upstream svelte2tsx's best-effort synthesis on route files:
+/// each simple destructure key contributes its [`kit_prop_decl`], a
+/// layout always gains a required `children` snippet (SvelteKit always
+/// renders one into it), and a pattern with non-simple elements
+/// (`...rest`, nested patterns, computed keys) widens the result with
+/// `& Record<string, any>` — or is bare `Record<string, any>` when
+/// nothing else was pushed. With nothing pushed and nothing to widen,
+/// upstream declares no props type at all and the component's props
+/// resolve to `any`; `None` tells the caller to do the same.
+pub fn synthesize_route_props_type(
+    kind: RouteKind,
+    prop_keys: &[&str],
+    with_unknown: bool,
+) -> Option<String> {
+    let mut props: Vec<&str> = prop_keys
+        .iter()
+        .filter_map(|key| kit_prop_decl(key, kind))
+        .collect();
+    if matches!(kind, RouteKind::Layout) {
+        props.push("children: import('svelte').Snippet");
     }
-}
-
-/// Build the synthesized Props object type for a route-file `.svelte`
-/// that has no explicit `$props()` annotation. Returns `None` when no
-/// prop in the destructure list is kit-auto-typed; the caller then
-/// continues with the existing "no annotation → default = any" path.
-///
-/// Unrecognized props in the destructure (user-defined) are emitted as
-/// `<name>?: any;` so the synthesized shape stays a superset of what
-/// the user wrote; marking them optional avoids TS2741 errors at the
-/// component-instantiation sites where the user's template doesn't
-/// pass them. Matches the convention `PropsInfo::build` uses for
-/// untyped `export let foo = default` declarations (see
-/// `svn_analyze::props`).
-///
-/// For `+layout.svelte`, `children` is added implicitly even when the
-/// user doesn't destructure it (upstream does this too). Layouts
-/// always receive a `children` snippet from SvelteKit at runtime.
-pub fn synthesize_route_props_type(kind: RouteKind, prop_names: &[&str]) -> Option<String> {
-    use std::fmt::Write;
-
-    // Two-pass so we can bail with `None` without allocating the
-    // output buffer if nothing Kit-specific landed. First pass
-    // classifies each prop + tracks whether a Layout's implicit
-    // `children` slot is already covered.
-    let mut saw_kit_prop = false;
-    let mut saw_children = false;
-    for &name in prop_names {
-        if kit_prop_decl(name, kind).is_some() {
-            saw_kit_prop = true;
-            if name == "children" {
-                saw_children = true;
-            }
-        }
+    if props.is_empty() {
+        return with_unknown.then(|| "Record<string, any>".to_string());
     }
-    let need_implicit_children = matches!(kind, RouteKind::Layout) && !saw_children;
-    if !saw_kit_prop && !need_implicit_children {
-        return None;
-    }
-
-    // Second pass: write directly into the output buffer via `write!`,
-    // no intermediate `Vec<String>`. Capacity is a rough overestimate
-    // (avg ~28 bytes per declaration + separators) — beats a
-    // per-item `format!` allocation.
-    let mut out = String::with_capacity(prop_names.len() * 40 + 32);
+    let mut out = String::with_capacity(props.iter().map(|p| p.len() + 2).sum::<usize>() + 32);
     out.push_str("{ ");
-    let mut first = true;
-    let push_sep = |buf: &mut String, first: &mut bool| {
-        if !*first {
-            buf.push(' ');
-        }
-        *first = false;
-    };
-    for &name in prop_names {
-        if let Some(decl) = kit_prop_decl(name, kind) {
-            push_sep(&mut out, &mut first);
-            let _ = write!(out, "{decl};");
-        } else {
-            // Preserve user-defined props with the conservative `?: any`
-            // shape. Losing them from the synthesized type would shrink
-            // the overlay default's Props and fire spurious
-            // "Property 'foo' does not exist" at callers that pass
-            // `foo` down from a parent layout's data flow.
-            push_sep(&mut out, &mut first);
-            let _ = write!(out, "{name}?: any;");
-        }
-    }
-    if need_implicit_children {
-        push_sep(&mut out, &mut first);
-        // Required — see `kit_prop_decl` LayoutChildren branch.
-        out.push_str("children: import('svelte').Snippet;");
-    }
+    out.push_str(&props.join(", "));
     out.push_str(" }");
+    if with_unknown {
+        out.push_str(" & Record<string, any>");
+    }
     Some(out)
 }
 
@@ -251,118 +161,70 @@ mod tests {
     }
 
     #[test]
-    fn kit_prop_decl_page_data_required() {
+    fn kit_prop_decl_types_only_kit_passed_props() {
         assert_eq!(
-            kit_prop_decl("data", RouteKind::Page),
-            Some("data: import('./$types.js').PageData")
+            kit_prop_decl("params", RouteKind::Page),
+            Some("params: import('./$types.js').PageProps['params']")
+        );
+        assert_eq!(
+            kit_prop_decl("params", RouteKind::Layout),
+            Some("params: import('./$types.js').LayoutProps['params']")
+        );
+        assert_eq!(kit_prop_decl("form", RouteKind::Layout), None);
+        assert_eq!(kit_prop_decl("children", RouteKind::Layout), None);
+        assert_eq!(kit_prop_decl("heading", RouteKind::Page), None);
+        assert_eq!(kit_prop_decl("data", RouteKind::Error), None);
+    }
+
+    #[test]
+    fn synth_page_drops_user_props() {
+        let ty = synthesize_route_props_type(RouteKind::Page, &["data", "form", "heading"], false)
+            .unwrap();
+        assert_eq!(
+            ty,
+            "{ data: import('./$types.js').PageData, form: import('./$types.js').ActionData }"
         );
     }
 
     #[test]
-    fn kit_prop_decl_page_form_optional() {
-        assert_eq!(
-            kit_prop_decl("form", RouteKind::Page),
-            Some("form: import('./$types.js').ActionData")
-        );
-    }
-
-    #[test]
-    fn kit_prop_decl_layout_data() {
-        assert_eq!(
-            kit_prop_decl("data", RouteKind::Layout),
-            Some("data: import('./$types.js').LayoutData")
-        );
-    }
-
-    #[test]
-    fn kit_prop_decl_layout_children_required() {
-        // Required (no `?`) — Kit always passes a children snippet at
-        // runtime; making it optional fires TS2722 on `{@render
-        // children()}`.
-        assert_eq!(
-            kit_prop_decl("children", RouteKind::Layout),
-            Some("children: import('svelte').Snippet")
-        );
-    }
-
-    #[test]
-    fn kit_prop_decl_params_left_as_any() {
-        // We don't auto-type params — upstream uses PageProps['params']
-        // which requires SvelteKit 2.16+. Safer to skip.
-        assert_eq!(kit_prop_decl("params", RouteKind::Page), None);
-    }
-
-    #[test]
-    fn synth_page_with_data_only() {
-        let ty = synthesize_route_props_type(RouteKind::Page, &["data"]).unwrap();
-        assert_eq!(ty, "{ data: import('./$types.js').PageData; }");
-    }
-
-    #[test]
-    fn synth_page_with_data_form_user_prop() {
+    fn synth_layout_always_adds_children() {
         let ty =
-            synthesize_route_props_type(RouteKind::Page, &["data", "form", "heading"]).unwrap();
+            synthesize_route_props_type(RouteKind::Layout, &["data", "children"], false).unwrap();
         assert_eq!(
             ty,
-            "{ data: import('./$types.js').PageData; form: import('./$types.js').ActionData; \
-             heading?: any; }"
+            "{ data: import('./$types.js').LayoutData, children: import('svelte').Snippet }"
+        );
+        assert_eq!(
+            synthesize_route_props_type(RouteKind::Layout, &[], false).as_deref(),
+            Some("{ children: import('svelte').Snippet }")
         );
     }
 
     #[test]
-    fn synth_layout_injects_children_when_missing() {
-        let ty = synthesize_route_props_type(RouteKind::Layout, &["data"]).unwrap();
+    fn synth_widens_for_non_simple_elements() {
         assert_eq!(
-            ty,
-            "{ data: import('./$types.js').LayoutData; \
-             children: import('svelte').Snippet; }"
+            synthesize_route_props_type(RouteKind::Page, &["data"], true).as_deref(),
+            Some("{ data: import('./$types.js').PageData } & Record<string, any>")
+        );
+        assert_eq!(
+            synthesize_route_props_type(RouteKind::Page, &["heading"], true).as_deref(),
+            Some("Record<string, any>")
         );
     }
 
     #[test]
-    fn synth_layout_preserves_explicit_children() {
-        let ty = synthesize_route_props_type(RouteKind::Layout, &["data", "children"]).unwrap();
+    fn synth_returns_none_when_nothing_is_typed() {
         assert_eq!(
-            ty,
-            "{ data: import('./$types.js').LayoutData; \
-             children: import('svelte').Snippet; }"
-        );
-    }
-
-    #[test]
-    fn synth_returns_none_when_no_kit_props() {
-        // `+page.svelte` with `let { heading } = $props()` — nothing
-        // kit-specific to synthesize; caller falls back to `any`.
-        assert_eq!(
-            synthesize_route_props_type(RouteKind::Page, &["heading"]),
+            synthesize_route_props_type(RouteKind::Page, &["heading"], false),
             None
         );
-    }
-
-    #[test]
-    fn kit_prop_decl_error_route_error_prop() {
-        // `+error.svelte`'s `error` prop is typed by the app-wide
-        // `App.Error` ambient — no `./$types.js` import involved.
         assert_eq!(
-            kit_prop_decl("error", RouteKind::Error),
-            Some("error: App.Error")
-        );
-    }
-
-    #[test]
-    fn synth_error_route_with_error_prop() {
-        let ty = synthesize_route_props_type(RouteKind::Error, &["error"]).unwrap();
-        assert_eq!(ty, "{ error: App.Error; }");
-    }
-
-    #[test]
-    fn synth_error_route_returns_none_without_error_prop() {
-        // Only `error` is auto-typed on error routes — `data` and
-        // friends are not Kit-injected there, so a destructure without
-        // `error` falls back to the caller's `any` path.
-        assert_eq!(
-            synthesize_route_props_type(RouteKind::Error, &["data"]),
+            synthesize_route_props_type(RouteKind::Error, &["data"], false),
             None
+        );
+        assert_eq!(
+            synthesize_route_props_type(RouteKind::Error, &["error"], false).as_deref(),
+            Some("{ error: App.Error }")
         );
     }
 }

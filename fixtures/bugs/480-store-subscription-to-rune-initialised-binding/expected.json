@@ -1,0 +1,4 @@
+{
+    "errors": [],
+    "_note": "A $name reference is a store subscription to name whatever initialises name — here a $derived destructure and a $derived value — so bind:value={$customServer} binds a store value, not an undeclared name (no bind_invalid_value). Only rune-named subscriptions ($state, $derived, …) skip names initialised by a rune. Verified against upstream svelte-check."
+}

@@ -546,35 +546,40 @@ fn check_element(
                 }
             }
             "tabindex" => {
-                if let Some(s) = static_value
-                    && let Ok(n) = s.trim().parse::<f64>()
-                    && n.is_finite()
-                    && n > 0.0
-                {
+                // Upstream: `!isNaN(value) && +value > 0` over
+                // `get_static_value`, which is `true` (→ 1) for a bare
+                // attribute and `null` (→ 0) for a dynamic one.
+                let numeric = match plain {
+                    Some(p) if p.value.is_none() => 1.0,
+                    _ => static_value.map_or(0.0, js_number),
+                };
+                if numeric > 0.0 {
                     let msg = messages::a11y_positive_tabindex();
                     ctx.emit(Code::a11y_positive_tabindex, msg, attr_range);
                 }
-                // a11y_no_noninteractive_tabindex: tabindex on a
-                // non-interactive element with no interactive role
-                // AND value is either dynamic (null) or >= 0. Fires
-                // at the element, not the attribute.
-                // Upstream gates only on `!is_dynamic_element` (no spread
-                // gate), and `is_interactive_roles(role_static_value)`
-                // matches the WHOLE role string against the interactive set
-                // — a multi-token `role="button link"` is NOT interactive.
-                if !is_dynamic {
-                    let has_interactive_role = role_static_value.is_some_and(is_interactive_role);
-                    let nonneg_tabindex = match static_value {
-                        Some(s) => matches!(s.parse::<i64>(), Ok(n) if n >= 0),
-                        None => true, // dynamic or bare — treat as non-negative
-                    };
-                    if !is_interactive && !has_interactive_role && nonneg_tabindex {
-                        let msg = messages::a11y_no_noninteractive_tabindex();
-                        ctx.emit(Code::a11y_no_noninteractive_tabindex, msg, range);
-                    }
-                }
             }
             _ => {}
+        }
+    }
+
+    // a11y_no_noninteractive_tabindex: runs after the per-attribute
+    // loop (upstream `a11y/index.js`), looking the attribute up by its
+    // exact name — `tabIndex={…}` is not `tabindex`. Fires on a
+    // non-interactive element without an interactive role when the
+    // value is dynamic, bare, or `Number(value) >= 0`. Upstream gates
+    // only on `!is_dynamic_element` (no spread gate), and
+    // `is_interactive_roles(role_static_value)` matches the WHOLE role
+    // string — a multi-token `role="button link"` is NOT interactive.
+    if !is_dynamic && let Some(tab_index) = attribute_map.get("tabindex") {
+        let value = match tab_index {
+            Attribute::Plain(p) => get_static_text_value(p, source),
+            _ => None,
+        };
+        let has_interactive_role = role_static_value.is_some_and(is_interactive_role);
+        let nonneg_tabindex = value.is_none_or(|v| js_number(v) >= 0.0);
+        if !is_interactive && !has_interactive_role && nonneg_tabindex {
+            let msg = messages::a11y_no_noninteractive_tabindex();
+            ctx.emit(Code::a11y_no_noninteractive_tabindex, msg, range);
         }
     }
 
@@ -1575,6 +1580,48 @@ fn is_parent(ancestors: &[Ancestor], names: &[&str]) -> bool {
         }
     }
     false
+}
+
+/// JavaScript's `Number(string)`: surrounding whitespace ignored, an
+/// empty string is 0, decimal (with sign / exponent), `0x` / `0o` /
+/// `0b` integers and `Infinity`; anything else is NaN.
+fn js_number(s: &str) -> f64 {
+    let t = s.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+    if t.is_empty() {
+        return 0.0;
+    }
+    let radix = match t.get(..2) {
+        Some("0x" | "0X") => Some(16),
+        Some("0o" | "0O") => Some(8),
+        Some("0b" | "0B") => Some(2),
+        _ => None,
+    };
+    if let Some(radix) = radix {
+        let body = &t[2..];
+        if body.is_empty() || !body.chars().all(|c| c.is_digit(radix)) {
+            return f64::NAN;
+        }
+        return body
+            .chars()
+            .filter_map(|c| c.to_digit(radix))
+            .fold(0.0, |acc, d| acc * f64::from(radix) + f64::from(d));
+    }
+    let unsigned = t.strip_prefix(['+', '-']).unwrap_or(t);
+    if unsigned == "Infinity" {
+        return if t.starts_with('-') {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        };
+    }
+    // Rust also accepts `inf` / `nan` spellings, which JS does not.
+    if !unsigned
+        .chars()
+        .all(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'))
+    {
+        return f64::NAN;
+    }
+    t.parse::<f64>().unwrap_or(f64::NAN)
 }
 
 fn get_static_text_value<'a>(p: &svn_parser::ast::PlainAttr, source: &'a str) -> Option<&'a str> {

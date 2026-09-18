@@ -30,6 +30,7 @@ pub mod html5;
 mod mustache;
 mod scanner;
 mod script;
+mod script_tag_expression;
 mod sections;
 mod template;
 
@@ -42,8 +43,10 @@ pub use ast::{
 };
 pub use document::{
     Document, ScriptAttr, ScriptContext, ScriptLang, ScriptSection, StyleSection, Template,
+    is_ts_svelte,
 };
 pub use error::ParseError;
 pub use script::{ParsedScript, parse_script_body};
+pub use script_tag_expression::{script_tag_expression_spans, typescript_regex_end};
 pub use sections::parse_sections;
 pub use template::{parse_all_template_runs, parse_template};

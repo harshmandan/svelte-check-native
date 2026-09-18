@@ -1,0 +1,95 @@
+{
+    "errors": [
+        {
+            "file": "src/Ctors.svelte",
+            "line": 6,
+            "column": 29,
+            "code": 2351
+        },
+        {
+            "file": "src/Ctors.svelte",
+            "line": 7,
+            "column": 30,
+            "code": 2351
+        },
+        {
+            "file": "src/Ctors.svelte",
+            "line": 8,
+            "column": 24,
+            "code": 2345
+        },
+        {
+            "file": "src/Ctors.svelte",
+            "line": 9,
+            "column": 10,
+            "code": 2351
+        },
+        {
+            "file": "src/Ctors.svelte",
+            "line": 10,
+            "column": 8,
+            "code": 2351
+        },
+        {
+            "file": "src/Ctors.svelte",
+            "line": 11,
+            "column": 1,
+            "code": 2345
+        },
+        {
+            "file": "src/Ctors.svelte",
+            "line": 12,
+            "column": 10,
+            "code": 2351
+        },
+        {
+            "file": "src/Icon.svelte",
+            "line": 2,
+            "column": 7,
+            "code": 2339
+        },
+        {
+            "file": "src/Slots.svelte",
+            "line": 7,
+            "column": 11,
+            "code": 18046
+        },
+        {
+            "file": "src/Slots.svelte",
+            "line": 8,
+            "column": 14,
+            "code": 18046
+        },
+        {
+            "file": "src/Slots.svelte",
+            "line": 9,
+            "column": 12,
+            "code": 2551
+        },
+        {
+            "file": "src/Slots.svelte",
+            "line": 11,
+            "column": 21,
+            "code": 18046
+        },
+        {
+            "file": "src/Slots.svelte",
+            "line": 12,
+            "column": 17,
+            "code": 18046
+        },
+        {
+            "file": "src/Slots.svelte",
+            "line": 13,
+            "column": 6,
+            "code": 2345
+        },
+        {
+            "file": "src/Slots.svelte",
+            "line": 13,
+            "column": 21,
+            "code": 2339
+        }
+    ],
+    "_note": "Components are normalised through upstream's ensureComponent: a class-form component (anything newable into a value with $$prop_def/$$events_def/$$slot_def) passes through; a Svelte 5 Component<Props> becomes a constructor whose instance is SvelteComponent<Props, Props['$$events'], Props['$$slots']>, so on a runes component without those carriers a slot=\"x\" child or let: binding is TS18046, while a bare Component typed with $$events types on:save handlers (TS2345/TS2339). A plain class fails the constraint (TS2345 at the name / this expression); a callable non-component (Date, a helper) maps to never and the new reports TS2351 on the last character of the tag name or right after the this={...} expression. ConstructorOfATypedSvelteComponent is upstream's real constructor type (TS2339 on an unknown member). The default-slot let: access maps after the last let: item (the closing brace of its value, else the name's last character). Verified against upstream svelte-check --tsgo with svelte 5.55."
+}

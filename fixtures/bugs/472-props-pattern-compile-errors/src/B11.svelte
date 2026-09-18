@@ -1,0 +1,4 @@
+<script>
+	let x = $state(1);
+</script>
+{$$props.a}

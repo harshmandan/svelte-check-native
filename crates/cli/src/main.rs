@@ -10,8 +10,8 @@
 
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
-mod collisions;
 mod discovery;
+mod fallback_transpile;
 mod output;
 mod svelte_config;
 
@@ -21,7 +21,6 @@ use std::process::ExitCode;
 use clap::Parser;
 use rayon::prelude::*;
 
-use collisions::rewrite_svelte_imports_for_collisions;
 use discovery::{discover_relevant_files, discover_svelte_files, path_is_under_node_modules};
 use output::{print_diagnostics, print_machine_failure};
 
@@ -140,8 +139,7 @@ struct Cli {
     #[arg(long = "ignore-node-modules-warnings", default_value_t = false)]
     ignore_node_modules_warnings: bool,
 
-    /// Enable disk caching. No-op for us — caching is always on; accepted
-    /// for upstream-compat.
+    /// Let tsgo keep build info between runs, as upstream's flag does.
     #[arg(long, default_value_t = false)]
     incremental: bool,
 
@@ -291,20 +289,13 @@ fn main() -> ExitCode {
         }
     }
 
-    // Coding-agent CLIs set marker env vars on spawned subprocesses so child
-    // tools can adapt their output. Upstream svelte-check honors CLAUDECODE=1;
-    // we extend the same machine-output default to Gemini CLI (GEMINI_CLI=1)
-    // and OpenAI Codex CLI (CODEX_CI=1) since they consume tool output the
-    // same way.
+    // Coding agents set marker env vars on the tools they spawn; like
+    // upstream, `CLAUDECODE=1` makes machine output the default.
     //
     // The override only fires when the user didn't pass `--output`. An
     // explicit `--output machine-verbose` (e.g. from scripts/bench.mjs)
-    // must reach the formatter unchanged — pre-fix, the agent-env check
-    // silently downgraded verbose JSON to the line-oriented `machine`
-    // format, breaking any caller's JSON parser.
-    let in_agent_cli = ["CLAUDECODE", "GEMINI_CLI", "CODEX_CI"]
-        .iter()
-        .any(|k| std::env::var(k).as_deref() == Ok("1"));
+    // must reach the formatter unchanged.
+    let in_agent_cli = std::env::var("CLAUDECODE").as_deref() == Ok("1");
     const OUTPUT_FORMATS: [&str; 4] = ["human", "human-verbose", "machine", "machine-verbose"];
     let output = cli
         .output
@@ -333,6 +324,20 @@ fn main() -> ExitCode {
     // a workspace root passed in verbatim form and our lexical include-
     // glob matching (forward slashes in user patterns) doesn't survive
     // the prefix either — "0 files, 0 errors" on Windows traces back here.
+    if let Ok(cwd) = std::env::current_dir() {
+        // `path.resolve(workspace)`: absolute, `.`/`..` folded lexically.
+        let mut shown = PathBuf::new();
+        for part in cwd.join(&workspace_arg).components() {
+            match part {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    shown.pop();
+                }
+                other => shown.push(other),
+            }
+        }
+        output::set_shown_workspace(shown);
+    }
     let workspace = match dunce::canonicalize(&workspace_arg) {
         Ok(p) => p,
         Err(err) => {
@@ -353,89 +358,24 @@ fn main() -> ExitCode {
     }
 
     if cli.list_relevant {
-        let (svelte, kit, _runes, _user_ts) = discover_relevant_files(&workspace);
+        let (svelte, kit) = discover_relevant_files(&workspace);
         for p in svelte.iter().chain(kit.iter()) {
             println!("{}", p.display());
         }
         return ExitCode::from(0);
     }
 
-    let (tsconfig, escaped_solution) = match resolve_tsconfig(&workspace, cli.tsconfig.as_deref()) {
-        Ok(pair) => pair,
+    let tsconfig = match resolve_tsconfig(&workspace, cli.tsconfig.as_deref()) {
+        Ok(path) => path,
         Err(msg) => {
-            eprintln!("svelte-check-native: {msg}");
+            if msg.ends_with("svelte-check failed") {
+                eprintln!("Error: {msg}");
+            } else {
+                eprintln!("svelte-check-native: {msg}");
+            }
             return ExitCode::from(2);
         }
     };
-    // If `resolve_tsconfig` escaped a project-references solution to a
-    // sub-app's `tsconfig.json`, redirect the workspace to that sub-app
-    // too. Without this, tsgo's cwd stays at the monorepo root and
-    // `node_modules` resolution for app-local packages
-    // (`@org/types`, workspace-scoped deps) fails from the wrong
-    // directory. The overlay cache, kit-file discovery, and diagnostic
-    // path-relativization all follow workspace.
-    //
-    // Gated on `escaped_solution` AND on the tsconfig having been
-    // DISCOVERED rather than named: an explicit `--tsconfig` must not
-    // relocate the workspace, because that silently changes the
-    // discovery root and the `<N> FILES` denominator. Upstream keeps
-    // workspace and tsconfig independent and has no solution-escape at
-    // all, so `--workspace sol --tsconfig sol/tsconfig.json` finds every
-    // app under `sol`; relocating to the first referenced project
-    // dropped the rest of them from the run entirely.
-    //
-    // The escape itself still applies to an explicit solution config —
-    // the overlay cannot usefully extend a `files: []` solution — but it
-    // only changes which config we compile with, not where we look for
-    // files.
-    let relocate = escaped_solution && cli.tsconfig.is_none();
-    // Explicit --tsconfig naming a solution root: the workspace is NOT
-    // relocated (the denominator must keep covering every app), but
-    // checking runs per referenced project so each app's files see
-    // their own config, cache anchor, and node_modules. See
-    // `run_typecheck`'s solution branch.
-    let solution_projects: Option<(PathBuf, Vec<(PathBuf, PathBuf)>)> =
-        if escaped_solution && cli.tsconfig.is_some() {
-            cli.tsconfig.as_deref().and_then(|p| {
-                let resolved = if p.is_absolute() {
-                    p.to_path_buf()
-                } else {
-                    workspace.join(p)
-                };
-                let named = dunce::canonicalize(&resolved).unwrap_or(resolved);
-                let projects = solution_reference_configs(&named);
-                if projects.is_empty() {
-                    None
-                } else {
-                    Some((named, projects))
-                }
-            })
-        } else {
-            None
-        };
-    let (workspace, solution_root_tsconfig) = match tsconfig.parent() {
-        Some(dir) if relocate && dir != workspace && dir.starts_with(&workspace) => {
-            eprintln!(
-                "svelte-check-native: redirected workspace to {} (parent of {}) — original looked like a TS project-references solution",
-                dir.display(),
-                tsconfig.display(),
-            );
-            // Record the ORIGINAL solution root's tsconfig. Overlay
-            // builder consults it to flatten sibling-project
-            // references into the overlay's include/exclude/paths,
-            // so transitive imports across projects remain visible
-            // to tsgo (see svn_core::tsconfig::flatten_references).
-            let solution_root = workspace.join("tsconfig.json");
-            let solution = if solution_root.is_file() {
-                Some(solution_root)
-            } else {
-                None
-            };
-            (dir.to_path_buf(), solution)
-        }
-        _ => (workspace, None),
-    };
-
     if cli.debug_paths {
         return run_debug_paths(&workspace, Some(&tsconfig));
     }
@@ -488,17 +428,24 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
         let summary = svelte_config::analyse_vite_config(&resolved)
-            .unwrap_or_else(|| svelte_config::analyse(&resolved));
+            .unwrap_or_else(|| svelte_config::analyse_with_kit_files(&resolved));
         (Some(resolved), summary)
     } else if let Some((path, summary)) = svelte_config::find_vite_config(&workspace)
         .and_then(|p| svelte_config::analyse_vite_config(&p).map(|s| (p, s)))
     {
         (Some(path), summary)
     } else if let Some(path) = svelte_config::find_svelte_config(&workspace) {
-        let summary = svelte_config::analyse(&path);
+        let summary = svelte_config::analyse_with_kit_files(&path);
         (Some(path), summary)
     } else {
-        (None, svelte_config::SvelteConfigSummary::default())
+        (
+            None,
+            svelte_config::SvelteConfigSummary {
+                ts_scripts_transpiled: svelte_config::ResolvedConfig::without_config()
+                    .ts_scripts_transpiled,
+                ..svelte_config::SvelteConfigSummary::default()
+            },
+        )
     };
     if let Some(cfg) = &analysed_config {
         warn_partial_warning_filter(cfg, &svelte_config_summary.warning_filter_plan);
@@ -513,8 +460,13 @@ fn main() -> ExitCode {
         svelte_config::ResolvedConfig {
             warning_filter_plan: svelte_config_summary.warning_filter_plan,
             runes: svelte_config_summary.runes,
+            experimental_async: svelte_config_summary.experimental_async,
+            ts_scripts_transpiled: svelte_config_summary.ts_scripts_transpiled,
+            preprocess_configured: svelte_config_summary.preprocess_configured,
+            compile_options: svelte_config_summary.compile_options.clone(),
         },
         cli.config.is_some(),
+        analysed_config.is_some(),
     );
     let kit_files_settings = svelte_config_summary.kit_files_settings;
     // Set the project-wide preserve-attribute-case flag (svelte config
@@ -524,6 +476,8 @@ fn main() -> ExitCode {
     // emitted overlay (and the committed emit snapshots) don't depend
     // on where the checkout lives on disk.
     svn_emit::set_render_hash_root(&workspace);
+    svn_emit::set_svelte_major(svn_typecheck::workspace_svelte_major(&workspace));
+    svn_typecheck::set_incremental(cli.incremental);
 
     let svelte_warnings_mode = match cli.svelte_warnings.as_str() {
         "bridge" => SvelteWarningsMode::Bridge,
@@ -541,17 +495,13 @@ fn main() -> ExitCode {
     let threshold = match cli.threshold.as_str() {
         "error" | "warning" => cli.threshold.as_str(),
         other => {
-            eprintln!(
-                "svelte-check-native: invalid threshold \"{other}\", using \"warning\" instead"
-            );
+            eprintln!("Invalid threshold \"{other}\", using \"warning\" instead");
             "warning"
         }
     };
 
     run_typecheck(
         &workspace,
-        solution_projects.as_ref(),
-        solution_root_tsconfig.as_deref(),
         &tsconfig,
         &output,
         threshold,
@@ -611,17 +561,32 @@ pub(crate) enum ColorMode {
 }
 
 impl ColorMode {
+    /// picocolors' `isColorSupported`, which decides upstream's colours:
+    /// `--no-color` or `NO_COLOR` turn colour off, `--color` or
+    /// `FORCE_COLOR` turn it on, and otherwise it is on for Windows, a
+    /// terminal whose `TERM` isn't `dumb`, or CI.
     pub(crate) fn use_color(self) -> bool {
         match self {
             Self::Always => true,
             Self::Never => false,
-            Self::Auto => std::io::IsTerminal::is_terminal(&std::io::stdout()),
+            Self::Auto => {
+                env_set("FORCE_COLOR")
+                    || cfg!(windows)
+                    || (std::io::IsTerminal::is_terminal(&std::io::stdout())
+                        && std::env::var("TERM").as_deref() != Ok("dumb"))
+                    || env_set("CI")
+            }
         }
     }
 }
 
+/// A JavaScript `!!process.env[name]`: set and non-empty.
+fn env_set(name: &str) -> bool {
+    std::env::var_os(name).is_some_and(|v| !v.is_empty())
+}
+
 fn resolve_color_mode(force_on: bool, force_off: bool) -> ColorMode {
-    if force_off {
+    if force_off || env_set("NO_COLOR") {
         ColorMode::Never
     } else if force_on {
         ColorMode::Always
@@ -863,14 +828,11 @@ fn compiler_code_docs_url(code: &str, severity: svn_typecheck::Severity) -> Opti
 ///    caller drops tsgo's noise for it, and skip the checks below (the
 ///    AST is garbage, as the old lint pass did via the broken filter).
 ///
-/// 2. **Structural analyze-phase errors** on the clean AST
-///    (`svn_analyze::check_const_placement`, …) — `svelte/compiler`
-///    `2-analyze` visitors like a misplaced `{@const}`. NOT marked broken:
-///    svelte2tsx still produces a usable overlay, so tsgo runs and
-///    reports independently.
-///
-/// 3. **Lint warnings** via [`svn_lint::lint_parsed`], reusing this
-///    file's parse and position map.
+/// 2. **Lint diagnostics** via [`svn_lint::lint_parsed`], reusing this
+///    file's parse and position map: the compiler's warnings, or its
+///    first analyze-phase error (which drops the file's warnings, as
+///    the throwing compile does). NOT marked broken: svelte2tsx still
+///    produces a usable overlay, so tsgo runs and reports independently.
 ///
 /// Diagnostics are merged by [`merge_native_diagnostics`] in the
 /// original two-phase emission order (all fatal/structural diagnostics
@@ -882,12 +844,19 @@ fn compiler_code_docs_url(code: &str, severity: svn_typecheck::Severity) -> Opti
 /// `compile_batch`.
 struct NativeFileDiagnostics {
     path: PathBuf,
-    /// Fatal-parse + structural (const-placement) diagnostics.
+    /// Fatal-parse diagnostics.
     diags: Vec<svn_typecheck::CheckDiagnostic>,
     /// Set when a fatal parse error made the AST unusable.
     broken: bool,
     /// Lint warnings (empty for broken files — they're skipped).
     warnings: Vec<svn_lint::Warning>,
+    /// The warnings should come from the component as the fallback
+    /// preprocessor really transpiles it (see
+    /// [`relint_with_real_transpile`]).
+    needs_real_transpile: bool,
+    /// What compiling the component does to the compiler's shared
+    /// bidirectional-character regex (see [`carry_bidi_regex`]).
+    bidi: svn_lint::BidiTrace,
 }
 
 /// One file's native diagnostics from an ALREADY-PARSED document —
@@ -903,6 +872,9 @@ fn native_diagnostics_for_parsed(
     template_errors: &[svn_parser::ParseError],
     config_resolver: &svelte_config::ConfigResolver,
     compat: svn_lint::CompatFeatures,
+    compile_option_warnings: Vec<(svn_lint::Code, String)>,
+    already_transpiled: bool,
+    bidi_last_index: u32,
 ) -> NativeFileDiagnostics {
     let pm = svn_core::PositionMap::new(source);
 
@@ -932,49 +904,251 @@ fn native_diagnostics_for_parsed(
             }],
             broken: true,
             warnings: Vec::new(),
+            needs_real_transpile: false,
+            bidi: svn_lint::BidiTrace::Untouched,
         };
     }
 
-    // (2) Structural analyze-phase errors on the clean AST. The
-    // root template fragment is not a legal const-tag host (its
-    // grand-parent is the document Root) — start disallowed.
-    let mut placement_errs = Vec::new();
-    svn_analyze::check_const_placement(&fragment.nodes, false, &mut placement_errs);
-    let diags: Vec<svn_typecheck::CheckDiagnostic> = placement_errs
-        .into_iter()
-        .map(|e| {
-            let (start, end) = pm.range_positions(e.range);
-            svn_typecheck::CheckDiagnostic {
-                source_path: path.to_path_buf(),
-                line: start.line.saturating_add(1),
-                column: start.character.saturating_add(1),
-                end_line: end.line.saturating_add(1),
-                end_column: end.character.saturating_add(1),
-                severity: svn_typecheck::Severity::Error,
-                code: svn_typecheck::DiagnosticCode::Slug(
-                    "const_tag_invalid_placement".to_string(),
-                ),
-                message: svn_analyze::CONST_TAG_INVALID_PLACEMENT_MSG.to_string(),
-                source: svn_typecheck::DiagnosticSource::Svelte,
-                code_description_url: Some(
-                    "https://svelte.dev/e/const_tag_invalid_placement".to_string(),
-                ),
-            }
-        })
-        .collect();
-
-    // (3) Lint warnings — reuse the parse and the position map
+    // (2) Lint warnings — reuse the parse and the position map
     // (no second parse_sections / line-index scan per file).
     // The nearest config's compilerOptions.runes forces the
     // mode; `None` keeps lint's auto-detection.
-    let config_runes = config_resolver.for_path(path).runes;
-    let warnings = svn_lint::lint_parsed(doc, fragment, source, pm, path, config_runes, compat);
+    let config = config_resolver.for_path(path);
+    let options = svn_lint::LintOptions {
+        runes: config.runes,
+        experimental_async: config.experimental_async,
+        // A component already run through the preprocessor has no
+        // TypeScript left to transpile.
+        ts_scripts_transpiled: config.ts_scripts_transpiled && !already_transpiled,
+        preprocess_configured: config.preprocess_configured,
+        compile_options: config.compile_options.clone(),
+        compile_option_warnings,
+        bidi_last_index,
+    };
+    let report = svn_lint::lint_parsed(doc, fragment, source, pm, path, options, compat);
+    // A compiler crash reaches svelte-check as an exception with no
+    // position and no code; `createParserErrorDiagnostic` places it at
+    // the start of the file and copies the message alone.
+    let diags = report
+        .exception
+        .map(|message| svn_typecheck::CheckDiagnostic {
+            source_path: path.to_path_buf(),
+            line: 1,
+            column: 1,
+            end_line: 1,
+            end_column: 1,
+            severity: svn_typecheck::Severity::Error,
+            code: svn_typecheck::DiagnosticCode::Missing,
+            message,
+            source: svn_typecheck::DiagnosticSource::Svelte,
+            code_description_url: None,
+        })
+        .into_iter()
+        .collect();
 
     NativeFileDiagnostics {
         path: path.to_path_buf(),
         diags,
         broken: false,
-        warnings,
+        warnings: report.warnings,
+        needs_real_transpile: report.needs_real_transpile,
+        bidi: report.bidi,
+    }
+}
+
+/// What the native pass reads besides the component itself.
+struct NativeLint<'a> {
+    config_resolver: &'a svelte_config::ConfigResolver,
+    compat: svn_lint::CompatFeatures,
+    compile_option_warnings: &'a [Vec<(svn_lint::Code, String)>],
+}
+
+impl NativeLint<'_> {
+    /// Lint component `idx` from scratch: from its text, or from the
+    /// text the fallback preprocessor hands the compiler (with the
+    /// diagnostics mapped back). `None` when the preprocessed text does
+    /// not parse.
+    fn lint(
+        &self,
+        idx: usize,
+        path: &Path,
+        source: &str,
+        preprocessed: Option<&fallback_transpile::Preprocessed>,
+        bidi_last_index: u32,
+    ) -> Option<NativeFileDiagnostics> {
+        let text = preprocessed.map_or(source, |pre| pre.text.as_str());
+        let (doc, section_errors) = svn_parser::parse_sections(text);
+        let (fragment, template_errors) =
+            svn_parser::parse_all_template_runs(text, &doc.template.text_runs);
+        let mut result = native_diagnostics_for_parsed(
+            path,
+            text,
+            &doc,
+            &fragment,
+            &section_errors,
+            &template_errors,
+            self.config_resolver,
+            self.compat,
+            self.compile_option_warnings[idx].clone(),
+            preprocessed.is_some(),
+            bidi_last_index,
+        );
+        let Some(pre) = preprocessed else {
+            return Some(result);
+        };
+        if result.broken {
+            return None;
+        }
+        result.warnings = std::mem::take(&mut result.warnings)
+            .into_iter()
+            .filter(|w| {
+                !fallback_transpile::is_transpile_false_positive(
+                    w.code.as_str(),
+                    &w.message,
+                    source,
+                )
+            })
+            .map(|w| {
+                let ((sl, sc), (el, ec)) = fallback_transpile::map_range(
+                    pre,
+                    (w.start_line.saturating_sub(1), w.start_column),
+                    (w.end_line.saturating_sub(1), w.end_column),
+                );
+                // `range` stays in the preprocessed text's offsets;
+                // only the line/column pairs are reported.
+                svn_lint::Warning {
+                    start_line: sl + 1,
+                    start_column: sc,
+                    end_line: el + 1,
+                    end_column: ec,
+                    ..w
+                }
+            })
+            .collect();
+        result.needs_real_transpile = false;
+        Some(result)
+    }
+}
+
+/// Re-lint the components whose compiler diagnostics depend on what
+/// the fallback preprocessor's TypeScript transpile really prints (no
+/// Svelte config; see [`fallback_transpile`]): print their scripts with
+/// tsgo in one batch, lint each component as the compiler receives it,
+/// and map every diagnostic back the way the language server does.
+/// A component keeps its modelled result when anything here fails.
+/// Returns the preprocessed components, by index.
+fn relint_with_real_transpile(
+    workspace: &Path,
+    sources: &[(PathBuf, std::sync::Arc<str>)],
+    results: &mut [Option<NativeFileDiagnostics>],
+    native: &NativeLint<'_>,
+) -> std::collections::HashMap<usize, fallback_transpile::Preprocessed> {
+    let mut preprocessed = std::collections::HashMap::new();
+    let wanted: Vec<usize> = results
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| {
+            r.as_ref()
+                .is_some_and(|r| r.needs_real_transpile && !r.broken)
+        })
+        .map(|(idx, _)| idx)
+        .collect();
+    if wanted.is_empty() {
+        return preprocessed;
+    }
+    let tags: Vec<Vec<fallback_transpile::ScriptTag>> = wanted
+        .iter()
+        .map(|&idx| fallback_transpile::script_tags(&sources[idx].1))
+        .collect();
+    let contents: Vec<&str> = wanted
+        .iter()
+        .zip(&tags)
+        .flat_map(|(&idx, tags)| {
+            tags.iter()
+                .filter(|t| t.transpiled)
+                .map(move |t| &sources[idx].1[t.content.clone()])
+        })
+        .collect();
+    if contents.is_empty() {
+        return preprocessed;
+    }
+    let mut printed = fallback_transpile::print_scripts(workspace, &contents).into_iter();
+    for (&idx, tags) in wanted.iter().zip(&tags) {
+        let count = tags.iter().filter(|t| t.transpiled).count();
+        let scripts: Vec<_> = printed.by_ref().take(count).collect();
+        let Some(scripts) = scripts.into_iter().collect::<Option<Vec<_>>>() else {
+            continue;
+        };
+        let (path, source) = &sources[idx];
+        let pre = fallback_transpile::preprocess(source, tags, &scripts);
+        if let Some(relinted) = native.lint(idx, path, source, Some(&pre), 0) {
+            results[idx] = Some(relinted);
+            preprocessed.insert(idx, pre);
+        }
+    }
+    preprocessed
+}
+
+/// Run the compiler's bidirectional-character regex through the
+/// components in the order svelte-check compiles them. The regex is
+/// global and stateful (`lastIndex`), and every component is compiled
+/// in one process, so each starts where the previous one left it; the
+/// parallel pass linted every component from a fresh regex, and a
+/// component whose warnings change from where it really starts is
+/// linted again from there.
+///
+/// svelte-check starts every component's diagnostics at once and each
+/// reaches the compiler after its own chain of awaits, whose length
+/// depends on the preprocessing: components finishing it in fewer
+/// steps are compiled first, the rest in discovery order (see
+/// [`fallback_transpile::preprocess_steps`]).
+fn carry_bidi_regex(
+    sources: &[(PathBuf, std::sync::Arc<str>)],
+    discovery_order: &[PathBuf],
+    results: &mut [Option<NativeFileDiagnostics>],
+    native: &NativeLint<'_>,
+    preprocessed: &std::collections::HashMap<usize, fallback_transpile::Preprocessed>,
+) {
+    let position: std::collections::HashMap<&Path, usize> = discovery_order
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.as_path(), i))
+        .collect();
+    let mut order: Vec<(u8, usize, usize)> = results
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.is_some())
+        .map(|(idx, _)| {
+            let (path, source) = &sources[idx];
+            let config = native.config_resolver.for_path(path);
+            // Only the language server's fallback preprocessor (no
+            // Svelte config) is modelled; without any preprocessor
+            // every component takes the same steps.
+            let steps = if config.ts_scripts_transpiled && !config.preprocess_configured {
+                fallback_transpile::preprocess_steps(source)
+            } else {
+                0
+            };
+            let at = position.get(path.as_path()).copied().unwrap_or(usize::MAX);
+            (steps, at, idx)
+        })
+        .collect();
+    order.sort();
+    let mut last_index = 0u32;
+    for (_, _, idx) in order {
+        let Some(result) = &results[idx] else {
+            continue;
+        };
+        let (after, warned) = result.bidi.run(last_index);
+        if last_index != 0 && warned != result.bidi.run(0).1 {
+            let (path, source) = &sources[idx];
+            if let Some(relinted) =
+                native.lint(idx, path, source, preprocessed.get(&idx), last_index)
+            {
+                results[idx] = Some(relinted);
+            }
+        }
+        last_index = after;
     }
 }
 
@@ -988,7 +1162,7 @@ fn missing_svelte_import_diagnostics(
     doc: &svn_parser::Document<'_>,
     resolver: &svn_enhance::SvelteImportResolver,
 ) -> Vec<svn_typecheck::CheckDiagnostic> {
-    let script_is_ts = matches!(doc.script_lang(), svn_parser::ScriptLang::Ts);
+    let script_is_ts = svn_parser::is_ts_svelte(source);
     svn_enhance::missing_svelte_import_diagnostics(file, source, doc, resolver)
         .into_iter()
         .map(|d| svn_typecheck::CheckDiagnostic {
@@ -1014,7 +1188,7 @@ fn merge_native_diagnostics(
     per_file: Vec<NativeFileDiagnostics>,
     compiler_overrides: &std::collections::HashMap<String, CompilerWarningOverride>,
     diagnostics: &mut Vec<svn_typecheck::CheckDiagnostic>,
-    seen: &mut std::collections::HashSet<(String, PathBuf, u32, u32)>,
+    seen: &mut std::collections::HashSet<WarningKey>,
     broken: &mut std::collections::HashSet<PathBuf>,
 ) {
     // Phase 1: all fatal/structural diagnostics + broken flags, in
@@ -1030,9 +1204,10 @@ fn merge_native_diagnostics(
     }
 
     // Phase 2: all warnings, in source order — matches the old lint
-    // pass's emission slot. Dedups by `(code, path, line, col)` so
+    // pass's emission slot. Dedups by [`WarningKey`] so
     // `--svelte-warnings=both` doesn't double-report against the bridge.
     for (path, warnings) in warning_files {
+        let mut occurrences = std::collections::HashMap::new();
         for w in warnings {
             let code = w.code.as_str().to_string();
             // Apply user `--compiler-warnings` reclassification. Default
@@ -1044,7 +1219,8 @@ fn merge_native_diagnostics(
             };
             let severity = apply_compiler_override(&code, base, compiler_overrides);
             let Some(severity) = severity else { continue };
-            let key = (code.clone(), path.clone(), w.start_line, w.start_column);
+            let site = (code.clone(), w.start_line, w.start_column);
+            let key = warning_key(&mut occurrences, &path, site);
             if !seen.insert(key) {
                 continue;
             }
@@ -1065,6 +1241,22 @@ fn merge_native_diagnostics(
             });
         }
     }
+}
+
+/// Identity of a compiler warning for merging the native and bridge
+/// passes: code, file, position, and which repeat at that position it
+/// is. The compiler can report the same warning twice at one position
+/// (a `$:` body is walked twice), and both repeats are real.
+type WarningKey = (String, PathBuf, u32, u32, u32);
+
+fn warning_key(
+    occurrences: &mut std::collections::HashMap<(String, u32, u32), u32>,
+    path: &Path,
+    site: (String, u32, u32),
+) -> WarningKey {
+    let n = occurrences.entry(site.clone()).or_insert(0);
+    *n += 1;
+    (site.0, path.to_path_buf(), site.1, site.2, *n)
 }
 
 fn apply_compiler_override(
@@ -1099,18 +1291,17 @@ fn parse_compiler_warnings(
         if entry.is_empty() {
             continue;
         }
-        let Some((code, severity)) = entry.split_once(':') else {
-            eprintln!(
-                "svelte-check-native: malformed --compiler-warnings entry {entry:?} (expected `code:severity`); ignoring"
-            );
-            continue;
+        // `setting.split(':')`: the name is the text before the first
+        // colon and the value the text up to the next one, compared
+        // exactly; anything else is dropped silently.
+        let mut parts = entry.split(':');
+        let code = parts.next().unwrap_or_default();
+        let severity = match parts.next() {
+            Some("ignore") => CompilerWarningOverride::Ignore,
+            Some("error") => CompilerWarningOverride::Error,
+            _ => continue,
         };
-        let severity = match severity.trim() {
-            "ignore" => CompilerWarningOverride::Ignore,
-            "error" => CompilerWarningOverride::Error,
-            _ => continue, // upstream drops unrecognized values
-        };
-        out.insert(code.trim().to_string(), severity);
+        out.insert(code.to_string(), severity);
     }
     out
 }
@@ -1120,20 +1311,11 @@ fn parse_compiler_warnings(
 /// `jsconfig.json`. (`--no-tsconfig` is rejected up front in `main` —
 /// a tsconfig is required, mirroring `svelte-check --tsgo`.)
 ///
-/// When the resolved tsconfig is a TS project-references solution
-/// (`files: []` + no `include` + non-empty `references`), redirect to a
-/// sub-project's tsconfig via [`escape_solution_tsconfig`]. Solution
-/// files coordinate multiple projects but own no source themselves —
-/// our overlay can't inherit useful `paths` / `baseUrl` / resolution
-/// settings from one, so extending it leaves every `$lib/*` import
-/// unresolved. Common root-of-monorepo case in SvelteKit apps.
-/// Returns `(tsconfig_path, escaped_solution)`. `escaped_solution` is
-/// `true` only when the resolved path is a sub-project we redirected to
-/// from a project-references *solution* config — the one case where the
-/// caller should also relocate the workspace. An explicit `--tsconfig`
-/// pointing at an ordinary config returns `false`, so the workspace
-/// stays put (upstream keeps workspace and tsconfig independent).
-fn resolve_tsconfig(workspace: &Path, explicit: Option<&Path>) -> Result<(PathBuf, bool), String> {
+/// A project-references solution (`files: []` plus `references`) is used
+/// as written, as svelte-check uses it: its overlay extends the solution,
+/// which lists no sources, so the compiler checks nothing and only the
+/// Svelte diagnostics of every component under the workspace are reported.
+fn resolve_tsconfig(workspace: &Path, explicit: Option<&Path>) -> Result<PathBuf, String> {
     let candidate: PathBuf = if let Some(p) = explicit {
         let resolved = if p.is_absolute() {
             p.to_path_buf()
@@ -1160,78 +1342,108 @@ fn resolve_tsconfig(workspace: &Path, explicit: Option<&Path>) -> Result<(PathBu
             )
         })?
     };
-    match escape_solution_tsconfig(&candidate) {
-        Some(escaped) => Ok((escaped, true)),
-        None => Ok((candidate, false)),
+    if let Some(err) = std::fs::read_to_string(&candidate)
+        .ok()
+        .and_then(|text| tsconfig_syntax_error(&text))
+    {
+        let (line, col) = line_col(
+            &std::fs::read_to_string(&candidate).unwrap_or_default(),
+            err.0,
+        );
+        return Err(format!(
+            "{}:{line}:{col} - error {}\nsvelte-check failed",
+            candidate.display(),
+            err.1
+        ));
     }
+    Ok(candidate)
 }
 
-/// If `candidate` is a solution-style tsconfig, try to redirect to a
-/// sub-project's tsconfig that carries real `compilerOptions.paths`.
-///
-/// Algorithm:
-///   1. Parse `candidate`. Return `None` if not a solution.
-///   2. For each entry in `references[]`: if the reference points at a
-///      file, that IS the sub-project's config (TS references may name
-///      any file, not just `tsconfig.json`); if it points at a
-///      directory, fall back to the conventional `tsconfig.json` under
-///      it.
-///   3. Load the referenced config's full extends chain via
-///      [`load_chain`]. If any file in the chain declares non-empty
-///      `compilerOptions.paths`, return the leaf as the redirect
-///      target.
-///
-/// The extends walk matters in monorepos that declare `paths` once in a
-/// shared `tsconfig.base.json` and inherit it into each app; a single
-/// `parse_file` of the leaf misses those and leaves us stuck on the
-/// solution root with unresolvable `$lib`-style aliases.
-///
-/// Returns `None` when the tsconfig isn't a solution, no reference's
-/// chain declares paths, or any parse fails — keeps the caller's
-/// original in those cases.
-fn escape_solution_tsconfig(candidate: &Path) -> Option<PathBuf> {
-    let parsed = svn_core::tsconfig::parse_file(candidate).ok()?;
-    if !parsed.is_solution_style() {
+/// The first thing TypeScript's own config reader (`readConfigFile`)
+/// rejects in a tsconfig, as `(byte offset, "TSxxxx: message")`. Upstream
+/// fails the run on it; our JSON5 reader alone would accept single
+/// quotes, bare keys and `Infinity`. The text is parsed as the JavaScript
+/// expression TypeScript's JSON parser reads, then held to its rules:
+/// double-quoted strings and keys; values that are strings, numbers
+/// (optionally negated), `true`, `false`, `null`, objects or arrays.
+fn tsconfig_syntax_error(text: &str) -> Option<(usize, String)> {
+    use oxc_ast::ast::{
+        ArrayExpressionElement, Expression, ObjectPropertyKind, PropertyKey, Statement,
+        UnaryOperator,
+    };
+    use oxc_span::GetSpan;
+    if text.trim().is_empty() {
         return None;
     }
-    let parent = candidate.parent()?;
-    for reference in &parsed.references {
-        let ref_path = parent.join(&reference.path);
-        let config_path = if ref_path.is_file() {
-            // References may name the config file directly (e.g.
-            // `./apps/foo/tsconfig.app.json`). The reference's
-            // filename is the user's explicit "this is the project
-            // config" and we must honor it — a monorepo that picks
-            // variant names like `tsconfig.app.json` for runtime code
-            // and `tsconfig.node.json` for build-time code would
-            // silently redirect to the wrong file (or no file at all)
-            // if we hardcoded `tsconfig.json`.
-            ref_path
-        } else if ref_path.is_dir() {
-            let default = ref_path.join("tsconfig.json");
-            if !default.is_file() {
-                continue;
-            }
-            default
-        } else {
-            continue;
-        };
-        let chain = match svn_core::tsconfig::load_chain(&config_path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        let has_paths = chain.iter().any(|f| {
-            f.compiler_options
-                .paths
-                .as_ref()
-                .is_some_and(|p| !p.is_empty())
-        });
-        if !has_paths {
-            continue;
-        }
-        return Some(dunce::canonicalize(&config_path).unwrap_or(config_path));
+    let wrapped = format!("({text}\n)");
+    let alloc = oxc_allocator::Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Js);
+    if let Some(e) = parsed.errors.first() {
+        let at = e
+            .labels
+            .as_ref()
+            .first()
+            .map_or(0, |l| l.offset().saturating_sub(1));
+        return Some((
+            (at as usize).min(text.len()),
+            format!("TS1005: {}", e.message),
+        ));
     }
-    None
+    let Some(Statement::ExpressionStatement(stmt)) = parsed.program.body.first() else {
+        return None;
+    };
+    let Expression::ParenthesizedExpression(root) = &stmt.expression else {
+        return None;
+    };
+    const DOUBLE: &str = "TS1327: String literal with double quotes expected.";
+    const VALUE: &str = "TS1328: Property value can only be string literal, numeric literal, 'true', 'false', 'null', object literal or array literal.";
+    fn check(e: &Expression<'_>, text: &str) -> Option<(usize, &'static str)> {
+        let at = |span: oxc_span::Span| (span.start as usize).saturating_sub(1);
+        match e {
+            Expression::StringLiteral(s) => {
+                (!text[at(s.span)..].starts_with('"')).then(|| (at(s.span), DOUBLE))
+            }
+            Expression::NumericLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral(_) => None,
+            Expression::UnaryExpression(u)
+                if u.operator == UnaryOperator::UnaryNegation
+                    && matches!(u.argument, Expression::NumericLiteral(_)) =>
+            {
+                None
+            }
+            Expression::ObjectExpression(o) => o.properties.iter().find_map(|p| match p {
+                ObjectPropertyKind::ObjectProperty(prop) => {
+                    let key_ok = matches!(&prop.key, PropertyKey::StringLiteral(k)
+                        if text[at(k.span)..].starts_with('"'));
+                    if !key_ok || prop.shorthand || prop.computed {
+                        return Some((at(prop.key.span()), DOUBLE));
+                    }
+                    check(&prop.value, text)
+                }
+                ObjectPropertyKind::SpreadProperty(sp) => Some((at(sp.span), VALUE)),
+            }),
+            Expression::ArrayExpression(a) => a.elements.iter().find_map(|el| match el {
+                ArrayExpressionElement::Elision(_) => None,
+                ArrayExpressionElement::SpreadElement(sp) => Some((at(sp.span), VALUE)),
+                other => other.as_expression().and_then(|e| check(e, text)),
+            }),
+            Expression::Identifier(id) => Some((at(id.span), VALUE)),
+            other => Some((at(other.span()), VALUE)),
+        }
+    }
+    check(&root.expression, text).map(|(at, msg)| (at, msg.to_string()))
+}
+
+/// 1-based line and column of a byte offset.
+fn line_col(text: &str, offset: usize) -> (usize, usize) {
+    let before = &text[..offset.min(text.len())];
+    let line = before.matches('\n').count() + 1;
+    let col = before
+        .rfind('\n')
+        .map_or(before.len(), |nl| before.len() - nl - 1)
+        + 1;
+    (line, col)
 }
 
 /// Convert `kit_inject`'s byte-offset splices into the `(line, column,
@@ -1279,6 +1491,9 @@ fn kit_inject_col_shifts(injected: &svn_emit::kit_inject::Injected) -> Vec<(u32,
 struct ProjectRun {
     diagnostics: Vec<svn_typecheck::CheckDiagnostic>,
     entries: Vec<PathBuf>,
+    /// Every discovered `.svelte` file, then every Kit file, in
+    /// discovery order — the order upstream reports files in.
+    file_order: Vec<PathBuf>,
 }
 
 /// Merge one or more project runs and render the single
@@ -1304,6 +1519,13 @@ fn render_runs(
     let multi_run = runs.len() > 1;
     let mut seen: HashSet<(PathBuf, u32, u32, String)> = HashSet::new();
     let mut entry_set: HashSet<PathBuf> = HashSet::new();
+    let mut file_rank: std::collections::HashMap<PathBuf, usize> = std::collections::HashMap::new();
+    for run in &runs {
+        for path in &run.file_order {
+            let next = file_rank.len();
+            file_rank.entry(path.clone()).or_insert(next);
+        }
+    }
     for run in runs {
         for d in run.diagnostics {
             let key = (
@@ -1318,6 +1540,21 @@ fn render_runs(
         }
         entry_set.extend(run.entries);
     }
+    // Upstream reports file by file: discovered components and Kit
+    // files in discovery order, then any other file in the order tsgo
+    // first reported it; within a file, the Svelte compiler's
+    // diagnostics come before TypeScript's.
+    for d in &diagnostics {
+        let next = file_rank.len();
+        file_rank.entry(d.source_path.clone()).or_insert(next);
+    }
+    diagnostics.sort_by_key(|d| {
+        let is_ts = !matches!(
+            d.source,
+            svn_typecheck::DiagnosticSource::Svelte | svn_typecheck::DiagnosticSource::Css
+        );
+        (file_rank[&d.source_path], is_ts)
+    });
 
     // NOTE: `--threshold error` is a PRINT-TIME filter only — applied
     // per-diagnostic inside `print_diagnostics`. The counts and exit
@@ -1363,72 +1600,8 @@ fn render_runs(
     }
 }
 
-/// Every referenced project of a solution-style tsconfig whose config
-/// resolves and loads: `(project_dir, config_path)` per reference,
-/// deduplicated on directory (a solution can reference several configs
-/// in the same project — `tsconfig.playwright.json` next to
-/// `tsconfig.build.json` — and checking the same tree twice under
-/// different options would double every diagnostic; first reference
-/// wins, matching `escape_solution_tsconfig`'s ordering).
-fn solution_reference_configs(candidate: &Path) -> Vec<(PathBuf, PathBuf)> {
-    let Ok(parsed) = svn_core::tsconfig::parse_file(candidate) else {
-        return Vec::new();
-    };
-    if !parsed.is_solution_style() {
-        return Vec::new();
-    }
-    let Some(parent) = candidate.parent() else {
-        return Vec::new();
-    };
-    let mut out: Vec<(PathBuf, PathBuf)> = Vec::new();
-    let mut seen_dirs: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-    for reference in &parsed.references {
-        let ref_path = parent.join(&reference.path);
-        let config_path = if ref_path.is_file() {
-            ref_path
-        } else if ref_path.is_dir() {
-            let default = ref_path.join("tsconfig.json");
-            if !default.is_file() {
-                continue;
-            }
-            default
-        } else {
-            continue;
-        };
-        let config_path = dunce::canonicalize(&config_path).unwrap_or(config_path);
-        if svn_core::tsconfig::load_chain(&config_path).is_err() {
-            continue;
-        }
-        let Some(dir) = config_path.parent().map(Path::to_path_buf) else {
-            continue;
-        };
-        if seen_dirs.insert(dir.clone()) {
-            out.push((dir, config_path));
-        }
-    }
-    out
-}
-
-/// The svelte/vite config summary for one sub-project directory —
-/// the same vite-plugin-first, svelte.config-fallback chain the
-/// workspace-level resolution in `main` uses, so each referenced
-/// project's Kit `files` settings drive its own kit-file discovery.
-fn analyse_dir_svelte_config(dir: &Path) -> svelte_config::SvelteConfigSummary {
-    if let Some(summary) =
-        svelte_config::find_vite_config(dir).and_then(|p| svelte_config::analyse_vite_config(&p))
-    {
-        summary
-    } else if let Some(path) = svelte_config::find_svelte_config(dir) {
-        svelte_config::analyse(&path)
-    } else {
-        svelte_config::SvelteConfigSummary::default()
-    }
-}
-
 /// Default flow: parse + emit each .svelte file, hand the lot to tsgo,
-/// format diagnostics, exit with the appropriate code. A named
-/// solution root fans out into one `check_project` sub-run per
-/// referenced project that contains a discovered component.
+/// format diagnostics, exit with the appropriate code.
 ///
 /// `threshold` controls which diagnostics are kept: `error` filters out
 /// warnings; `warning` keeps both. `fail_on_warnings` makes warnings
@@ -1441,8 +1614,6 @@ fn analyse_dir_svelte_config(dir: &Path) -> svelte_config::SvelteConfigSummary {
 #[allow(clippy::too_many_arguments)]
 fn run_typecheck(
     workspace: &Path,
-    solution_projects: Option<&(PathBuf, Vec<(PathBuf, PathBuf)>)>,
-    solution_root_tsconfig: Option<&Path>,
     tsconfig: &Path,
     output_format: &str,
     threshold: &str,
@@ -1459,109 +1630,36 @@ fn run_typecheck(
     include_suggestions: bool,
     disable_enhance: bool,
 ) -> ExitCode {
-    let Some((solution_root, projects)) = solution_projects else {
-        // Ordinary single-project run.
-        return match check_project(
-            workspace,
-            solution_root_tsconfig,
-            tsconfig,
-            output_format,
-            sources,
-            compiler_overrides,
-            timings,
-            tsgo_diagnostics,
-            svelte_warnings_mode,
-            ignore_node_modules_warnings,
-            config_resolver,
-            kit_files_settings,
-            include_suggestions,
-            disable_enhance,
-        ) {
-            Ok(run) => render_runs(
-                workspace,
-                vec![run],
-                output_format,
-                color,
-                threshold,
-                fail_on_warnings,
-            ),
-            Err(code) => code,
-        };
-    };
-
-    // Solution root named explicitly: the workspace (and therefore the
-    // discovery denominator and diagnostic path base) stays at the
-    // root, but each referenced project is CHECKED in its own context —
-    // its own tsconfig, its own directory as the cache/module-
-    // resolution anchor, its own svelte config for kit-file discovery.
-    // One program anchored at the root checked every app's files under
-    // the first reference's options, which invented resolution errors
-    // no upstream engine reports (bare workspace deps resolvable only
-    // from the owning app's node_modules).
-    //
-    // Only projects that CONTAIN a discovered `.svelte` file get a
-    // sub-run: svelte-check's surface is components plus whatever they
-    // import, so a pure-TS referenced project is reached through the
-    // importing app's program (where the compiler attributes its
-    // errors) rather than checked as a project of its own — surfacing
-    // a backend package's internal test errors is something no
-    // upstream engine's output does.
-    //
-    // The denominator stays a single root-wide enumeration — upstream's
-    // findFiles counts from the workspace root with no project scoping,
-    // so per-project discovery must not add to it (kit-file
-    // classification differs per anchor and would inflate the count).
-    let (root_svelte, root_kit, _runes, _user_ts) =
-        discovery::discover_relevant_files_with_settings(workspace, kit_files_settings);
-    let mut runs: Vec<ProjectRun> = Vec::new();
-    for (project_dir, project_config) in projects {
-        if !root_svelte.iter().any(|f| f.starts_with(project_dir)) {
-            continue;
-        }
-        let sub_summary = analyse_dir_svelte_config(project_dir);
-        match check_project(
-            project_dir,
-            Some(solution_root.as_path()),
-            project_config,
-            output_format,
-            sources,
-            compiler_overrides,
-            timings,
-            tsgo_diagnostics,
-            svelte_warnings_mode,
-            ignore_node_modules_warnings,
-            config_resolver,
-            &sub_summary.kit_files_settings,
-            include_suggestions,
-            disable_enhance,
-        ) {
-            Ok(run) => runs.push(ProjectRun {
-                diagnostics: run.diagnostics,
-                entries: Vec::new(),
-            }),
-            Err(code) => return code,
-        }
-    }
-    if sources.svelte || sources.css {
-        runs.push(ProjectRun {
-            diagnostics: Vec::new(),
-            entries: root_svelte.into_iter().chain(root_kit).collect(),
-        });
-    }
-    render_runs(
+    match check_project(
         workspace,
-        runs,
+        tsconfig,
         output_format,
-        color,
-        threshold,
-        fail_on_warnings,
-    )
+        sources,
+        compiler_overrides,
+        timings,
+        tsgo_diagnostics,
+        svelte_warnings_mode,
+        ignore_node_modules_warnings,
+        config_resolver,
+        kit_files_settings,
+        include_suggestions,
+        disable_enhance,
+    ) {
+        Ok(run) => render_runs(
+            workspace,
+            vec![run],
+            output_format,
+            color,
+            threshold,
+            fail_on_warnings,
+        ),
+        Err(code) => code,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn check_project(
     workspace: &Path,
-    solution_root_tsconfig: Option<&Path>,
     tsconfig: &Path,
     output_format: &str,
     sources: DiagnosticSources,
@@ -1606,18 +1704,24 @@ fn check_project(
         // against the tsconfig path (it exists and shares the mount
         // with the files being matched).
         let case_insensitive = discovery::path_fs_is_case_insensitive(tsconfig);
-        let include =
-            discovery::resolve_patterns_against_declaring_dir(&chain, |f| f.include.as_deref())
-                .map(|pats| {
-                    discovery::build_glob_set_absolute(&pats, case_insensitive)
-                        .unwrap_or_else(globset::GlobSet::empty)
-                });
-        let exclude =
-            discovery::resolve_patterns_against_declaring_dir(&chain, |f| f.exclude.as_deref())
-                .map(|pats| {
-                    discovery::build_glob_set_absolute(&pats, case_insensitive)
-                        .unwrap_or_else(globset::GlobSet::empty)
-                });
+        let include = discovery::resolve_patterns_against_declaring_dir(
+            &chain,
+            discovery::SpecKind::Include,
+            |f| f.include.as_deref(),
+        )
+        .map(|pats| {
+            discovery::build_glob_set_absolute(&pats, case_insensitive)
+                .unwrap_or_else(globset::GlobSet::empty)
+        });
+        let exclude = discovery::resolve_patterns_against_declaring_dir(
+            &chain,
+            discovery::SpecKind::Exclude,
+            |f| f.exclude.as_deref(),
+        )
+        .map(|pats| {
+            discovery::build_glob_set_absolute(&pats, case_insensitive)
+                .unwrap_or_else(globset::GlobSet::empty)
+        });
         // Files explicitly listed in tsconfig's `files` field bypass
         // both `include` glob matching AND `exclude` filtering (TS
         // spec: https://www.typescriptlang.org/tsconfig/#exclude —
@@ -1626,12 +1730,16 @@ fn check_project(
         // Canonicalized because the matcher compares against canonical
         // walker paths.
         let explicit_files: std::collections::HashSet<PathBuf> =
-            discovery::resolve_patterns_against_declaring_dir(&chain, |f| f.files.as_deref())
-                .unwrap_or_default()
-                .into_iter()
-                .map(PathBuf::from)
-                .filter_map(|p| dunce::canonicalize(&p).ok().or(Some(p)))
-                .collect();
+            discovery::resolve_patterns_against_declaring_dir(
+                &chain,
+                discovery::SpecKind::Files,
+                |f| f.files.as_deref(),
+            )
+            .unwrap_or_default()
+            .into_iter()
+            .map(PathBuf::from)
+            .filter_map(|p| dunce::canonicalize(&p).ok().or(Some(p)))
+            .collect();
         (include, exclude, explicit_files)
     });
     // TypeScript only admits `.js` sources under `allowJs` (or `checkJs`,
@@ -1666,13 +1774,14 @@ fn check_project(
         if files.contains(path) {
             return true;
         }
-        // TS spec: when `files` is non-empty AND `include` is absent,
-        // ONLY entries listed in `files` are in the project (closed-
-        // world). Without this guard we'd default `include = match all`
-        // and pull every walked file into scope — wrong for the
-        // explicit-allowlist tsconfig pattern. Mirrors upstream
-        // svelte-check + tsc's project-membership rules.
-        if include.is_none() && !files.is_empty() {
+        // With no `include` anywhere in the chain, ONLY entries listed
+        // in `files` are in the project. The compiler would scan the
+        // whole config directory when `files` is absent too, but the
+        // overlay tsconfig svelte-check compiles always has a `files`
+        // list of its own (its shim declarations), which switches that
+        // default scan off: a project declaring neither is checked
+        // against nothing but its shims.
+        if include.is_none() {
             return false;
         }
         // Patterns are now absolute (resolved against the declaring
@@ -1682,7 +1791,7 @@ fn check_project(
         let excluded = exclude.as_ref().is_some_and(|set| set.is_match(path));
         included && !excluded
     };
-    let (svelte_files_raw, kit_files_raw, runes_modules_raw, user_scripts_raw) =
+    let (svelte_files_raw, kit_files_raw) =
         discovery::discover_relevant_files_with_settings(workspace, kit_files_settings);
     // Svelte-file emit: we walk ALL discovered `.svelte` files, not
     // just the in-scope subset. An out-of-scope file might be
@@ -1715,20 +1824,6 @@ fn check_project(
         .filter(|p| in_project_scope(p))
         .filter(|p| allow_js || p.extension().is_none_or(|e| e != "js"))
         .cloned()
-        .collect();
-    // `.svelte.ts` runes-module set. Walker paths are canonical
-    // (workspace is canonicalized at startup, `main.rs:180`), so
-    // dropping the per-entry canonicalize here costs nothing as long
-    // as the consumer at `rewrite_svelte_imports_for_collisions`
-    // canonicalizes its probe paths the same way (it does — the
-    // sibling-runes probe still calls `dunce::canonicalize`, which
-    // resolves any `./` / `..` from a relative import specifier into
-    // the same canonical form held in this set).
-    let runes_modules_set: std::collections::HashSet<PathBuf> =
-        runes_modules_raw.into_iter().collect();
-    let user_script_files: Vec<PathBuf> = user_scripts_raw
-        .into_iter()
-        .filter(|p| in_project_scope(p))
         .collect();
     // Resolve each file's nearest svelte.config (warningFilter / runes)
     // now, sequentially — the parallel lint pass below only does
@@ -1818,7 +1913,29 @@ fn check_project(
     let run_native = sources.svelte && matches!(svelte_warnings_mode, SvelteWarningsMode::Native);
     let native_compat = run_native.then(|| svn_lint::detect_for_workspace(workspace));
     let config_resolver_ref: &svelte_config::ConfigResolver = config_resolver;
+    // The compiler warns about a deprecated or removed compile option
+    // once per process: the first component compiled with it shows the
+    // warning, and no other.
+    let mut compile_option_warnings: Vec<Vec<(svn_lint::Code, String)>> =
+        vec![Vec::new(); svelte_sources.len()];
+    if run_native {
+        let mut warned: std::collections::HashSet<svn_lint::Code> =
+            std::collections::HashSet::new();
+        for (idx, (file, _)) in svelte_sources.iter().enumerate() {
+            if let Some(check) = &config_resolver_ref.for_path(file).compile_options {
+                for (code, message) in &check.warnings {
+                    if warned.insert(*code) {
+                        compile_option_warnings[idx].push((*code, message.clone()));
+                    }
+                }
+            }
+        }
+    }
+    let compile_option_warnings = &compile_option_warnings;
     let mut native_results: Vec<Option<NativeFileDiagnostics>>;
+    // Components whose template the compiler's `parse()` rejects — left
+    // out of the program, the diagnostics and the entry count.
+    let mut dropped_files: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     // TSGO-ENHANCEMENT: native TS2307 for missing relative `.svelte`
     // imports. Collected during the emit fan-out (below) and merged into
     // the diagnostics stream after tsgo, since it's a `js`-source error.
@@ -1828,7 +1945,7 @@ fn check_project(
         // background `.svelte-kit/types/` mirror start here, BEFORE
         // the emit fan-out, so the mirror's tree walk overlaps the
         // whole emit phase instead of just the overlay writes.
-        let session = match svn_typecheck::CheckSession::new(workspace, solution_root_tsconfig) {
+        let session = match svn_typecheck::CheckSession::new(workspace) {
             Ok(session) => session,
             Err(err) => {
                 let message = format!("type-check failed: {err}");
@@ -1857,13 +1974,27 @@ fn check_project(
         // paths derived from this file's source path. rayon distributes
         // across the thread pool and the order-preserving `unzip` keeps
         // the resulting inputs matching `svelte_sources` index-for-index.
-        let (prepared_svelte, natives): (PreparedResults, Vec<_>) = svelte_sources
+        let (prepared_svelte, natives): (Vec<Option<_>>, Vec<_>) = svelte_sources
             .par_iter()
             .enumerate()
             .map(|(idx, (file, source))| {
                 let (doc, section_errors) = svn_parser::parse_sections(source);
                 let (fragment, template_errors) =
                     svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
+                // A component the compiler's strict `parse()` rejects is
+                // dropped from the run by upstream: svelte2tsx throws, so
+                // there is no overlay, no diagnostic of any source, and
+                // the file is not an entry.
+                let parse_rejected = section_errors
+                    .iter()
+                    .chain(template_errors.iter())
+                    .any(|e| e.compiler_rejects());
+                if parse_rejected
+                    || svn_lint::script_tag_rejected(&doc)
+                    || svn_lint::template_parse_rejected(&fragment, source, doc.script_lang())
+                {
+                    return (None, (None, Vec::new(), Some(file.clone())));
+                }
                 // Fused native pass: derive fatal/lint diagnostics from
                 // THIS parse instead of re-parsing the corpus after
                 // tsgo. EVERY discovered source is linted, including the
@@ -1886,6 +2017,9 @@ fn check_project(
                         &template_errors,
                         config_resolver_ref,
                         compat,
+                        compile_option_warnings[idx].clone(),
+                        false,
+                        0,
                     )
                 });
                 // TSGO-ENHANCEMENT: missing `.svelte` imports (TS2307) —
@@ -1912,9 +2046,18 @@ fn check_project(
                 // `noImplicitAny:false` defaults) and lets tsgo natively
                 // parse user-authored JSDoc `@typedef` / `@type`
                 // annotations on Svelte-4 `export let` props.
-                let is_ts = doc.script_lang() == svn_parser::ScriptLang::Ts;
+                let is_ts = svn_parser::is_ts_svelte(source);
                 let emitted =
                     svn_emit::emit_document_with_lang(&doc, &fragment, &summary, file, is_ts);
+                // A component svelte2tsx refuses to convert leaves the
+                // run upstream: no overlay, no diagnostics of any kind,
+                // not counted; importers resolve it through Svelte's
+                // `*.svelte` wildcard.
+                // Leaving it out of the session also lets the cache GC
+                // remove an overlay an earlier run wrote for it.
+                if emitted.rejected_by_svelte2tsx {
+                    return (None, (None, Vec::new(), Some(file.clone())));
+                }
                 let kind = if idx < svelte_sources_in_scope_end {
                     svn_typecheck::InputKind::Svelte
                 } else {
@@ -1932,21 +2075,43 @@ fn check_project(
                     kind,
                     is_ts_overlay: is_ts,
                 };
-                (session_ref.prepare(input), (native, missing))
+                (Some(session_ref.prepare(input)), (native, missing, None))
             })
             .unzip();
-        let mut prepared = prepared_svelte;
-        // Split the per-file `(native, missing)` pairs back apart, keeping
-        // source order for the native merge and flattening the missing-
-        // import diagnostics into one stream.
+        let mut prepared: PreparedResults = prepared_svelte.into_iter().flatten().collect();
+        // Split the per-file `(native, missing, dropped)` triples back
+        // apart, keeping source order for the native merge and
+        // flattening the missing-import diagnostics into one stream.
         let natives: Vec<(
             Option<NativeFileDiagnostics>,
             Vec<svn_typecheck::CheckDiagnostic>,
+            Option<PathBuf>,
         )> = natives;
         native_results = Vec::with_capacity(natives.len());
-        for (native, missing) in natives {
+        for (native, missing, dropped) in natives {
             native_results.push(native);
             missing_import_diags.extend(missing);
+            dropped_files.extend(dropped);
+        }
+        if let Some(compat) = native_compat {
+            let native = NativeLint {
+                config_resolver: config_resolver_ref,
+                compat,
+                compile_option_warnings,
+            };
+            let preprocessed = relint_with_real_transpile(
+                workspace,
+                &svelte_sources,
+                &mut native_results,
+                &native,
+            );
+            carry_bidi_regex(
+                &svelte_sources,
+                &svelte_files_all,
+                &mut native_results,
+                &native,
+                &preprocessed,
+            );
         }
 
         // Kit files (`+server.ts`, `+page.ts`, hooks, params): run them
@@ -1990,63 +2155,6 @@ fn check_project(
                 .collect::<Vec<_>>(),
         );
 
-        // User-`.ts`-overlay for the sibling-collision case: when a user
-        // `.ts` file imports `./Foo.svelte` where `Foo.svelte.ts` exists
-        // as sibling, tsgo's `rootDirs` resolution picks the user's source
-        // tree (longest matching prefix), then auto-extends `.svelte` to
-        // `.svelte.ts` and lands on the runes module — which has named
-        // exports but no `default`, firing TS2305. Rewriting the import
-        // specifier to `.svelte.svn.js` in an overlay sidesteps the
-        // auto-extension entirely; tsgo resolves via bundler module
-        // resolution straight to the cache-side `.svelte.svn.ts`.
-        //
-        // Scope: both plain user `.ts` files AND `.svelte.ts` runes
-        // modules themselves — a `Foo.svelte.ts` module can import a
-        // sibling-collision `./Bar.svelte` (where `Bar.svelte.ts` also
-        // exists), and that specifier has the same resolution bug. No
-        // current bench exercises the `.svelte.ts` → collision-sibling
-        // path, but handling it here completes the pattern.
-        //
-        // Only files that actually contain a collision-case import get an
-        // overlay; others pass through tsgo's regular include. Fast-path
-        // skip when no runes modules were discovered.
-        if !runes_modules_set.is_empty() {
-            // Candidate order must be stable: it flows through `inputs`
-            // into the overlay tsconfig's exclude list, and HashSet
-            // iteration order isn't deterministic — sort the runes-
-            // module tail. Then fan out over rayon (read + oxc parse
-            // per file, no shared mutable state); the Vec collect
-            // preserves candidate order.
-            let mut runes_candidates: Vec<&PathBuf> = runes_modules_set.iter().collect();
-            runes_candidates.sort();
-            let rewrite_candidates: Vec<&PathBuf> =
-                user_script_files.iter().chain(runes_candidates).collect();
-            prepared.extend(
-                rewrite_candidates
-                    .par_iter()
-                    .filter_map(|file| {
-                        let source = std::fs::read_to_string(file).ok()?;
-                        let rewritten = rewrite_svelte_imports_for_collisions(
-                            file,
-                            &source,
-                            &runes_modules_set,
-                        )?;
-                        Some(session_ref.prepare(svn_typecheck::CheckInput {
-                            source_path: (*file).clone(),
-                            source: "".into(),
-                            generated_ts: rewritten,
-                            kit_col_shifts: Vec::new(),
-                            line_map: Vec::new(),
-                            token_map: Vec::new(),
-                            overlay_line_starts: Vec::new(),
-                            source_line_starts: Vec::new(),
-                            kind: svn_typecheck::InputKind::UserTsOverlay,
-                            is_ts_overlay: true,
-                        }))
-                    })
-                    .collect::<Vec<_>>(),
-            );
-        }
         checker = Some((session, prepared));
     }
     let t_emit = mark.elapsed();
@@ -2127,8 +2235,7 @@ fn check_project(
         // Track which (code, path, offset) tuples we've already
         // pushed so `--svelte-warnings=both` can dedup bridge/native
         // overlap without double-counting.
-        let mut seen: std::collections::HashSet<(String, PathBuf, u32, u32)> =
-            std::collections::HashSet::new();
+        let mut seen: std::collections::HashSet<WarningKey> = std::collections::HashSet::new();
 
         if run_native {
             // Fatal compile diagnostics (syntax errors → marked broken so
@@ -2161,12 +2268,14 @@ fn check_project(
             match svn_svelte_compiler::compile_batch(workspace, bridge_sources) {
                 Ok(per_file) => {
                     for (path, warnings) in per_file {
+                        let mut occurrences = std::collections::HashMap::new();
                         for w in warnings {
                             let severity =
                                 apply_compiler_override(&w.code, w.severity, compiler_overrides);
                             let Some(severity) = severity else { continue };
                             let href = compiler_code_docs_url(&w.code, severity);
-                            let key = (w.code.clone(), path.clone(), w.start.line, w.start.column);
+                            let site = (w.code.clone(), w.start.line, w.start.column);
+                            let key = warning_key(&mut occurrences, &path, site);
                             if !seen.insert(key) {
                                 continue;
                             }
@@ -2246,7 +2355,9 @@ fn check_project(
         }
         let code = match &d.code {
             svn_typecheck::DiagnosticCode::Slug(s) => s.as_str(),
-            svn_typecheck::DiagnosticCode::Numeric(_) => "",
+            svn_typecheck::DiagnosticCode::Numeric(_) | svn_typecheck::DiagnosticCode::Missing => {
+                ""
+            }
         };
         !plan.should_drop(code, Some(&d.source_path))
     });
@@ -2291,14 +2402,21 @@ fn check_project(
     // toward `<N> FILES` while a `svelte` or `css` source is enabled —
     // upstream's per-entry seeding early-returns for js-only selections
     // and the count collapses to diagnostic-bearing files.
-    let mut entries: Vec<PathBuf> = Vec::new();
-    if sources.svelte || sources.css {
-        entries.extend(svelte_files_all.iter().cloned());
-        entries.extend(kit_files_raw.iter().cloned());
-    }
+    let file_order: Vec<PathBuf> = svelte_files_all
+        .iter()
+        .filter(|f| !dropped_files.contains(*f))
+        .chain(kit_files_raw.iter())
+        .cloned()
+        .collect();
+    let entries = if sources.svelte || sources.css {
+        file_order.clone()
+    } else {
+        Vec::new()
+    };
     Ok(ProjectRun {
         diagnostics,
         entries,
+        file_order,
     })
 }
 
@@ -2313,6 +2431,7 @@ fn run_emit_ts(workspace: &Path) -> ExitCode {
     // Same relative keying as the check path — `--emit-ts` output is what
     // the emit snapshots lock, so it must be checkout-location-independent.
     svn_emit::set_render_hash_root(workspace);
+    svn_emit::set_svelte_major(svn_typecheck::workspace_svelte_major(workspace));
     let mut files = discover_svelte_files(workspace);
     // Directory traversal order is filesystem-dependent (APFS yields
     // sorted entries, ext4 hash order), so multi-file emits would print
@@ -2349,7 +2468,7 @@ fn run_emit_ts(workspace: &Path) -> ExitCode {
         }
 
         let summary = svn_analyze::walk_template(&fragment, &source);
-        let is_ts = doc.script_lang() == svn_parser::ScriptLang::Ts;
+        let is_ts = svn_parser::is_ts_svelte(&source);
         let emitted = svn_emit::emit_document_with_lang(&doc, &fragment, &summary, file, is_ts);
         let display_path = file
             .strip_prefix(workspace)
@@ -2469,6 +2588,30 @@ mod tests {
     }
 
     #[test]
+    fn tsconfig_syntax_matches_typescripts_config_reader() {
+        // Results of `ts.parseConfigFileTextToJson` (TypeScript 5.9).
+        let code = |text: &str| tsconfig_syntax_error(text).map(|(at, m)| (at, m[..6].to_string()));
+        for ok in [
+            r#"{ "a": 1, }"#,
+            "{ // x\n \"a\": /* y */ 1 }",
+            r#"{ "a": 0x10 }"#,
+            r#"{ "a": .5 }"#,
+            r#"{ "a": [1,] }"#,
+            r#"{ "a": -1 }"#,
+            "",
+        ] {
+            assert_eq!(code(ok), None, "{ok}");
+        }
+        assert_eq!(code("{ 'a': 1 }"), Some((2, "TS1327".into())));
+        assert_eq!(code("{ a: 1 }"), Some((2, "TS1327".into())));
+        assert_eq!(code(r#"{ "a": 'x' }"#), Some((7, "TS1327".into())));
+        assert_eq!(code(r#"{ "a": +1 }"#), Some((7, "TS1328".into())));
+        assert_eq!(code(r#"{ "a": Infinity }"#), Some((7, "TS1328".into())));
+        assert_eq!(code(r#"{ "a": NaN }"#), Some((7, "TS1328".into())));
+        assert!(code(r#"{ "a": 1"#).is_some());
+    }
+
+    #[test]
     fn compiler_docs_url_routes_error_to_compiler_errors_anchor() {
         // Bridge-emitted compile-error codes (parse errors, etc.)
         // go to the compiler-errors page, not warnings.
@@ -2522,103 +2665,5 @@ mod tests {
             compiler_code_docs_url("a11y-autofocus", Severity::Warning),
             Some("https://svelte.dev/docs/svelte/compiler-warnings#a11y_autofocus".to_string()),
         );
-    }
-
-    /// Write a tsconfig with the given JSON body and return its path.
-    fn write_tsconfig(dir: &Path, name: &str, body: &str) -> PathBuf {
-        let path = dir.join(name);
-        std::fs::write(&path, body).unwrap();
-        path
-    }
-
-    #[test]
-    fn escape_solution_keeps_referenced_file_name_not_just_dir() {
-        // Reference points at a variant filename like tsconfig.app.json.
-        // Pre-fix we'd drop the filename and try <dir>/tsconfig.json,
-        // miss it, and never redirect — leaving the user stuck on the
-        // solution root with unresolvable paths.
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        let app_dir = root.join("apps/foo");
-        std::fs::create_dir_all(&app_dir).unwrap();
-        write_tsconfig(
-            root,
-            "tsconfig.json",
-            r#"{ "files": [], "references": [{ "path": "./apps/foo/tsconfig.app.json" }] }"#,
-        );
-        let app_ts = write_tsconfig(
-            &app_dir,
-            "tsconfig.app.json",
-            r#"{ "compilerOptions": { "paths": { "$lib/*": ["./src/lib/*"] } } }"#,
-        );
-        let redirected = escape_solution_tsconfig(&root.join("tsconfig.json")).unwrap();
-        assert_eq!(
-            dunce::canonicalize(&redirected).unwrap(),
-            dunce::canonicalize(&app_ts).unwrap(),
-        );
-    }
-
-    #[test]
-    fn escape_solution_follows_extends_for_paths_discovery() {
-        // Leaf `tsconfig.json` declares no paths of its own but inherits
-        // them from a shared `tsconfig.base.json` via `extends`. Pre-fix
-        // we only looked at the leaf and missed the redirect entirely.
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        write_tsconfig(
-            root,
-            "tsconfig.base.json",
-            r#"{ "compilerOptions": { "paths": { "$app/*": ["./src/app/*"] } } }"#,
-        );
-        let app_dir = root.join("apps/foo");
-        std::fs::create_dir_all(&app_dir).unwrap();
-        write_tsconfig(
-            root,
-            "tsconfig.json",
-            r#"{ "files": [], "references": [{ "path": "./apps/foo" }] }"#,
-        );
-        let leaf = write_tsconfig(
-            &app_dir,
-            "tsconfig.json",
-            r#"{ "extends": "../../tsconfig.base.json", "compilerOptions": { "strict": true } }"#,
-        );
-        let redirected = escape_solution_tsconfig(&root.join("tsconfig.json")).unwrap();
-        assert_eq!(
-            dunce::canonicalize(&redirected).unwrap(),
-            dunce::canonicalize(&leaf).unwrap(),
-        );
-    }
-
-    #[test]
-    fn escape_solution_skips_reference_whose_chain_has_no_paths() {
-        // References that inherit nothing path-related stay on the
-        // solution root. The escape only exists to rescue paths
-        // resolution; skipping leaves other flows untouched.
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        let app_dir = root.join("apps/foo");
-        std::fs::create_dir_all(&app_dir).unwrap();
-        write_tsconfig(
-            root,
-            "tsconfig.json",
-            r#"{ "files": [], "references": [{ "path": "./apps/foo" }] }"#,
-        );
-        write_tsconfig(
-            &app_dir,
-            "tsconfig.json",
-            r#"{ "compilerOptions": { "strict": true } }"#,
-        );
-        assert!(escape_solution_tsconfig(&root.join("tsconfig.json")).is_none());
-    }
-
-    #[test]
-    fn escape_solution_returns_none_for_non_solution_tsconfig() {
-        let tmp = tempfile::tempdir().unwrap();
-        let ts = write_tsconfig(
-            tmp.path(),
-            "tsconfig.json",
-            r#"{ "compilerOptions": { "strict": true }, "include": ["src/**/*"] }"#,
-        );
-        assert!(escape_solution_tsconfig(&ts).is_none());
     }
 }

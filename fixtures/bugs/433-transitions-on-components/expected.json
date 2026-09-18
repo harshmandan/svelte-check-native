@@ -1,0 +1,71 @@
+{
+    "errors": [
+        {
+            "file": "src/C.svelte",
+            "line": 0,
+            "column": 37,
+            "code": 6133
+        },
+        {
+            "file": "src/Trans.svelte",
+            "line": 2,
+            "column": 16,
+            "code": 6133
+        },
+        {
+            "file": "src/Trans.svelte",
+            "line": 3,
+            "column": 15,
+            "code": 6133
+        },
+        {
+            "file": "src/Trans.svelte",
+            "line": 5,
+            "column": 3,
+            "code": "component_invalid_directive"
+        },
+        {
+            "file": "src/Trans.svelte",
+            "line": 5,
+            "column": 18,
+            "code": 18050
+        },
+        {
+            "file": "src/Trans.svelte",
+            "line": 6,
+            "column": 10,
+            "code": 18050
+        },
+        {
+            "file": "src/Trans.svelte",
+            "line": 6,
+            "column": 30,
+            "code": 18050
+        },
+        {
+            "file": "src/Trans.svelte",
+            "line": 7,
+            "column": 31,
+            "code": 2345
+        },
+        {
+            "file": "src/Trans.svelte",
+            "line": 7,
+            "column": 34,
+            "code": 2554
+        },
+        {
+            "file": "src/Trans.svelte",
+            "line": 7,
+            "column": 34,
+            "code": 18050
+        },
+        {
+            "file": "src/Trans.svelte",
+            "line": 8,
+            "column": 17,
+            "code": 18050
+        }
+    ],
+    "_note": "Transition and animation directives on a component are written as for an element, but a component has no tag or typings namespace, so the call receives `undefined.mapElementTag('undefined')`: TS18050 at the character after the directive name (the name's last character when the name ends the start tag), plus whatever the function's signature rejects. We dropped these directives on components."
+}

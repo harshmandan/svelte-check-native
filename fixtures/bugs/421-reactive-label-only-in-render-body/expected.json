@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "src/Input.svelte",
+            "line": 1,
+            "column": 17,
+            "code": 7028
+        },
+        {
+            "file": "src/Input.svelte",
+            "line": 1,
+            "column": 20,
+            "code": 2304
+        }
+    ],
+    "_note": "Under allowUnusedLabels: false only the `$` labels of reactive statements, written directly in the render function or in the arrow wrapper there, are exempt from TS7028; a `$:` inside a user function is an ordinary unused label and is reported, as svelte-check --tsgo does."
+}

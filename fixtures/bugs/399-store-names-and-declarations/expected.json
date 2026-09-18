@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "src/A.svelte",
+            "line": 2,
+            "column": 12,
+            "code": "global_reference_invalid"
+        },
+        {
+            "file": "src/Declared.svelte",
+            "line": 3,
+            "column": 6,
+            "code": "dollar_prefix_invalid"
+        }
+    ],
+    "_note": "A top-level `$name` declaration is that declaration, not a store read, and a type-only import still gets a (ignored) store declaration; both files also carry compiler errors, which svelte-check reports instead of their TypeScript diagnostics. Verified against svelte-check --tsgo."
+}

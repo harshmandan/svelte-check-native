@@ -1,0 +1,24 @@
+{
+    "errors": [
+        {
+            "file": "src/InstanceDecorator.svelte",
+            "line": 5,
+            "column": 2,
+            "code": "typescript_invalid_feature"
+        },
+        {
+            "file": "src/ModuleEnum.svelte",
+            "line": 2,
+            "column": 9,
+            "code": "typescript_invalid_feature"
+        },
+        {
+            "file": "src/TemplateFirst.svelte",
+            "line": 8,
+            "column": 17,
+            "code": "typescript_invalid_feature"
+        }
+    ],
+    "warnings": [],
+    "_note": "Without a Svelte config the language server transpiles each <script lang=\"ts\"> before compiling, so only what TypeScript's ES-next output keeps (decorators, accessor fields) can fail there; a script without lang in a TypeScript component is compiled as TypeScript untranspiled and its enum fails. The template is checked before the instance script, which is checked before the module script. Type-only namespaces and declare global pass. Verified against svelte-check 4.4.6."
+}

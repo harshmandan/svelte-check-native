@@ -1,0 +1,29 @@
+{
+    "errors": [
+        {
+            "file": "src/C.svelte",
+            "line": 0,
+            "column": 37,
+            "code": 6133
+        },
+        {
+            "file": "src/Uses.svelte",
+            "line": 6,
+            "column": 3,
+            "code": "component_invalid_directive"
+        },
+        {
+            "file": "src/Uses.svelte",
+            "line": 7,
+            "column": 9,
+            "code": 2304
+        },
+        {
+            "file": "src/Uses.svelte",
+            "line": 10,
+            "column": 11,
+            "code": 2304
+        }
+    ],
+    "_note": "svelte2tsx writes `class:` and `style:` directives on a component after the constructor call as it does for an element: the value expression is read (so its variable is not unused, TS6133) and a bare `class:name` reads `name` at the directive name (TS2304 when undeclared, on elements too). We dropped them on components and left the bare form unmapped."
+}

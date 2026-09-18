@@ -4,9 +4,9 @@
 //!   1. Detection — `is_svelte4_component`, the various
 //!      `has_*` / `contains_*` / `is_runes_mode` predicates that decide
 //!      whether to apply the rewrites or widening intersections.
-//!   2. Source-text rewrites of the script body (definite-assignment
-//!      `!`, de-narrowing reassignments, untyped-export widening) and
-//!      the `$$slots` / `$$props` / `$$restProps` ambient emission.
+//!   2. Source-text rewrites of the script body (exported-prop type
+//!      assertions) and the `$$slots` / `$$props` / `$$restProps`
+//!      ambient emission.
 //!
 //! When Svelte 4 is officially retired this whole module gets deleted
 //! along with the `// SVELTE-4-COMPAT` callsites in `lib.rs`. See
@@ -30,8 +30,6 @@ struct LetDeclarator {
     has_type_annotation: bool,
     /// A `/** @type {…} */` JSDoc block leads the statement.
     has_jsdoc_type: bool,
-    /// Already carries a `!` definite-assignment assertion.
-    definite: bool,
     init: DeclaratorInit,
     /// Position right after the statement's last declarator (before
     /// its `;`, if any).
@@ -49,7 +47,8 @@ enum DeclaratorInit {
 }
 
 /// Parse the script body spliced at `body` inside `out` and list its
-/// top-level `let` declarators that bind a plain identifier.
+/// top-level `let` declarators that bind a plain identifier (`const`
+/// ones with `kind = Const`).
 ///
 /// The in-place rewrites need to know where a declaration's name, type
 /// annotation and statement end sit. A byte scan misreads text that
@@ -60,9 +59,15 @@ enum DeclaratorInit {
 /// component-scope binding, and a nested `let` with the same name is a
 /// different variable.
 fn collect_top_level_lets(out: &str, body: &Range<usize>) -> Vec<LetDeclarator> {
-    use oxc_ast::ast::{
-        BindingPattern, Declaration, Expression, Statement, VariableDeclarationKind,
-    };
+    collect_top_level_declarators(out, body, oxc_ast::ast::VariableDeclarationKind::Let)
+}
+
+fn collect_top_level_declarators(
+    out: &str,
+    body: &Range<usize>,
+    kind: oxc_ast::ast::VariableDeclarationKind,
+) -> Vec<LetDeclarator> {
+    use oxc_ast::ast::{BindingPattern, Declaration, Expression, Statement};
 
     let Some(src) = out.get(body.clone()) else {
         return Vec::new();
@@ -102,7 +107,7 @@ fn collect_top_level_lets(out: &str, body: &Range<usize>) -> Vec<LetDeclarator> 
             | Statement::TSNamespaceExportDeclaration(_) => continue,
             svn_analyze::non_declaration_statement!() => continue,
         };
-        if decl.kind != VariableDeclarationKind::Let {
+        if decl.kind != kind {
             continue;
         }
         let Some(list_end) = decl
@@ -141,7 +146,6 @@ fn collect_top_level_lets(out: &str, body: &Range<usize>) -> Vec<LetDeclarator> 
                 name_end: body.start + id.span.end as usize,
                 has_type_annotation: d.type_annotation.is_some(),
                 has_jsdoc_type,
-                definite: d.definite,
                 init,
                 list_end,
             });
@@ -181,66 +185,39 @@ pub(crate) fn splice_insertions(
     edits
 }
 
-/// Rewrite `let <name>: T;` → `let <name>!: T;` for each target
-/// declared at the top level of the script body at `body`.
-///
-/// Svelte assigns these at runtime (a parent passes the prop, a
-/// `bind:this` element mounts), but TypeScript's flow analysis can't
-/// see that, so any read would be flagged "used before being
-/// assigned" (TS2454). The `!:` definite-assignment assertion tells
-/// TypeScript to trust us.
-///
-/// Only typed declarators without an initializer qualify: an untyped
-/// one has no annotation to attach `!` to, and `!` next to an
-/// initializer is itself an error (TS1263).
-pub(crate) fn rewrite_definite_assignment_in_place(
-    out: &mut String,
-    body: &Range<usize>,
-    target_names: &[SmolStr],
-) -> Vec<(u32, u32)> {
-    if target_names.is_empty() {
-        return Vec::new();
-    }
-    let insertions: Vec<(usize, String)> = collect_top_level_lets(out, body)
-        .into_iter()
-        .filter(|d| {
-            d.has_type_annotation
-                && !d.definite
-                && d.init == DeclaratorInit::Absent
-                && is_target(target_names, &d.name)
-        })
-        .map(|d| (d.name_end, String::from("!")))
-        .collect();
-    splice_insertions(out, &insertions)
-}
-
 /// Does the parsed template fragment contain a `<slot>` element?
 pub(crate) fn fragment_contains_slot(fragment: &svn_parser::Fragment) -> bool {
     fragment_has_slot_where(fragment, &|_| true)
 }
 
-/// Does the fragment contain a default slot — a `<slot>` with no `name`
-/// attribute, or `name="default"`? Upstream's
+/// Does the fragment contain a default slot? Upstream's
 /// `__sveltets_2_PropsWithChildren` widens the props with `children`
-/// only when the slots type has a `default` key.
+/// only when the slots type has a `default` key, and svelte2tsx keys a
+/// `<slot>` by the raw text of the first value chunk of its first
+/// attribute called `name` — `default` when there is none, `undefined`
+/// when that chunk is a `{…}` expression (`slot.ts` `handleSlot`).
 pub(crate) fn fragment_contains_default_slot(
     fragment: &svn_parser::Fragment,
     source: &str,
 ) -> bool {
+    use svn_parser::Attribute;
     fragment_has_slot_where(fragment, &|slot| {
-        slot.attributes.iter().all(|a| match a {
-            svn_parser::Attribute::Plain(p) if p.name.as_str() == "name" => match &p.value {
-                None => true,
-                Some(v) => match v.parts.as_slice() {
-                    [] => true,
-                    [svn_parser::AttrValuePart::Text { range }] => {
-                        source.get(range.start as usize..range.end as usize) == Some("default")
-                    }
-                    _ => false,
-                },
-            },
-            _ => true,
-        })
+        let name_attr = slot.attributes.iter().find(|a| match a {
+            Attribute::Plain(p) => p.name.as_str() == "name",
+            Attribute::Expression(x) => x.name.as_str() == "name",
+            Attribute::Shorthand(x) => x.name.as_str() == "name",
+            Attribute::Directive(d) => d.name.as_str() == "name",
+            Attribute::Spread(_) | Attribute::Comment(_) => false,
+        });
+        match name_attr {
+            None => true,
+            Some(Attribute::Plain(p)) => matches!(
+                p.value.as_ref().and_then(|v| v.parts.first()),
+                Some(svn_parser::AttrValuePart::Text { range })
+                    if source.get(range.start as usize..range.end as usize) == Some("default")
+            ),
+            Some(_) => false,
+        }
     })
 }
 
@@ -252,42 +229,50 @@ fn fragment_has_slot_where(
     fragment: &svn_parser::Fragment,
     pred: &dyn Fn(&svn_parser::Element) -> bool,
 ) -> bool {
+    fragment_has_element_where(fragment, &|e| e.name.as_str() == "slot" && pred(e))
+}
+
+/// Walk every element of the fragment (through blocks and component
+/// children) and report whether any satisfies `pred`. Comments and
+/// text are never elements.
+fn fragment_has_element_where(
+    fragment: &svn_parser::Fragment,
+    pred: &dyn Fn(&svn_parser::Element) -> bool,
+) -> bool {
     use svn_parser::Node;
     for node in &fragment.nodes {
         let hit = match node {
-            Node::Element(e) => {
-                (e.name.as_str() == "slot" && pred(e)) || fragment_has_slot_where(&e.children, pred)
-            }
-            Node::Component(c) => fragment_has_slot_where(&c.children, pred),
-            Node::SvelteElement(e) => fragment_has_slot_where(&e.children, pred),
+            Node::Element(e) => pred(e) || fragment_has_element_where(&e.children, pred),
+            Node::Component(c) => fragment_has_element_where(&c.children, pred),
+            Node::SvelteElement(e) => fragment_has_element_where(&e.children, pred),
             Node::IfBlock(b) => {
-                fragment_has_slot_where(&b.consequent, pred)
+                fragment_has_element_where(&b.consequent, pred)
                     || b.elseif_arms
                         .iter()
-                        .any(|arm| fragment_has_slot_where(&arm.body, pred))
+                        .any(|arm| fragment_has_element_where(&arm.body, pred))
                     || b.alternate
                         .as_ref()
-                        .is_some_and(|alt| fragment_has_slot_where(alt, pred))
+                        .is_some_and(|alt| fragment_has_element_where(alt, pred))
             }
             Node::EachBlock(b) => {
-                fragment_has_slot_where(&b.body, pred)
+                fragment_has_element_where(&b.body, pred)
                     || b.alternate
                         .as_ref()
-                        .is_some_and(|alt| fragment_has_slot_where(alt, pred))
+                        .is_some_and(|alt| fragment_has_element_where(alt, pred))
             }
             Node::AwaitBlock(b) => {
                 b.pending
                     .as_ref()
-                    .is_some_and(|p| fragment_has_slot_where(p, pred))
+                    .is_some_and(|p| fragment_has_element_where(p, pred))
                     || b.then_branch
                         .as_ref()
-                        .is_some_and(|t| fragment_has_slot_where(&t.body, pred))
+                        .is_some_and(|t| fragment_has_element_where(&t.body, pred))
                     || b.catch_branch
                         .as_ref()
-                        .is_some_and(|c| fragment_has_slot_where(&c.body, pred))
+                        .is_some_and(|c| fragment_has_element_where(&c.body, pred))
             }
-            Node::KeyBlock(b) => fragment_has_slot_where(&b.body, pred),
-            Node::SnippetBlock(b) => fragment_has_slot_where(&b.body, pred),
+            Node::KeyBlock(b) => fragment_has_element_where(&b.body, pred),
+            Node::SnippetBlock(b) => fragment_has_element_where(&b.body, pred),
             Node::Text(_) | Node::Comment(_) | Node::Interpolation(_) => false,
         };
         if hit {
@@ -301,7 +286,7 @@ fn fragment_has_slot_where(
 /// `$$Events` interface or type declaration in its instance or module
 /// script via an AST walk over the parsed scripts. When true, the
 /// default-export declaration intersects with
-/// `& { readonly __svn_events: $$Events }` so consumers resolve to
+/// the `__svn_events` events marker so consumers resolve to
 /// `__svn_ensure_component`'s typed overload and get narrowed
 /// `$on("evt", handler)` signatures.
 ///
@@ -335,6 +320,62 @@ pub(crate) fn has_strict_events_ast(
         program.body.iter().any(statement_declares_events)
     };
     parsed_instance.is_some_and(|p| scan(&p.program))
+}
+
+/// Whether the instance script's `$$Events` declaration names any
+/// event, as upstream's `ComponentEventsFromInterface.extractEvents`
+/// counts them: the property signatures of an interface body, of a
+/// type-literal alias, or of the type-literal members of an
+/// intersection alias. Anything else (`type $$Events = Base`, an empty
+/// interface, method signatures) contributes no events. With several
+/// declarations the last one counts.
+pub(crate) fn strict_events_decl_has_events(
+    parsed_instance: Option<&svn_parser::ParsedScript<'_>>,
+) -> bool {
+    use oxc_ast::ast::{Declaration, Statement, TSSignature, TSType};
+    fn has_properties(members: &[TSSignature<'_>]) -> bool {
+        members
+            .iter()
+            .any(|m| matches!(m, TSSignature::TSPropertySignature(_)))
+    }
+    fn alias_has_events(ty: &TSType<'_>) -> bool {
+        match ty {
+            TSType::TSTypeLiteral(lit) => has_properties(&lit.members),
+            TSType::TSIntersectionType(i) => i.types.iter().any(|t| match t {
+                TSType::TSTypeLiteral(lit) => has_properties(&lit.members),
+                _ => false,
+            }),
+            _ => false,
+        }
+    }
+    let Some(parsed) = parsed_instance else {
+        return false;
+    };
+    let mut last: Option<bool> = None;
+    for stmt in &parsed.program.body {
+        let decl = match stmt {
+            Statement::TSInterfaceDeclaration(d) if d.id.name == "$$Events" => {
+                Some(has_properties(&d.body.body))
+            }
+            Statement::TSTypeAliasDeclaration(d) if d.id.name == "$$Events" => {
+                Some(alias_has_events(&d.type_annotation))
+            }
+            Statement::ExportDeclaration(e) => match &e.declaration {
+                Declaration::TSInterfaceDeclaration(d) if d.id.name == "$$Events" => {
+                    Some(has_properties(&d.body.body))
+                }
+                Declaration::TSTypeAliasDeclaration(d) if d.id.name == "$$Events" => {
+                    Some(alias_has_events(&d.type_annotation))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        if decl.is_some() {
+            last = decl;
+        }
+    }
+    last.unwrap_or(false)
 }
 
 /// True when `stmt` is an `interface $$Events` or `type $$Events`
@@ -398,16 +439,32 @@ fn statement_declares_named_type(stmt: &oxc_ast::ast::Statement<'_>, name: &str)
     }
 }
 
-/// SVELTE-4-COMPAT: Detect the `<script strictEvents>` bare attribute
-/// that upstream svelte2tsx uses as a user opt-in for event-typing
-/// narrowing without requiring a `$$Events` interface. One of the
-/// three triggers that turns on event narrowing.
-pub(crate) fn has_strict_events_attr(doc: &svn_parser::Document<'_>) -> bool {
-    doc.instance_script.as_ref().is_some_and(|s| {
-        s.attrs
-            .iter()
-            .any(|a| a.name.eq_ignore_ascii_case("strictEvents") && a.value.is_none())
-    })
+/// SVELTE-4-COMPAT: detect the `strictEvents` opt-in, which turns on
+/// event-typing narrowing without a `$$Events` interface. Upstream
+/// (`htmlxtojsx_v2/index.ts`) enables it when any `<script>` or
+/// `<style>` tag of the file — the component's own sections or one
+/// written inside the markup — carries an attribute named exactly
+/// `strictEvents`, whatever its value.
+pub(crate) fn has_strict_events_attr(
+    doc: &svn_parser::Document<'_>,
+    fragment: &svn_parser::Fragment,
+) -> bool {
+    const NAME: &str = "strictEvents";
+    let on_section = |attrs: &[svn_parser::ScriptAttr]| attrs.iter().any(|a| a.name == NAME);
+    doc.instance_script
+        .as_ref()
+        .is_some_and(|s| on_section(&s.attrs))
+        || doc
+            .module_script
+            .as_ref()
+            .is_some_and(|s| on_section(&s.attrs))
+        || doc.style.as_ref().is_some_and(|s| on_section(&s.attrs))
+        || fragment_has_element_where(fragment, &|e| {
+            matches!(e.name.as_str(), "script" | "style")
+                && e.attributes.iter().any(
+                    |a| matches!(a, svn_parser::Attribute::Plain(p) if p.name.as_str() == NAME),
+                )
+        })
 }
 
 /// Infer Svelte 5 runes mode the way upstream svelte2tsx does
@@ -418,14 +475,116 @@ pub(crate) fn has_strict_events_attr(doc: &svn_parser::Document<'_>) -> bool {
 /// else counts — a rune name in markup text or a comment is not a
 /// reference, and `$inspect` alone does not switch modes.
 ///
-/// A `$state` that resolves to a store subscription (`const state =
-/// writable(…)` in a Svelte-4 component) is not a global either, so
-/// the top-level bindings of both scripts are excluded first.
+/// Only the instance script and the template are looked at; the module
+/// script never switches the mode. A `$state` that resolves to a store
+/// subscription is not a global either: upstream removes the names of
+/// the instance script's top-level variables, its imports and its
+/// reactive `$:` assignments (`ImplicitStoreValues.getGlobals`) — but
+/// not its functions or classes.
+/// Names a `$name` read can subscribe to as a store: the script's
+/// top-level variables, its default and named imports, and the targets
+/// of its top-level `$:` assignments.
+fn store_base_names(program: &oxc_ast::ast::Program<'_>) -> std::collections::HashSet<String> {
+    use oxc_ast::ast::{Declaration, Expression, ImportDeclarationSpecifier, Statement};
+    let mut names: Vec<smol_str::SmolStr> = Vec::new();
+    for stmt in &program.body {
+        match stmt {
+            Statement::VariableDeclaration(v) => {
+                for d in &v.declarations {
+                    crate::process_instance_script_content::collect_binding_pattern_names(
+                        &d.id, &mut names,
+                    );
+                }
+            }
+            Statement::ExportDeclaration(e) => {
+                if let Declaration::VariableDeclaration(v) = &e.declaration {
+                    for d in &v.declarations {
+                        crate::process_instance_script_content::collect_binding_pattern_names(
+                            &d.id, &mut names,
+                        );
+                    }
+                }
+            }
+            Statement::ImportDeclaration(i) => {
+                for spec in i.specifiers.iter().flatten() {
+                    match spec {
+                        ImportDeclarationSpecifier::ImportSpecifier(s) => {
+                            names.push(s.local.name.as_str().into());
+                        }
+                        ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => {
+                            names.push(s.local.name.as_str().into());
+                        }
+                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {}
+                    }
+                }
+            }
+            Statement::LabeledStatement(l) if l.label.name == "$" => {
+                if let Statement::ExpressionStatement(e) = &l.body
+                    && let Expression::AssignmentExpression(a) = e.expression.without_parentheses()
+                {
+                    collect_assignment_target_names(&a.left, &mut names);
+                }
+            }
+            _ => {}
+        }
+    }
+    names.into_iter().map(String::from).collect()
+}
+
+fn collect_assignment_target_names(
+    target: &oxc_ast::ast::AssignmentTarget<'_>,
+    out: &mut Vec<smol_str::SmolStr>,
+) {
+    use oxc_ast::ast::{AssignmentTarget, AssignmentTargetMaybeDefault, AssignmentTargetProperty};
+    match target {
+        AssignmentTarget::AssignmentTargetIdentifier(id) => out.push(id.name.as_str().into()),
+        AssignmentTarget::ObjectAssignmentTarget(o) => {
+            for p in &o.properties {
+                match p {
+                    AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(i) => {
+                        out.push(i.binding.name.as_str().into());
+                    }
+                    AssignmentTargetProperty::AssignmentTargetPropertyProperty(pp) => {
+                        collect_maybe_default(&pp.binding, out);
+                    }
+                }
+            }
+            if let Some(rest) = &o.rest {
+                collect_assignment_target_names(&rest.target, out);
+            }
+        }
+        AssignmentTarget::ArrayAssignmentTarget(a) => {
+            for el in a.elements.iter().flatten() {
+                collect_maybe_default(el, out);
+            }
+            if let Some(rest) = &a.rest {
+                collect_assignment_target_names(&rest.target, out);
+            }
+        }
+        _ => {}
+    }
+
+    fn collect_maybe_default(
+        t: &AssignmentTargetMaybeDefault<'_>,
+        out: &mut Vec<smol_str::SmolStr>,
+    ) {
+        match t {
+            AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(d) => {
+                collect_assignment_target_names(&d.binding, out);
+            }
+            other => {
+                if let Some(t) = other.as_assignment_target() {
+                    collect_assignment_target_names(t, out);
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn is_runes_mode(
     doc: &svn_parser::Document<'_>,
     fragment: &svn_parser::Fragment,
     parsed_instance: Option<&svn_parser::ParsedScript<'_>>,
-    parsed_module: Option<&svn_parser::ParsedScript<'_>>,
 ) -> bool {
     let source = doc.source;
     // An explicit `<svelte:options runes>` / `runes={true}` forces runes
@@ -434,12 +593,11 @@ pub(crate) fn is_runes_mode(
     if svn_parser::runes_option(fragment, source) == Some(true) {
         return true;
     }
-    let mut bound: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for parsed in [parsed_instance, parsed_module].into_iter().flatten() {
-        svn_analyze::collect_top_level_bindings(&parsed.program, &mut bound);
-    }
+    let bound = parsed_instance
+        .map(|p| store_base_names(&p.program))
+        .unwrap_or_default();
     let mut probe = svn_analyze::RunesProbe::new(svn_analyze::RunesRule::Svelte2tsx, &bound);
-    for parsed in [parsed_instance, parsed_module].into_iter().flatten() {
+    if let Some(parsed) = parsed_instance {
         probe.scan_program(&parsed.program);
         if probe.found {
             return true;
@@ -483,23 +641,31 @@ pub(crate) fn is_runes_mode(
 /// ambient the component refers to (an identifier reference in a
 /// script or template expression — see `svn_analyze::find_ambient_refs`).
 ///
-/// Types: `Record<string, any>` for all three. Upstream's
-/// `__sveltets_2_slotsType({…slot names…})` is more precise (each
-/// slot is typed as `boolean | ''`), but that requires walking the
-/// template to collect slot names and emit a shape literal.
-pub(crate) fn emit_svelte4_ambients(out: &mut String, refs: svn_analyze::AmbientRefs, is_ts: bool) {
+/// `$$slots` is typed from the slots the template declares, as
+/// upstream's `__sveltets_2_slotsType({'name': '', …})`: a `boolean`
+/// per slot name, so reading a slot the component doesn't have is an
+/// error. `slot_names` lists them in template order.
+pub(crate) fn emit_svelte4_ambients(
+    out: &mut String,
+    refs: svn_analyze::AmbientRefs,
+    is_ts: bool,
+    slot_names: &[&str],
+) {
     // In TS overlays we emit inline `: T` annotations. In JS overlays
     // we must not — tsgo fires TS8010 and aborts project-wide once
     // hit, silently suppressing every legitimate diagnostic
     // elsewhere. Emit JSDoc casts on the RHS for JS overlays.
     if refs.slots {
-        if is_ts {
-            out.push_str("    let $$slots: Record<string, boolean | undefined> = {};\n");
-        } else {
-            out.push_str(
-                "    let $$slots = /** @type {Record<string, boolean | undefined>} */ ({});\n",
-            );
+        out.push_str("    let $$slots = __svn_slots_type({");
+        for (i, name) in slot_names.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            out.push('\'');
+            out.push_str(name);
+            out.push_str("': ''");
         }
+        out.push_str("});\n");
         out.push_str("    void $$slots;\n");
     }
     if refs.rest_props {
@@ -519,46 +685,6 @@ pub(crate) fn emit_svelte4_ambients(out: &mut String, refs: svn_analyze::Ambient
         out.push_str("    void $$props;\n");
     }
 }
-/// JS-overlay equivalent of `rewrite_definite_assignment_in_place` +
-/// `widen_untyped_exported_props_in_place` rolled into one. For each
-/// `let NAME[, NAME…];` declaration where NAME is a target AND that
-/// declarator has no initializer, splice `= /** @type {any} */ (null)`
-/// between NAME (or its type annotation) and the terminator — turning
-/// `let b;` into `let b = /** @type {any} */ (null);`.
-///
-/// Fixes three TS-strict-mode JS-overlay diagnostics in one pass:
-///   - TS7034/TS7005 on the declaration ("variable implicitly any in
-///     some locations") — the initializer's `any` gives TS an explicit
-///     type for subsequent flow.
-///   - TS2454 on later reads ("used before being assigned") — the
-///     initializer satisfies definite-assign flow.
-///   - TS2367/TS2322 on type-check expressions that would have
-///     otherwise narrowed against a body-local `undefined`-inferred
-///     type.
-///
-/// User-authored JSDoc `/** @type {T} */` preceding the declaration is
-/// preserved and takes priority: TS reads user's `@type` to declare
-/// NAME as `T`, the initializer's `any` is assignable to `T` via JS-loose
-/// rules, no TS2322 secondary fires.
-pub(crate) fn widen_untyped_exports_jsdoc_in_place(
-    out: &mut String,
-    body: &Range<usize>,
-    target_names: &[SmolStr],
-    route_kind: Option<sveltekit::RouteKind>,
-) -> Vec<(u32, u32)> {
-    let insertions: Vec<(usize, String)> = collect_widening_sites(out, body, target_names)
-        .into_iter()
-        .map(|(pos, name)| {
-            let text = match route_kind.and_then(|k| sveltekit::kit_widen_type(&name, k)) {
-                Some(ty) => format!(" = /** @type {{{ty}}} */ (/** @type {{any}} */ (null))"),
-                None => String::from(" = /** @type {any} */ (null)"),
-            };
-            (pos, text)
-        })
-        .collect();
-    splice_insertions(out, &insertions)
-}
-
 /// The SvelteKit type of a route-file prop upstream names without a
 /// declared type: `data`, `form` and `snapshot` in `+page` / `+layout`
 /// components (`ExportedNames.ts`, `kitType`).
@@ -661,6 +787,41 @@ pub(crate) fn assert_exported_prop_types_in_place(
     splice_insertions(out, &insertions)
 }
 
+/// Give an exported `const snapshot` on a SvelteKit page or layout
+/// the `Snapshot` type from its `$types` when it declares no type of
+/// its own — upstream `ExportedNames.handleVariableStatement`, which
+/// does this for `export const` statements only (`const_names` lists
+/// the names those statements declare). The annotation lands like the
+/// `let` props' one: after the name in a TS overlay, a JSDoc `@type`
+/// before it in a JS one.
+pub(crate) fn annotate_exported_kit_consts_in_place(
+    out: &mut String,
+    body: &Range<usize>,
+    const_names: &[SmolStr],
+    route_kind: Option<sveltekit::RouteKind>,
+    is_ts: bool,
+) -> Vec<(u32, u32)> {
+    if !matches!(
+        route_kind,
+        Some(sveltekit::RouteKind::Page | sveltekit::RouteKind::Layout)
+    ) || !is_target(const_names, "snapshot")
+    {
+        return Vec::new();
+    }
+    let insertions: Vec<(usize, String)> =
+        collect_top_level_declarators(out, body, oxc_ast::ast::VariableDeclarationKind::Const)
+            .into_iter()
+            .filter(|d| {
+                d.name == "snapshot"
+                    && !d.has_type_annotation
+                    && !d.has_jsdoc_type
+                    && is_target(const_names, &d.name)
+            })
+            .map(|d| kit_type_insertion(&d, "import('./$types.js').Snapshot", is_ts))
+            .collect();
+    splice_insertions(out, &insertions)
+}
+
 /// Upstream `ExportedNames.emitKitType`: the `$types` annotation for
 /// a route prop, as a TS annotation after the name (in ignore
 /// comments) or a JSDoc `@type` before it.
@@ -673,29 +834,6 @@ fn kit_type_insertion(d: &LetDeclarator, ty: &str, is_ts: bool) -> (usize, Strin
     } else {
         (d.name_start, format!("/** @type {{{ty}}} */ "))
     }
-}
-
-/// Shared site list for the two widening rewrites: the name end of
-/// every untyped target declared without an initializer (or with a
-/// bare `undefined` / `null` one).
-fn collect_widening_sites(
-    out: &str,
-    body: &Range<usize>,
-    target_names: &[SmolStr],
-) -> Vec<(usize, SmolStr)> {
-    if target_names.is_empty() {
-        return Vec::new();
-    }
-    collect_top_level_lets(out, body)
-        .into_iter()
-        .filter(|d| {
-            !d.has_type_annotation
-                && !d.definite
-                && d.init != DeclaratorInit::Other
-                && is_target(target_names, &d.name)
-        })
-        .map(|d| (d.name_end, d.name))
-        .collect()
 }
 
 #[cfg(test)]
@@ -712,11 +850,25 @@ mod tests {
             .instance_script
             .as_ref()
             .map(|s| svn_parser::parse_script_body(&alloc, s.content, s.lang));
-        let module = doc
-            .module_script
-            .as_ref()
-            .map(|s| svn_parser::parse_script_body(&alloc, s.content, s.lang));
-        is_runes_mode(&doc, &fragment, instance.as_ref(), module.as_ref())
+        is_runes_mode(&doc, &fragment, instance.as_ref())
+    }
+
+    #[test]
+    fn store_names_follow_upstream_globals() {
+        // A module-script store of the same name is not an instance
+        // declaration, and neither is a function.
+        assert!(runes(
+            "<script module>export const state = 1;</script><script>$state;</script>"
+        ));
+        assert!(runes("<script>function state() {}\n$state;</script>"));
+        // Instance variables, imports and `$:` targets are.
+        assert!(!runes("<script>const state = 1;\n$state;</script>"));
+        assert!(!runes(
+            "<script>import { state } from './s';\n$state;</script>"
+        ));
+        assert!(!runes("<script>$: state = 1;\n$state;</script>"));
+        // The module script never switches the mode.
+        assert!(!runes("<script module>let x = $state(0);</script>"));
     }
 
     #[test]

@@ -14,25 +14,19 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         const k = shape.kind;
-        void k;
-        { svelteHTML.createElement("p", {});             (k);
+        { svelteHTML.createElement("p", {});             k;
         }
         if ((shape.kind === 'circle')) {
-            void [shape.kind];
-            { svelteHTML.createElement("p", {});                 (shape.radius);
+            { svelteHTML.createElement("p", {});                 shape.radius;
             }
         } else if ((shape.kind === 'square')) {
-            void [shape.kind];
-            { svelteHTML.createElement("p", {});                 (shape.side);
+            { svelteHTML.createElement("p", {});                 shape.side;
             }
         }
         const [first, { kind: k2 }, ...rest] = [shape, shape];
-        void first;
-        void k2;
-        void rest;
-        { svelteHTML.createElement("p", {});             (first.kind);
-            (k2);
-            (rest.length);
+        { svelteHTML.createElement("p", {});             first.kind;
+            k2;
+            rest.length;
         }
     });
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };

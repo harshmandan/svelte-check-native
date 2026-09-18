@@ -30,96 +30,118 @@ pub(crate) fn is_svelte4_reactive_noop_comma(diag: &CheckDiagnostic) -> bool {
     false
 }
 
-/// SVELTE-4-COMPAT: does the overlay text at `offset` start a Svelte-4
-/// `$:` reactive-statement label?
+/// SVELTE-4-COMPAT: is the TS7028 ("Unused label") at overlay byte
+/// `offset` the `$` label of a reactive statement?
 ///
-/// tsgo's TS7028 ("Unused label") points at the **identifier** that
-/// names the label — for `$: foo()` that's the `$` character at
-/// `offset`, with `:` immediately after. Both ours and upstream emit
-/// reactive statements as `;() => { $: <expr> }` (preserves the user's
-/// reactive code as a body for type-checking without actually running
-/// it), so the structural `$:` is the source of false-positive TS7028s
-/// when the user's tsconfig has `allowUnusedLabels: false` (default in
-/// strict-mode SvelteKit + threlte tsconfigs).
-///
-/// `overlay_text[offset]` must be `$` and `overlay_text[offset+1]` must
-/// be `:`. The `$` identifier is exactly one byte; tolerate optional
-/// whitespace between `$` and `:` purely defensively (Svelte's compiler
-/// rejects whitespace there, but our future emit might add it).
-pub(crate) fn is_overlay_dollar_reactive_label(overlay: &str, offset: u32) -> bool {
-    let bytes = overlay.as_bytes();
-    let off = offset as usize;
-    if bytes.get(off) != Some(&b'$') {
-        return false;
-    }
-    let mut i = off + 1;
-    while bytes.get(i).is_some_and(|b| b.is_ascii_whitespace()) {
-        i += 1;
-    }
-    bytes.get(i) == Some(&b':')
-}
+/// Reactive statements reach the overlay as `$: …` labeled statements,
+/// either directly in the render function's body or wrapped in an arrow
+/// (`;() => { $: … }`) that sits directly in that body. Their `$` label is
+/// never jumped to, so a tsconfig with `allowUnusedLabels: false` flags
+/// every one. svelte-check drops exactly those: the flagged node must be
+/// the label identifier of a `$` labeled statement whose parent chain is
+/// the render function's body — or a block, an arrow function and an
+/// expression statement in that body — with the render function declared
+/// at the top of the file. A `$:` inside a user function is an ordinary
+/// label there, and its TS7028 is reported.
+pub(crate) fn is_reactive_statement_label(overlay: &str, is_ts: bool, offset: u32) -> bool {
+    use oxc_ast::ast::{ArrowFunctionBody, Expression, FunctionBody, Statement};
 
-/// Does the overlay text at `offset` start a quoted attribute key
-/// of the form a `createElement(...)` literal would emit (e.g.
-/// `"on:click"`, `"class"`, `"id"`)?
-///
-/// Used to filter TS1117/TS2300 duplicate-key diagnostics on element
-/// attribute names; mirrors upstream svelte-check's
-/// `isAttributeName(node, 'Element') || isEventHandler(node, 'Element')`
-/// filter at `DiagnosticsProvider.ts:366-371`. Less precise (no AST),
-/// but in practice covers the same patterns: Svelte's parser rejects
-/// duplicate static attributes at compile time, so the only overlay
-/// duplicates that reach the type-checker come from the
-/// `<el on:click={fn} on:click>` (handle + forward) idiom or from
-/// spread-plus-attribute combinations.
-///
-/// The text scan alone can't tell a synthesized attribute key from a
-/// quoted key the user wrote in their `<script>` — the caller in
-/// `map_diagnostic` supplies that context by only invoking this on
-/// positions with no line-map coverage (i.e. outside verbatim user
-/// code).
-pub(crate) fn is_overlay_attribute_key(overlay: &str, offset: u32) -> bool {
-    let bytes = overlay.as_bytes();
-    let off = offset as usize;
-    // tsgo's TS1117/TS2300 sometimes points at the opening `"`, sometimes
-    // at the first character INSIDE the quotes (the duplicate identifier
-    // itself). Walk backwards through valid attribute-name chars to
-    // find the opening quote.
-    let mut start = off;
-    while start > 0
-        && bytes
-            .get(start)
-            .is_some_and(|b| b.is_ascii_alphanumeric() || matches!(b, b':' | b'-' | b'_' | b'$'))
-    {
-        start -= 1;
-    }
-    if bytes.get(start) != Some(&b'"') {
-        return false;
-    }
-    let mut i = start + 1;
-    while let Some(&b) = bytes.get(i) {
-        if b == b'"' {
-            // Closing quote; check that `:` follows (with optional ws).
-            let mut j = i + 1;
-            while bytes.get(j).is_some_and(|c| c.is_ascii_whitespace()) {
-                j += 1;
+    let is_dollar_label_at = |stmt: &Statement<'_>| {
+        matches!(stmt, Statement::LabeledStatement(l)
+            if l.label.name == "$" && l.label.span.start == offset)
+    };
+    let body_has_label = |body: &FunctionBody<'_>| {
+        body.statements.iter().any(|stmt| {
+            if is_dollar_label_at(stmt) {
+                return true;
             }
-            return bytes.get(j) == Some(&b':');
-        }
-        if !(b.is_ascii_alphanumeric() || matches!(b, b':' | b'-' | b'_' | b'$')) {
+            let Statement::ExpressionStatement(expr) = stmt else {
+                return false;
+            };
+            let Expression::ArrowFunctionExpression(arrow) = &expr.expression else {
+                return false;
+            };
+            matches!(&arrow.body, ArrowFunctionBody::FunctionBody(block)
+                if block.statements.iter().any(is_dollar_label_at))
+        })
+    };
+
+    let alloc = oxc_allocator::Allocator::default();
+    let lang = if is_ts {
+        svn_parser::ScriptLang::Ts
+    } else {
+        svn_parser::ScriptLang::Js
+    };
+    let parsed = svn_parser::parse_script_body(&alloc, overlay, lang);
+    parsed.program.body.iter().any(|stmt| {
+        let Statement::FunctionDeclaration(render) = stmt else {
             return false;
-        }
-        i += 1;
-    }
-    false
+        };
+        render
+            .id
+            .as_ref()
+            .is_some_and(|id| id.name.starts_with(RENDER_FUNCTION_PREFIX))
+            && render
+                .body
+                .as_ref()
+                .is_some_and(|body| body_has_label(body))
+    })
 }
 
-/// Check whether `offset` falls inside any `(start, end)` range in
-/// `regions`. Linear scan; regions are typically few per file.
-pub(crate) fn is_in_ignore_region(regions: &[(u32, u32)], offset: u32) -> bool {
-    regions
+/// Name prefix of the component's render function in the overlay; the
+/// emit crate appends a per-file hash.
+const RENDER_FUNCTION_PREFIX: &str = "$$render_";
+
+/// The byte range of the tag name of the start tag containing byte
+/// `offset` in a `.svelte` source, when `offset` lies inside one.
+///
+/// Upstream remaps an empty missing-prop range onto the tag name of the
+/// start tag it falls in (`getNodeIfIsInStartTag`). The name is the run
+/// of tag-name characters after the `<` that opens the tag.
+pub(crate) fn start_tag_name_around(source: &str, offset: u32) -> Option<(u32, u32)> {
+    let bytes = source.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+    let off = (offset as usize).min(bytes.len() - 1);
+    let open = bytes[..=off]
         .iter()
-        .any(|&(start, end)| offset >= start && offset < end)
+        .rposition(|&b| b == b'<' || b == b'>')?;
+    if bytes[open] != b'<' {
+        return None;
+    }
+    let name_start = open + 1;
+    let name_len = bytes[name_start..]
+        .iter()
+        .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b':' | b'-' | b'_' | b'$'))
+        .count();
+    (name_len > 0).then_some((name_start as u32, (name_start + name_len) as u32))
+}
+
+/// Upstream's `isInGeneratedCode` (`language-server/src/plugins/
+/// typescript/features/utils.ts`), verbatim: a diagnostic spanning
+/// overlay bytes `start..end` is generated when the nearest ignore-start
+/// marker at or before `start` follows the nearest ignore-end marker
+/// there (or that end marker is also the first one at or after `end`),
+/// and an ignore-end marker follows. A position on the start marker
+/// itself counts as generated.
+pub(crate) fn is_in_generated_code(text: &str, start: usize, end: usize) -> bool {
+    // `text.lastIndexOf(s, from)` / `text.indexOf(s, from)`, -1 for none.
+    let last_index_of = |s: &str, from: usize| -> i64 {
+        let limit = from.saturating_add(s.len()).min(text.len());
+        text.get(..limit)
+            .and_then(|head| head.rfind(s))
+            .map_or(-1, |i| i as i64)
+    };
+    let index_of = |s: &str, from: usize| -> i64 {
+        text.get(from.min(text.len())..)
+            .and_then(|tail| tail.find(s))
+            .map_or(-1, |i| (i + from) as i64)
+    };
+    let last_start = last_index_of(IGNORE_START_MARKER, start);
+    let last_end = last_index_of(IGNORE_END_MARKER, start);
+    let next_end = index_of(IGNORE_END_MARKER, end);
+    (last_start > last_end || last_end == next_end) && last_start < next_end
 }
 
 /// Does the diagnostic at `offset` fall inside an
@@ -196,132 +218,6 @@ pub(crate) fn is_overlay_in_ensure_transition_call(overlay: &str, offset: u32) -
 /// check.
 pub(crate) fn is_expected_three_arguments_message(message: &str) -> bool {
     message.contains(" 3")
-}
-
-/// Scan `overlay_text` for [`IGNORE_START_MARKER`] / [`IGNORE_END_MARKER`]
-/// pairs and return their byte-offset ranges in the overlay.
-///
-/// Each `ignore_start` pairs with the NEXT `ignore_end` (mirrors
-/// upstream's `isInGeneratedCode` pairing semantics). A stray
-/// unmatched `ignore_start` with no subsequent `ignore_end` extends
-/// to `overlay_text.len()` — equivalent to "everything after this
-/// marker is scaffolding". Empty result when the overlay has no
-/// markers.
-pub fn scan_ignore_regions(overlay_text: &str) -> Vec<(u32, u32)> {
-    let bytes = overlay_text.as_bytes();
-    let start_marker = IGNORE_START_MARKER.as_bytes();
-    let end_marker = IGNORE_END_MARKER.as_bytes();
-    let mut regions: Vec<(u32, u32)> = Vec::new();
-    let mut cursor: usize = 0;
-    while let Some(rel) = find_subslice(&bytes[cursor..], start_marker) {
-        let start = cursor + rel;
-        // Region begins AFTER the start marker (so the marker itself
-        // is tolerated — no diagnostic can legitimately originate
-        // inside a comment).
-        let region_start = start + start_marker.len();
-        let after_start = region_start;
-        let end = match find_subslice(&bytes[after_start..], end_marker) {
-            Some(rel_end) => after_start + rel_end,
-            None => bytes.len(),
-        };
-        regions.push((region_start as u32, end as u32));
-        cursor = end + end_marker.len().min(bytes.len() - end);
-    }
-    regions
-}
-
-/// True when the compacted attribute span carries a `lang` attribute
-/// set to `pug`. The span has already had whitespace squeezed out, so a
-/// genuine `lang` attribute is preceded either by the span start or by a
-/// boundary byte (`>`, `/`, a quote, or another attribute's value). We
-/// reject a match whose preceding byte is an attribute-name character
-/// (`[A-Za-z0-9:_-]`) so `data-lang="pug"` / `xlang="pug"` don't trip the
-/// suppression while `lang="pug"` and `foo="x"lang="pug"` still do.
-fn lang_attr_is_pug(attrs_compact: &str) -> bool {
-    let b = attrs_compact.as_bytes();
-    for pat in ["lang=\"pug\"", "lang='pug'", "lang=pug"] {
-        let mut from = 0;
-        while let Some(rel) = attrs_compact[from..].find(pat) {
-            let idx = from + rel;
-            let boundary_ok = idx == 0
-                || !matches!(b[idx - 1],
-                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b':' | b'_' | b'-');
-            if boundary_ok {
-                return true;
-            }
-            from = idx + 1;
-        }
-    }
-    false
-}
-
-/// Scan `source_text` for top-level `<template lang="pug">…</template>`
-/// container ranges. Mirrors upstream's `extractTemplateTag` +
-/// `isRangeInTag(range, document.templateInfo)` filter at
-/// `language-server/src/plugins/typescript/features/DiagnosticsProvider.ts:391-401`,
-/// gated on `usesPug = document.getLanguageAttribute('template') ===
-/// 'pug'`.
-///
-/// Each returned `(start, end)` is the byte range of the entire
-/// `<template ...>...</template>` container — diagnostics whose source
-/// position falls inside drop in `map_diagnostic`, with `6133`
-/// (NEVER_READ) and `6192` / `6196` (ALL_IMPORTS_UNUSED) as exceptions
-/// that always surface (matching upstream's `isNoPugFalsePositive`).
-///
-/// The scan is intentionally narrow: it only matches a top-level
-/// `<template>` element and only when the `lang` attr is literally
-/// `pug`. Other template-tag idioms (`lang="markup"`, no `lang`,
-/// custom `lang` values) never produce a suppression range — so a
-/// stray `<template>` in the middle of a component's markup still
-/// type-checks normally.
-pub fn scan_pug_template_ranges(source_text: &str) -> Vec<(u32, u32)> {
-    let bytes = source_text.as_bytes();
-    let mut out: Vec<(u32, u32)> = Vec::new();
-    let mut cursor: usize = 0;
-    let open = b"<template";
-    let close = b"</template>";
-    while let Some(rel) = find_subslice(&bytes[cursor..], open) {
-        let tag_start = cursor + rel;
-        let after_open = tag_start + open.len();
-        // Reject `<templateX...` (identifier continuation) — only
-        // accept `<template ` / `<template>` / `<template/`.
-        let next = bytes.get(after_open).copied();
-        if !matches!(
-            next,
-            Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\r') | Some(b'>') | Some(b'/')
-        ) {
-            cursor = after_open;
-            continue;
-        }
-        let Some(rel_gt) = bytes[after_open..].iter().position(|&b| b == b'>') else {
-            break;
-        };
-        let open_end = after_open + rel_gt + 1;
-        let attrs = &source_text[after_open..open_end - 1];
-        let attrs_compact: String = attrs.split_whitespace().collect::<Vec<_>>().join("");
-        let is_pug = lang_attr_is_pug(&attrs_compact);
-        if !is_pug {
-            cursor = open_end;
-            continue;
-        }
-        let Some(rel_close) = find_subslice(&bytes[open_end..], close) else {
-            out.push((tag_start as u32, bytes.len() as u32));
-            break;
-        };
-        let close_end = open_end + rel_close + close.len();
-        out.push((tag_start as u32, close_end as u32));
-        cursor = close_end;
-    }
-    out
-}
-
-/// True when `byte_offset` falls inside any pug-template container
-/// range. Used to drop diagnostics inside `<template lang="pug">`
-/// bodies (mirrors upstream's `isNoPugFalsePositive`).
-pub fn is_in_pug_template(ranges: &[(u32, u32)], byte_offset: u32) -> bool {
-    ranges
-        .iter()
-        .any(|&(start, end)| byte_offset >= start && byte_offset < end)
 }
 
 /// Rewrite a TS2322 that fired on an `inst.$$bindings = 'NAME'`
@@ -437,15 +333,23 @@ pub(crate) fn adjust_message_if_necessary(code: u32, message: &mut String, svelt
 /// manifest) reports `false`, mirroring upstream's
 /// `isSvelte5Plus = Number(undefined) >= 5` fallthrough.
 pub fn workspace_svelte_is_5_plus(workspace: &Path) -> bool {
+    workspace_svelte_major(workspace).is_some_and(|major| major >= 5)
+}
+
+/// Major version of the `svelte` package the workspace resolves (the
+/// nearest `node_modules/svelte` walking up from `workspace`), or
+/// `None` when there is no install or its manifest has no readable
+/// version.
+pub fn workspace_svelte_major(workspace: &Path) -> Option<u32> {
     let mut dir = Some(workspace);
     while let Some(d) = dir {
         let manifest = d.join("node_modules").join("svelte").join("package.json");
         if let Ok(text) = std::fs::read_to_string(&manifest) {
-            return svelte_manifest_major(&text).is_some_and(|major| major >= 5);
+            return svelte_manifest_major(&text);
         }
         dir = d.parent();
     }
-    false
+    None
 }
 
 /// Extract the major version from a package.json's `"version"` field.
@@ -459,18 +363,6 @@ fn svelte_manifest_major(manifest: &str) -> Option<u32> {
     let rest = rest.strip_prefix('"')?;
     let end = rest.find(['.', '"'])?;
     rest[..end].parse().ok()
-}
-
-/// `memmem`-style byte-slice search. Rust stdlib doesn't expose this
-/// for byte slices so we roll a small one. Linear in haystack size,
-/// which is fine for overlay files (~hundreds of KB at most).
-fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || haystack.len() < needle.len() {
-        return None;
-    }
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
 }
 
 #[cfg(test)]
@@ -570,7 +462,7 @@ mod tests {
         ),
         (
             2454,
-            "not-applicable-cli: emit definite-assigns exported props (`let x!: T`), so TS2454 is unreachable for props and upstream's isNoUsedBeforeAssigned drop has nothing to drop",
+            "ported: map_diagnostic drops TS2454 whose flagged source text is a name the instance script exports",
         ),
         (
             2607,
@@ -594,7 +486,7 @@ mod tests {
         ),
         (
             7028,
-            "ported: is_overlay_dollar_reactive_label drops the synthetic `$:` label",
+            "ported: is_reactive_statement_label drops the `$` label of reactive statements in the render function",
         ),
         (
             17001,
@@ -602,11 +494,11 @@ mod tests {
         ),
         (
             2300,
-            "ported: is_overlay_attribute_key drops duplicate element-attribute keys",
+            "ported: template_nodes::is_element_attribute_name drops duplicates whose mapped start is an element attribute name",
         ),
         (
             1117,
-            "ported: is_overlay_attribute_key drops duplicate element-attribute keys",
+            "ported: template_nodes::is_element_attribute_name drops duplicates whose mapped start is an element attribute name",
         ),
         (
             2345,

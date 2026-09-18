@@ -7,28 +7,22 @@ function $$render_e40e2c10() {
     const [ store3, store4, noStore ] = fromSomewhere()/*svn:ignore_start*/;let $store3 = __svn_store_get(store3);;let $store4 = __svn_store_get(store4);/*svn:ignore_end*/;
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             ($store);
+        { svelteHTML.createElement("p", {});             $store;
         }
-        { svelteHTML.createElement("p", {});             ($store1);
+        { svelteHTML.createElement("p", {});             $store1;
         }
-        { svelteHTML.createElement("p", {});             ($store2);
+        { svelteHTML.createElement("p", {});             $store2;
         }
-        { svelteHTML.createElement("p", {});             ($store3);
+        { svelteHTML.createElement("p", {});             $store3;
         }
-        { svelteHTML.createElement("p", {});             ($store4);
+        { svelteHTML.createElement("p", {});             $store4;
         }
     });
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
- */
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
- */
-/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
+/** @type {__SvnIsomorphicComponent<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */
 export const __svn_component_default = /** @type {any} */ (null);
-/** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
+/** @typedef {InstanceType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;
 

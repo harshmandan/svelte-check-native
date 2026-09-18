@@ -27,8 +27,10 @@ use svn_core::Range;
 use crate::codes::Code;
 use crate::context::LintContext;
 use crate::messages;
+use crate::scope::{BindingKind, DeclarationKind, ScopeId};
 
 /// One buffered rule outcome from the shared script walk.
+#[derive(Clone)]
 pub(crate) enum ScriptRuleEvent {
     /// A warning fully decided at walk time.
     Warning {
@@ -42,14 +44,102 @@ pub(crate) enum ScriptRuleEvent {
     /// `.svelte` source, which needs the FINISHED scope tree — so the
     /// resolution happens in [`flush`].
     LegacyCreationCandidate { callee: SmolStr, range: Range },
+    /// A compile error decided at walk time. The compiler throws it,
+    /// so it replaces every warning and later errors.
+    Error {
+        code: Code,
+        message: String,
+        range: Range,
+    },
+    /// An `await` that suspends rendering (`AwaitExpression.js`). It
+    /// is an error unless the `experimental.async` option is on and
+    /// the file is in runes mode — both known only at flush time.
+    SuspendingAwait { range: Range },
+    /// A compile error whose condition also depends on what a name
+    /// resolves to. The compiler asks its scopes once every binding
+    /// (including the synthesized store subscriptions) exists, so the
+    /// question waits for the finished tree at flush time.
+    GatedError {
+        gate: ErrorGate,
+        code: Code,
+        message: String,
+        range: Range,
+    },
+}
+
+/// The binding-dependent half of a [`ScriptRuleEvent::GatedError`].
+#[derive(Clone)]
+pub(crate) enum ErrorGate {
+    /// A rune call or reference: the compiler only treats `name` as the
+    /// rune when no binding of that name is visible from `scope`.
+    Unshadowed { name: SmolStr, scope: ScopeId },
+    /// `$host()` outside a custom-element instance script: unshadowed,
+    /// and an error in the module script or when the component is not
+    /// compiled as a custom element.
+    Host { scope: ScopeId, module: bool },
+    /// Legacy-mode rune use: an error when `name` resolves to a binding
+    /// other than a store subscription. An unresolved rune name never
+    /// fires: outside runes mode the compiler turns it into a store
+    /// subscription.
+    NotStoreSub { name: SmolStr, scope: ScopeId },
+    /// `object.$$name`: an error when `object` is a `$props()` rest
+    /// binding.
+    RestProp { object: SmolStr, scope: ScopeId },
+    /// An exported name that is derived state.
+    DerivedExport { name: SmolStr, scope: ScopeId },
+    /// An exported name that is state the component reassigns.
+    ReassignedStateExport { name: SmolStr, scope: ScopeId },
+}
+
+impl ErrorGate {
+    fn fires(&self, ctx: &LintContext<'_>) -> bool {
+        let Some(tree) = &ctx.scope_tree else {
+            return false;
+        };
+        match self {
+            Self::Unshadowed { name, scope } => tree.resolve(*scope, name).is_none(),
+            Self::Host { scope, module } => {
+                tree.resolve(*scope, "$host").is_none()
+                    && (*module || ctx.custom_element_info.is_none())
+            }
+            Self::NotStoreSub { name, scope } => tree
+                .resolve(*scope, name)
+                .is_some_and(|b| tree.binding(b).kind != BindingKind::StoreSub),
+            Self::DerivedExport { name, scope } => tree
+                .resolve(*scope, name)
+                .is_some_and(|b| tree.binding(b).kind == BindingKind::Derived),
+            Self::ReassignedStateExport { name, scope } => {
+                tree.resolve(*scope, name).is_some_and(|b| {
+                    let b = tree.binding(b);
+                    matches!(b.kind, BindingKind::State | BindingKind::RawState) && b.reassigned
+                })
+            }
+            Self::RestProp { object, scope } => tree.resolve(*scope, object).is_some_and(|b| {
+                let b = tree.binding(b);
+                b.kind == BindingKind::RestProp && b.declaration_kind != DeclarationKind::Synthetic
+            }),
+        }
+    }
+}
+
+impl ScriptRuleEvent {
+    /// The source range the event reports.
+    pub(crate) fn range(&self) -> Range {
+        match self {
+            Self::Warning { range, .. }
+            | Self::LegacyCreationCandidate { range, .. }
+            | Self::Error { range, .. }
+            | Self::SuspendingAwait { range }
+            | Self::GatedError { range, .. } => *range,
+        }
+    }
 }
 
 /// Per-script-walk configuration for the rule hooks. Carried as
 /// `Option<ScriptRuleHooks>` by the scope builder's `ScriptWalker`:
-/// `Some` for the module / instance script walks, `None` for the
-/// template mini-expression walks — these rules are scoped to the
-/// `<script>` bodies and do not fire inside template `{…}`
-/// expressions.
+/// `Some` for the module / instance script walks and for the template
+/// expression walks (whose events are kept apart and replayed in
+/// template order).
 ///
 /// The walker's `function_depth` convention matches upstream's
 /// analyze-phase convention byte-for-byte — the module root scope has
@@ -68,6 +158,10 @@ pub(crate) struct ScriptRuleHooks {
     pub runes: bool,
     /// Instance script vs module script.
     pub is_instance: bool,
+    /// A preprocessor turns the script into JavaScript before the
+    /// compiler runs, and svelte-check maps the compiler's positions
+    /// back through the transpiler's source map.
+    pub transpiled: bool,
 }
 
 /// Does any active ignore frame mention `code`? Upstream's per-node
@@ -88,7 +182,7 @@ fn has_bidi_char(s: &str) -> bool {
 impl ScriptRuleHooks {
     /// Class-declaration statement (named or exported).
     ///
-    /// `perf_avoid_nested_class`: runes mode only. Upstream
+    /// `perf_avoid_nested_class`, in either mode. Upstream
     /// (`visitors/ClassDeclaration.js:21`):
     ///   allowed_depth = ast_type === 'module' ? 0 : 1;
     ///   if (scope.function_depth > allowed_depth) w.perf_avoid_nested_class(node);
@@ -103,9 +197,6 @@ impl ScriptRuleHooks {
         function_depth: u32,
         range: Range,
     ) {
-        if !self.runes {
-            return;
-        }
         let allowed = if self.is_instance { 1 } else { 0 };
         if function_depth > allowed && !is_ignored(frames, Code::perf_avoid_nested_class) {
             events.push(ScriptRuleEvent::Warning {
@@ -158,6 +249,13 @@ impl ScriptRuleHooks {
             return;
         }
         let is_reactive_statement = self.is_instance && at_program_top;
+        if self.runes && is_reactive_statement {
+            events.push(ScriptRuleEvent::Error {
+                code: Code::legacy_reactive_statement_invalid,
+                message: messages::legacy_reactive_statement_invalid(),
+                range,
+            });
+        }
         if !self.runes
             && !is_reactive_statement
             && !is_ignored(frames, Code::reactive_declaration_invalid_placement)
@@ -170,15 +268,23 @@ impl ScriptRuleHooks {
         }
     }
 
-    /// `bidirectional_control_characters` on a string literal.
+    /// `bidirectional_control_characters` on a string literal. `warned`
+    /// is the set of literal starts the compiler's stateful search
+    /// reports (`bidi_state`); `None` when the file holds no bidi
+    /// character.
     pub fn string_literal(
         &self,
         events: &mut Vec<ScriptRuleEvent>,
         frames: &[Vec<SmolStr>],
+        warned: Option<&std::collections::HashSet<u32>>,
         value: &str,
         range: Range,
     ) {
-        if has_bidi_char(value) && !is_ignored(frames, Code::bidirectional_control_characters) {
+        let warns = match warned {
+            Some(set) => set.contains(&range.start),
+            None => has_bidi_char(value),
+        };
+        if warns && !is_ignored(frames, Code::bidirectional_control_characters) {
             events.push(ScriptRuleEvent::Warning {
                 code: Code::bidirectional_control_characters,
                 message: messages::bidirectional_control_characters(),
@@ -188,24 +294,32 @@ impl ScriptRuleHooks {
     }
 
     /// `bidirectional_control_characters` on a template literal's
-    /// quasis. All quasis are checked before the caller walks the
-    /// interpolation expressions, matching upstream's visitor order.
+    /// quasis. The compiler visits the substitutions first, so the
+    /// caller walks them before calling this. `warned` as in
+    /// [`Self::string_literal`].
     pub fn template_literal(
         &self,
         events: &mut Vec<ScriptRuleEvent>,
         frames: &[Vec<SmolStr>],
+        warned: Option<&std::collections::HashSet<u32>>,
         tl: &TemplateLiteral<'_>,
         base_offset: u32,
     ) {
         for q in &tl.quasis {
-            if let Some(cooked) = q.value.cooked.as_deref()
-                && has_bidi_char(cooked)
-                && !is_ignored(frames, Code::bidirectional_control_characters)
-            {
+            let warns = match warned {
+                Some(set) => set.contains(&(q.span.start + base_offset)),
+                None => q.value.cooked.as_deref().is_some_and(has_bidi_char),
+            };
+            if warns && !is_ignored(frames, Code::bidirectional_control_characters) {
+                // TypeScript's output maps a template chunk from the
+                // delimiter before it (the backtick or the `}` closing
+                // the previous substitution), so a transpiled script's
+                // position lands there.
+                let start = q.span.start + base_offset - u32::from(self.transpiled);
                 events.push(ScriptRuleEvent::Warning {
                     code: Code::bidirectional_control_characters,
                     message: messages::bidirectional_control_characters(),
-                    range: Range::new(q.span.start + base_offset, q.span.end + base_offset),
+                    range: Range::new(start, q.span.end + base_offset),
                 });
             }
         }
@@ -273,31 +387,82 @@ fn legacy_creation_candidate<'a>(expr: &'a Expression<'_>) -> Option<(&'a str, o
 /// source.
 pub(crate) fn flush(events: Vec<ScriptRuleEvent>, ctx: &mut LintContext<'_>) {
     for event in events {
-        match event {
-            ScriptRuleEvent::Warning {
-                code,
-                message,
-                range,
-            } => ctx.emit(code, message, range),
-            ScriptRuleEvent::LegacyCreationCandidate { callee, range } => {
-                let Some(tree) = &ctx.scope_tree else {
-                    continue;
-                };
-                let Some(bid) = tree.resolve_from_template(&callee) else {
-                    continue;
-                };
-                let is_svelte_default_import = matches!(
-                    &tree.binding(bid).initial,
-                    crate::scope::InitialKind::Import { source, is_default: true }
-                        if source.ends_with(".svelte")
+        emit_event(event, ctx);
+    }
+}
+
+/// Emit the pending template-expression events that start before
+/// `until`. The template walk calls this as it passes each node's
+/// expressions, so the warnings interleave with the element and block
+/// warnings the way the compiler's single template walk produces them,
+/// under the ignore frames active at that point.
+pub(crate) fn flush_template_events_before(until: u32, ctx: &mut LintContext<'_>) {
+    while ctx
+        .pending_template_events
+        .front()
+        .is_some_and(|e| e.range().start < until)
+    {
+        if let Some(event) = ctx.pending_template_events.pop_front() {
+            emit_event(event, ctx);
+        }
+    }
+}
+
+fn emit_event(event: ScriptRuleEvent, ctx: &mut LintContext<'_>) {
+    match event {
+        ScriptRuleEvent::Error {
+            code,
+            message,
+            range,
+        } => ctx.emit_error(code, message, range),
+        ScriptRuleEvent::GatedError {
+            gate,
+            code,
+            message,
+            range,
+        } => {
+            if gate.fires(ctx) {
+                ctx.emit_error(code, message, range);
+            }
+        }
+        ScriptRuleEvent::SuspendingAwait { range } => {
+            if !ctx.experimental_async {
+                ctx.emit_error(
+                    Code::experimental_async,
+                    messages::experimental_async(),
+                    range,
                 );
-                if is_svelte_default_import {
-                    ctx.emit(
-                        Code::legacy_component_creation,
-                        messages::legacy_component_creation(),
-                        range,
-                    );
-                }
+            } else if !ctx.runes {
+                ctx.emit_error(
+                    Code::legacy_await_invalid,
+                    messages::legacy_await_invalid(),
+                    range,
+                );
+            }
+        }
+        ScriptRuleEvent::Warning {
+            code,
+            message,
+            range,
+        } => ctx.emit(code, message, range),
+        ScriptRuleEvent::LegacyCreationCandidate { callee, range } => {
+            let Some(tree) = &ctx.scope_tree else {
+                return;
+            };
+            let Some(bid) = tree.resolve_from_template(&callee) else {
+                return;
+            };
+            let is_svelte_default_import = matches!(
+                &tree.binding(bid).initial,
+                crate::scope::InitialKind::Import { source, is_default: true }
+                    if source.ends_with(".svelte")
+            );
+            if is_svelte_default_import {
+                ctx.emit(
+                    Code::legacy_component_creation,
+                    messages::legacy_component_creation(),
+                    range,
+                );
             }
         }
     }

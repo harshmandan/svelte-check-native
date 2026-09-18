@@ -8,7 +8,9 @@
 
 use oxc_ast::ast::{BindingPattern, CallExpression, Expression};
 
-use crate::scope_types::{InitialKind, RuneCall};
+use smol_str::SmolStr;
+
+use crate::scope_types::{InitialKind, RuneCall, StateArg};
 use crate::scope_util::unwrap_ts_wrappers;
 
 /// Matches upstream `utils.js::is_rune`. Keep in sync with the
@@ -44,24 +46,32 @@ pub(crate) fn is_primitive_rune_init(init: &InitialKind) -> bool {
     matches!(
         init,
         InitialKind::RuneCall {
-            primitive_arg: true,
+            primitive_arg: StateArg::Primitive,
             ..
         }
     )
 }
 
-/// For a `$state`/`$state.raw` call init, return whether the first
-/// argument is a primitive-like (matching upstream's `should_proxy`
-/// analog). `true` if no argument.
-pub(crate) fn state_rune_primitive_arg(e: &Expression<'_>) -> bool {
-    if let Expression::CallExpression(c) = e {
-        c.arguments
-            .first()
-            .and_then(|a| a.as_expression())
-            .map(|arg| is_primitive_expr(unwrap_ts_wrappers(arg)))
-            .unwrap_or(true)
+/// For a `$state`/`$state.raw` call init, classify the argument the
+/// way `Identifier.js` does before asking `should_proxy`: only a call
+/// with exactly one non-spread argument can be primitive.
+pub(crate) fn state_rune_primitive_arg(e: &Expression<'_>) -> StateArg {
+    let Expression::CallExpression(c) = e else {
+        return StateArg::Proxied;
+    };
+    let [arg] = c.arguments.as_slice() else {
+        return StateArg::Proxied;
+    };
+    let Some(arg) = arg.as_expression() else {
+        return StateArg::Proxied;
+    };
+    let arg = unwrap_ts_wrappers(arg);
+    if is_primitive_expr(arg) {
+        StateArg::Primitive
+    } else if let Expression::Identifier(id) = arg {
+        StateArg::Ident(SmolStr::from(id.name.as_str()))
     } else {
-        true
+        StateArg::Proxied
     }
 }
 
@@ -129,10 +139,45 @@ pub(crate) fn is_primitive_expr(e: &Expression<'_>) -> bool {
             | Expression::StringLiteral(_)
             | Expression::BooleanLiteral(_)
             | Expression::BigIntLiteral(_)
+            | Expression::RegExpLiteral(_)
             | Expression::TemplateLiteral(_)
             | Expression::ArrowFunctionExpression(_)
             | Expression::FunctionExpression(_)
             | Expression::UnaryExpression(_)
             | Expression::BinaryExpression(_)
     ) || matches!(e, Expression::Identifier(id) if id.name.as_str() == "undefined")
+}
+
+/// The rune a call's callee names — the compiler's
+/// `get_global_keypath`: a chain of non-computed member accesses on an
+/// identifier, where a call on the identifier reads as `()`
+/// (`$inspect(x).with` → `$inspect().with`). Returns the keypath when
+/// it is a rune, with the root identifier's name. Whether the root
+/// resolves to a binding (which makes it no rune) is the caller's
+/// question.
+pub(crate) fn rune_keypath(callee: &Expression<'_>) -> Option<(String, String)> {
+    let mut suffix = String::new();
+    let mut n = unwrap_ts_wrappers(callee);
+    while let Expression::StaticMemberExpression(m) = n {
+        suffix.insert_str(0, m.property.name.as_str());
+        suffix.insert(0, '.');
+        n = unwrap_ts_wrappers(&m.object);
+    }
+    if matches!(
+        n,
+        Expression::ComputedMemberExpression(_) | Expression::PrivateFieldExpression(_)
+    ) {
+        return None;
+    }
+    if let Expression::CallExpression(c) = n
+        && let Expression::Identifier(_) = unwrap_ts_wrappers(&c.callee)
+    {
+        suffix.insert_str(0, "()");
+        n = unwrap_ts_wrappers(&c.callee);
+    }
+    let Expression::Identifier(id) = n else {
+        return None;
+    };
+    let keypath = format!("{}{suffix}", id.name);
+    is_rune_name(&keypath).then(|| (keypath, id.name.to_string()))
 }

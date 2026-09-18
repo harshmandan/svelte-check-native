@@ -2,11 +2,12 @@
 //! (Element.ts handles both static and dynamic).
 
 use smol_str::SmolStr;
+use svn_core::Range;
 use svn_parser::{SvelteElement, SvelteElementKind};
 
 use crate::nodes::attribute::{WalkCtx, walk_attributes};
 use crate::nodes::event_handler::collect_bubbled_dom_events;
-use crate::nodes::inline_component::collect_instantiation_inner;
+use crate::nodes::inline_component::{InstantiationRoot, collect_instantiation_inner};
 use crate::walker::{AnalyzeVisitor, BubbledDomEventScope};
 
 pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
@@ -28,13 +29,27 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
     //                       expression range and feeds it to
     //                       `__svn_ensure_component(EXPR)`)
     // Pre-fix these passed un-checked through a bare scope.
+    if matches!(
+        s.kind,
+        SvelteElementKind::SelfRef | SvelteElementKind::Component
+    ) {
+        crate::nodes::let_directive::enter_component_like(
+            v,
+            s.range.start,
+            &s.attributes,
+            &s.children,
+            None,
+        );
+    } else {
+        crate::nodes::let_directive::enter_element_like(v, s.range.start, &s.attributes);
+    }
     match s.kind {
         SvelteElementKind::SelfRef => {
             collect_instantiation_inner(
-                SmolStr::from("__svn_self_default"),
+                self_root(s.range.start),
                 &s.attributes,
                 &s.children,
-                s.range.start,
+                s.range,
                 v.source,
                 &mut v.summary,
             );
@@ -53,13 +68,25 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
                 if e.name.as_str() != "this" {
                     return None;
                 }
-                v.source
-                    .get(e.expression_range.start as usize..e.expression_range.end as usize)
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(SmolStr::from)
+                let raw = v
+                    .source
+                    .get(e.expression_range.start as usize..e.expression_range.end as usize)?;
+                let text = raw.trim();
+                if text.is_empty() {
+                    return None;
+                }
+                let start = e.expression_range.start + (raw.len() - raw.trim_start().len()) as u32;
+                let end = start + text.len() as u32;
+                Some(InstantiationRoot {
+                    text: SmolStr::from(text),
+                    range: Range::new(start, end),
+                    // The constructor reference follows the moved
+                    // expression, where upstream's map resolves it to
+                    // the character right after it.
+                    ctor_anchor: Range::new(end, end + 1),
+                })
             });
-            let root = this_expr.unwrap_or_else(|| SmolStr::from("__svn_self_default"));
+            let root = this_expr.unwrap_or_else(|| self_root(s.range.start));
             // Filter out the `this={…}` directive itself from
             // the prop walk so it isn't surfaced as a regular
             // prop on the synthetic component.
@@ -79,7 +106,7 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
                 root,
                 &attrs,
                 &s.children,
-                s.range.start,
+                s.range,
                 v.source,
                 &mut v.summary,
             );
@@ -130,5 +157,17 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
             collect_bubbled_dom_events(&s.attributes, BubbledDomEventScope::Element, &mut v.summary)
         }
         _ => {}
+    }
+}
+
+/// Root of a `<svelte:self>` (or a `<svelte:component>` without `this`):
+/// the file's own any-typed component, anchored on the tag name.
+fn self_root(node_start: u32) -> InstantiationRoot {
+    let text = SmolStr::from("__svn_self_default");
+    let start = node_start + 1;
+    InstantiationRoot {
+        range: Range::new(start, start + text.len() as u32),
+        ctor_anchor: Range::new(start, start + 1),
+        text,
     }
 }

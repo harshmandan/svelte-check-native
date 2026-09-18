@@ -1,0 +1,60 @@
+{
+    "clean": true,
+    "warnings": [
+        {
+            "file": "src/KeysAndAttributes.svelte",
+            "line": 1,
+            "column": 14,
+            "code": "bidirectional_control_characters"
+        },
+        {
+            "file": "src/KeysAndAttributes.svelte",
+            "line": 4,
+            "column": 12,
+            "code": "bidirectional_control_characters"
+        },
+        {
+            "file": "src/KeysAndAttributes.svelte",
+            "line": 4,
+            "column": 17,
+            "code": "bidirectional_control_characters"
+        },
+        {
+            "file": "src/KeysAndAttributes.svelte",
+            "line": 4,
+            "column": 27,
+            "code": "bidirectional_control_characters"
+        },
+        {
+            "file": "src/NumbersKeepPosition.svelte",
+            "line": 1,
+            "column": 12,
+            "code": "bidirectional_control_characters"
+        },
+        {
+            "file": "src/SearchResumes.svelte",
+            "line": 1,
+            "column": 12,
+            "code": "bidirectional_control_characters"
+        },
+        {
+            "file": "src/SearchResumes.svelte",
+            "line": 3,
+            "column": 12,
+            "code": "bidirectional_control_characters"
+        },
+        {
+            "file": "src/SubstitutionsFirst.svelte",
+            "line": 1,
+            "column": 17,
+            "code": "bidirectional_control_characters"
+        },
+        {
+            "file": "src/TaggedTemplate.svelte",
+            "line": 1,
+            "column": 28,
+            "code": "bidirectional_control_characters"
+        }
+    ],
+    "_note": "The compiler tests string literals (keys and module sources included) and template chunks with one global regex, so each search starts where the previous tested value's match ended, and a miss resets it; numbers are not tested, text nodes (attribute text included, which also warns) reset it, and a template literal's substitutions are tested before its chunks. svelte-check also carries that position from one component to the next, which is not reproduced; each file here was verified on its own against svelte-check 4.4.6."
+}

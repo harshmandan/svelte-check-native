@@ -8,28 +8,22 @@ function $$render_e40e2c10() {
             const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, var: new_var } = __svn_inst_0.$$slot_def.default; $$_$$;
-                void new_var;
-                { svelteHTML.createElement("h1", {});                     (new_var);
+                { svelteHTML.createElement("h1", {});                     new_var;
                 }
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, slotvar: newvar } = __svn_inst_0.$$slot_def["someslot"]; $$_$$;
-                    void newvar;
                     { svelteHTML.createElement("div", {});                         (newvar);
-                        { svelteHTML.createElement("h2", {});                             (newvar);
+                        { svelteHTML.createElement("h2", {});                             newvar;
                         }
                     }
                 }
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, newvar2 } = __svn_inst_0.$$slot_def["slotwithoutchildren"]; $$_$$;
-                    void newvar2;
                     { svelteHTML.createElement("div", {});                         (newvar2);
                     }
                 }
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, hi1, hi2, hi3: hi3alias } = __svn_inst_0.$$slot_def["slotwithmultiplelets"]; $$_$$;
-                    void hi1;
-                    void hi2;
-                    void hi3alias;
                     { svelteHTML.createElement("div", {});                     }
                 }
                 {
@@ -39,17 +33,11 @@ function $$render_e40e2c10() {
             }
         }
     });
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
- */
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
- */
-/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
+/** @type {__SvnIsomorphicComponent<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */
 export const __svn_component_default = /** @type {any} */ (null);
-/** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
+/** @typedef {InstanceType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;
 

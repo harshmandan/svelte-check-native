@@ -25,7 +25,7 @@
 
 use oxc_ast::ast::{
     ArrayPattern, AssignmentExpression, AssignmentTarget, BindingPattern, CallExpression,
-    ChainElement, Class, ClassBody, ClassElement, Expression, ForStatementInit,
+    ChainElement, Class, ClassBody, ClassElement, Expression, ForStatementInit, FunctionBody,
     IdentifierReference, LabeledStatement, ObjectExpression, ObjectPattern, ObjectPropertyKind,
     Program, PropertyKey, SimpleAssignmentTarget, Statement, UpdateExpression, VariableDeclaration,
     VariableDeclarator,
@@ -37,11 +37,12 @@ use svn_core::Range;
 use svn_parser::document::{Document, ScriptSection};
 use svn_parser::parse_script_body;
 
-use crate::rules::script_ast_rules::{ScriptRuleEvent, ScriptRuleHooks};
+use crate::codes::Code;
+use crate::rules::script_ast_rules::{ErrorGate, ScriptRuleEvent, ScriptRuleHooks};
 pub use crate::scope_rune_detection::is_rune_name;
 use crate::scope_rune_detection::{
     detect_bindable_default, detect_rune_call_from_call, is_primitive_expr, is_primitive_rune_init,
-    state_rune_primitive_arg,
+    rune_keypath, state_rune_primitive_arg,
 };
 use crate::scope_util::{
     base_identifier, expression_from_default, expression_from_for_init,
@@ -78,6 +79,10 @@ pub struct ScopeTree {
     /// Arrow/FunctionExpression/FunctionDeclaration; module-script
     /// awaits are NOT consulted).
     pub has_await: bool,
+    /// Writes the compiler rejects (`validate_assignment`), in walk
+    /// order: module script, instance script, then template. Template
+    /// entries are drained by the template walk as it passes them.
+    pub write_violations: Vec<WriteViolation>,
     /// `$props()` declarators that would fire
     /// `custom_element_props_identifier` when the file compiles as a
     /// custom element without an explicit `customElement.props`
@@ -100,12 +105,65 @@ pub struct ScopeTree {
     /// when it differs from `local`).
     nonrunes_export_idents: Vec<SmolStr>,
     nonrunes_export_specs: Vec<(SmolStr, Option<SmolStr>)>,
+    /// Local name of every `export { … }` specifier in the instance
+    /// script, in either mode.
+    export_spec_locals: Vec<SmolStr>,
     /// Script-AST rule events buffered by the [`ScriptRuleHooks`]
     /// callbacks during the module / instance script walks (see
     /// `crate::rules::script_ast_rules`). The walk itself emits no
     /// warnings — `walk_parsed` takes this buffer once the tree is
     /// final and flushes it at the stage where those rules emit.
     pub(crate) script_rule_events: Vec<crate::rules::script_ast_rules::ScriptRuleEvent>,
+    /// The same rule events raised inside template expressions. The
+    /// compiler's template walk runs the Literal / TemplateElement /
+    /// NewExpression / … visitors on every `{…}` expression, so these
+    /// surface in template order, interleaved with the element and
+    /// block warnings. Sorted by source position.
+    pub(crate) template_rule_events: Vec<crate::rules::script_ast_rules::ScriptRuleEvent>,
+    /// The first error the compiler's scope builder raises while
+    /// declaring bindings (`validate_identifier_name`): a `$` or
+    /// `$`-prefixed name declared at the module / instance level.
+    /// Scope creation precedes every analysis walk, so this error wins
+    /// over anything the walks report.
+    pub(crate) declaration_error: Option<(Code, String, Range)>,
+    /// Every `$name` store-subscription reference (`$` and `$$name`
+    /// excluded), as the compiler's store-subscription loop sees it
+    /// before it declares the subscriptions.
+    pub(crate) store_refs: Vec<StoreRef>,
+    /// The source range of the `<script module>` body.
+    pub(crate) module_script_range: Option<Range>,
+    /// The instance script's top-level `$:` statements, in order.
+    pub(crate) reactive_statements: Vec<ReactiveStatement>,
+    /// Starts of the identifiers inside `$:` statements that are the
+    /// target of a plain `=` assignment, directly or as the object of
+    /// the assigned member (`a = …`, `a.b = …`) — references that do
+    /// not make the statement depend on them.
+    pub(crate) reactive_assignment_targets: std::collections::HashSet<u32>,
+}
+
+/// A top-level `$:` statement, as the compiler's legacy-mode ordering
+/// of reactive statements sees it.
+#[derive(Clone, Debug)]
+pub(crate) struct ReactiveStatement {
+    pub range: Range,
+    /// The scope the statement opens.
+    pub scope: ScopeId,
+    /// The names it assigns (plain and destructured assignment
+    /// targets, and the object of an updated member), each with the
+    /// scope of the assignment, in order.
+    pub assignments: Vec<(SmolStr, ScopeId)>,
+}
+
+/// One `$name` reference, with what `name` resolves to from it.
+#[derive(Clone, Debug)]
+pub(crate) struct StoreRef {
+    pub name: SmolStr,
+    pub range: Range,
+    /// `name` (without the `$`) resolves from the reference to a
+    /// declaration below the module and instance top levels — a
+    /// subscription to it cannot be set up.
+    pub nested_store: bool,
+    pub parent_is_call: bool,
 }
 
 impl ScopeTree {
@@ -143,7 +201,8 @@ impl ScopeTree {
     /// own scope (svelte compiler shared/element.js). Script scopes have
     /// `range == None` and never match; template byte offsets are
     /// disjoint from script offsets anyway. The smallest-containing
-    /// scope wins (innermost).
+    /// scope wins (innermost); between scopes with the same range the
+    /// later-created one is nested inside the earlier, so it wins.
     pub fn innermost_template_scope_at(&self, offset: u32) -> ScopeId {
         let mut best = self.instance_root;
         let mut best_len = u32::MAX;
@@ -151,7 +210,7 @@ impl ScopeTree {
             if let Some(r) = s.range
                 && r.start <= offset
                 && offset < r.end
-                && (r.end - r.start) < best_len
+                && (r.end - r.start) <= best_len
             {
                 best_len = r.end - r.start;
                 best = ScopeId(i as u32);
@@ -168,24 +227,37 @@ impl ScopeTree {
 /// at build time — see `Binding::fires_state_referenced_locally`. The
 /// rule layer then reads that field directly instead of re-consulting
 /// `compat` per binding.
+#[allow(clippy::too_many_arguments)]
 pub fn build_with_template_and_runes(
     doc: &Document<'_>,
     fragment: Option<&svn_parser::ast::Fragment>,
     source: &str,
     runes: bool,
     compat: crate::compat::CompatFeatures,
+    preprocess_ts: bool,
     module_program: Option<&Program<'_>>,
     instance_program: Option<&Program<'_>>,
+    bidi_warned: Option<std::collections::HashSet<u32>>,
 ) -> ScopeTree {
     let mut tree = build_with_template(
         doc,
         fragment,
         source,
         runes,
+        preprocess_ts,
         module_program,
         instance_program,
+        bidi_warned,
     );
-    if !runes {
+    if runes {
+        // `ExportSpecifier.js`: in runes mode an exported local counts
+        // as reassigned.
+        for local in std::mem::take(&mut tree.export_spec_locals) {
+            if let Some(bid) = tree.resolve(tree.instance_root, &local) {
+                tree.bindings[bid.0 as usize].reassigned = true;
+            }
+        }
+    } else {
         promote_non_runes_exports(&mut tree);
     }
     populate_compat_gated_fields(&mut tree, compat);
@@ -198,17 +270,46 @@ pub fn build_with_template_and_runes(
 /// post-walk passes that touch `reassigned` or kind — currently just
 /// `promote_non_runes_exports` on the non-runes path.
 fn populate_compat_gated_fields(tree: &mut ScopeTree, compat: crate::compat::CompatFeatures) {
-    for binding in &mut tree.bindings {
+    let primitive_by_ident: Vec<bool> = tree
+        .bindings
+        .iter()
+        .map(|binding| match &binding.initial {
+            InitialKind::RuneCall {
+                primitive_arg: StateArg::Ident(name),
+                ..
+            } => ident_initial_is_primitive(tree, binding.scope, name),
+            _ => false,
+        })
+        .collect();
+    for (binding, by_ident) in tree.bindings.iter_mut().zip(primitive_by_ident) {
         binding.fires_state_referenced_locally = match binding.kind {
             BindingKind::RawState | BindingKind::Derived => true,
             BindingKind::Prop => compat.state_locally_fires_on_props,
             BindingKind::RestProp => {
                 compat.state_locally_fires_on_props && compat.state_locally_rest_prop
             }
-            BindingKind::State => binding.reassigned || is_primitive_rune_init(&binding.initial),
+            BindingKind::State => {
+                binding.reassigned || is_primitive_rune_init(&binding.initial) || by_ident
+            }
             _ => false,
         };
     }
+}
+
+/// `should_proxy(identifier)`, negated: an identifier whose binding is
+/// never reassigned and was initialised with a value the compiler does
+/// not proxy is primitive; anything else (unresolved, reassigned, no
+/// initialiser, a declaration or import) is proxied.
+fn ident_initial_is_primitive(tree: &ScopeTree, scope: ScopeId, name: &str) -> bool {
+    let Some(bid) = tree.resolve(scope, name) else {
+        return false;
+    };
+    let b = tree.binding(bid);
+    !b.reassigned
+        && match &b.initial {
+            InitialKind::Expression { primitive } => *primitive,
+            _ => false,
+        }
 }
 
 /// Promote Svelte-4 `export` declarations in the instance script to
@@ -315,15 +416,21 @@ pub(crate) fn collect_preceding_template_ignores(
 /// parses each section exactly once and shares the `Program` between
 /// this builder and the script-AST rules. A `Some` script section is
 /// always paired with a `Some` program.
+#[allow(clippy::too_many_arguments)]
 pub fn build_with_template(
     doc: &Document<'_>,
     fragment: Option<&svn_parser::ast::Fragment>,
     source: &str,
     runes: bool,
+    preprocess_ts: bool,
     module_program: Option<&Program<'_>>,
     instance_program: Option<&Program<'_>>,
+    bidi_warned: Option<std::collections::HashSet<u32>>,
 ) -> ScopeTree {
     let mut tree_builder = TreeBuilder::new();
+    tree_builder.runes = runes;
+    tree_builder.preprocess_ts = preprocess_ts;
+    tree_builder.bidi_warned = bidi_warned;
 
     // Module scope: if there's no module script at all we still create
     // a synthetic empty one so resolve() has a stable root. Matches
@@ -368,11 +475,10 @@ pub fn build_with_template(
         // so template refs don't look like "same function_depth" as
         // instance-root bindings (important for
         // `state_referenced_locally`).
+        // The walk opens the root fragment's own scope beneath this one
+        // (stamped with the whole-fragment range), exactly as the
+        // compiler's `Fragment` visitor does.
         let template_root = tree_builder.new_scope(Some(instance_root));
-        // Stamp the whole-fragment range so top-level template positions
-        // (e.g. a top-level `{@const}` declaration) resolve to
-        // `template_root` via `innermost_template_scope_at` (l275).
-        tree_builder.scopes[template_root.0 as usize].range = Some(frag.range);
         let lang = doc
             .instance_script
             .as_ref()
@@ -381,7 +487,9 @@ pub fn build_with_template(
         tree_builder.walk_template(frag, source, template_root, lang);
     }
 
-    tree_builder.finish(module_root, instance_root)
+    let mut tree = tree_builder.finish(module_root, instance_root);
+    tree.module_script_range = doc.module_script.as_ref().map(|s| s.content_range);
+    tree
 }
 
 struct TreeBuilder {
@@ -391,11 +499,16 @@ struct TreeBuilder {
     /// parent_kind, function_depth_at_use, nested_in_state, in_fn_closure).
     pending_refs: Vec<PendingRef>,
     pending_updates: Vec<PendingUpdate>,
+    pending_writes: Vec<PendingWrite>,
     /// Identifiers assigned by a top-level `$: x = …` in the instance
     /// script. Upstream collects them as `possible_implicit_declarations`
     /// and, once the script walk is done, declares each one without an
     /// outer binding as `legacy_reactive`.
     implicit_reactive_decls: Vec<(SmolStr, Range)>,
+    /// See [`ScopeTree::reactive_statements`].
+    reactive_statements: Vec<ReactiveStatement>,
+    /// See [`ScopeTree::reactive_assignment_targets`].
+    reactive_assignment_targets: Vec<u32>,
     /// Accumulated `$props()` identifier / rest-element ranges that
     /// would fire `custom_element_props_identifier` when the file
     /// compiles as a custom element. Paired with an ignore-stack
@@ -406,6 +519,9 @@ struct TreeBuilder {
     /// instance parse (see the matching `ScopeTree` fields).
     nonrunes_export_idents: Vec<SmolStr>,
     nonrunes_export_specs: Vec<(SmolStr, Option<SmolStr>)>,
+    /// Local name of every `export { … }` specifier in the instance
+    /// script, in either mode.
+    export_spec_locals: Vec<SmolStr>,
     /// Arena reused across the per-expression template mini-parses in
     /// `walk_expr_range`. Templates carry hundreds of tiny `{expr}`
     /// slices per file; constructing a fresh oxc Allocator for each
@@ -413,8 +529,29 @@ struct TreeBuilder {
     /// this slot per parse, `reset()` (which keeps its largest chunk),
     /// and put back. `None` only while a parse is in flight.
     expr_alloc: Option<oxc_allocator::Allocator>,
+    /// The next template expression walked is the initializer of a
+    /// declaration tag (`{let x = …}` / `{const x = …}`), a variable
+    /// declarator the way `{@const}` is not: a rune call may stand
+    /// there.
+    declaration_tag_init: bool,
+    /// Bindings our walk declares on entering a scope that the compiler
+    /// declares only after walking the scope's contents (the
+    /// `{:then}` / `{:catch}` values).
+    late_declared: Vec<BindingId>,
     /// See [`ScopeTree::has_await`].
     has_await: bool,
+    /// See [`ScopeTree::template_rule_events`].
+    template_rule_events: Vec<ScriptRuleEvent>,
+    /// See [`ScopeTree::declaration_error`].
+    declaration_error: Option<(Code, String, Range)>,
+    /// The literals the compiler's stateful bidi search reports (see
+    /// `bidi_state`); `None` when the file holds no bidi character.
+    bidi_warned: Option<std::collections::HashSet<u32>>,
+    /// The project's preprocessors transpile `<script lang="ts">`
+    /// (see `typescript_features::script_is_transpiled`).
+    preprocess_ts: bool,
+    /// The file's runes mode, for the template-expression rule hooks.
+    runes: bool,
     /// See [`ScopeTree::script_rule_events`] — filled by the
     /// [`ScriptRuleHooks`] callbacks during the script walks.
     script_rule_events: Vec<ScriptRuleEvent>,
@@ -459,6 +596,52 @@ struct TemplateCtx<'src> {
     in_control_flow: bool,
 }
 
+/// Which walk a write was found in. The compiler walks the module
+/// script, the instance script and then the template, and stops at the
+/// first error, so this orders the write errors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteOrigin {
+    Module,
+    Instance,
+    Template,
+}
+
+/// A write the compiler's `validate_assignment` rejects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteViolationKind {
+    /// `constant_assignment` / `constant_binding`: the target is an
+    /// import, or a `const` that is not an each-block item.
+    Constant { import: bool },
+    /// `each_item_invalid_assignment` — runes mode only.
+    EachItem,
+    /// `snippet_parameter_assignment`.
+    SnippetParameter,
+}
+
+#[derive(Clone, Debug)]
+pub struct WriteViolation {
+    pub kind: WriteViolationKind,
+    /// The whole assignment, update or `bind:` directive.
+    pub range: Range,
+    pub is_binding: bool,
+    pub origin: WriteOrigin,
+}
+
+/// An assignment, update or `bind:` whose identifier targets still
+/// need resolving before the compiler's write checks can run.
+struct PendingWrite {
+    scope: ScopeId,
+    /// Identifiers the compiler checks, in its order: a bare target, or
+    /// the plain identifiers of a destructuring target (defaults and
+    /// rest elements are not checked).
+    targets: Vec<SmolStr>,
+    /// The target is a single identifier, not a pattern.
+    bare: bool,
+    range: Range,
+    is_binding: bool,
+    origin: WriteOrigin,
+}
+
 struct PendingUpdate {
     scope: ScopeId,
     /// Name of the base identifier being written. For `foo = …` that's
@@ -478,14 +661,25 @@ impl TreeBuilder {
             bindings: Vec::new(),
             pending_refs: Vec::new(),
             pending_updates: Vec::new(),
+            pending_writes: Vec::new(),
             implicit_reactive_decls: Vec::new(),
+            reactive_statements: Vec::new(),
+            reactive_assignment_targets: Vec::new(),
             custom_element_props_candidates: Vec::new(),
             custom_element_props_ignored: Vec::new(),
             nonrunes_export_idents: Vec::new(),
             nonrunes_export_specs: Vec::new(),
+            export_spec_locals: Vec::new(),
             expr_alloc: None,
+            declaration_tag_init: false,
+            late_declared: Vec::new(),
             has_await: false,
             script_rule_events: Vec::new(),
+            template_rule_events: Vec::new(),
+            declaration_error: None,
+            runes: false,
+            preprocess_ts: false,
+            bidi_warned: None,
         }
     }
 
@@ -526,6 +720,42 @@ impl TreeBuilder {
                 };
                 scope = parent;
             }
+        }
+        // A name declared twice in one scope, neither time with `var`,
+        // is a compile error (the scope builder's own check; plain
+        // JavaScript duplicates fail to parse before this).
+        if self.declaration_error.is_none()
+            && declaration_kind != DeclarationKind::Var
+            && let Some(existing) = self.scopes[scope.0 as usize].declarations.get(&name)
+            && self.bindings[existing.0 as usize].declaration_kind != DeclarationKind::Var
+        {
+            // The compiler declares an `{:then}` / `{:catch}` value
+            // only after walking the branch, so a clash with a
+            // declaration inside the branch points at the value.
+            let at = if self.late_declared.contains(existing) {
+                self.bindings[existing.0 as usize].range
+            } else {
+                range
+            };
+            self.declaration_error = Some((
+                Code::declaration_duplicate,
+                crate::messages::declaration_duplicate(&name),
+                at,
+            ));
+        }
+        // `validate_identifier_name(binding, scope.function_depth)`:
+        // outside parameters and synthetic bindings, a name at the
+        // module or instance level (function depth <= 1, which block
+        // scopes do not raise) may not be `$` or start with `$`.
+        if self.declaration_error.is_none()
+            && self.scopes[scope.0 as usize].function_depth <= 1
+            && !matches!(
+                declaration_kind,
+                DeclarationKind::Synthetic | DeclarationKind::Param | DeclarationKind::RestParam
+            )
+            && let Some(error) = dollar_name_error(&name)
+        {
+            self.declaration_error = Some((error.0, error.1, range));
         }
         let id = BindingId(self.bindings.len() as u32);
         self.bindings.push(Binding {
@@ -582,14 +812,6 @@ impl TreeBuilder {
         svn_analyze::template_scope::walk_with_visitor(fragment, source, &mut visitor);
     }
 
-    fn bindings_in(&self, scope: ScopeId) -> Vec<BindingId> {
-        self.scopes[scope.0 as usize]
-            .declarations
-            .values()
-            .copied()
-            .collect()
-    }
-
     fn walk_template_attr(&mut self, attr: &svn_parser::ast::Attribute, ctx: &mut TemplateCtx<'_>) {
         use svn_parser::ast::{AttrValuePart, Attribute, DirectiveKind};
         match attr {
@@ -635,7 +857,9 @@ impl TreeBuilder {
                         | DirectiveKind::Out
                         | DirectiveKind::Animate
                 ) {
-                    self.record_template_ref(d.name.as_str(), d.range, ctx, RefFlags::default());
+                    // `use:tooltips.show` references `tooltips`.
+                    let root = d.name.split('.').next().unwrap_or_default();
+                    self.record_template_ref(root, d.range, ctx, RefFlags::default());
                 }
                 match &d.value {
                     Some(svn_parser::ast::DirectiveValue::Expression {
@@ -643,7 +867,7 @@ impl TreeBuilder {
                     }) => {
                         self.walk_expr_range(*expression_range, ctx, flags);
                         if d.kind == DirectiveKind::Bind {
-                            self.register_bind_update(*expression_range, ctx);
+                            self.register_bind_update(*expression_range, d.range, ctx);
                         }
                     }
                     Some(svn_parser::ast::DirectiveValue::BindPair {
@@ -663,6 +887,16 @@ impl TreeBuilder {
                                 self.walk_expr_range(*expression_range, ctx, flags);
                             }
                         }
+                        // The parser reads `bind:x="{y}"` as `bind:x={y}`.
+                        if d.kind == DirectiveKind::Bind
+                            && let [
+                                AttrValuePart::Expression {
+                                    expression_range, ..
+                                },
+                            ] = v.parts.as_slice()
+                        {
+                            self.register_bind_update(*expression_range, d.range, ctx);
+                        }
                     }
                     None => {
                         match d.kind {
@@ -676,6 +910,14 @@ impl TreeBuilder {
                                     name: SmolStr::from(d.name.as_str()),
                                     range: d.range,
                                     is_reassign: true,
+                                });
+                                self.pending_writes.push(PendingWrite {
+                                    scope: ctx.scope,
+                                    targets: vec![SmolStr::from(d.name.as_str())],
+                                    bare: true,
+                                    range: d.range,
+                                    is_binding: true,
+                                    origin: WriteOrigin::Template,
                                 });
                             }
                             // `class:foo` / `style:foo` without value
@@ -745,7 +987,15 @@ impl TreeBuilder {
                     (init_span.start as i32 + offset).max(0) as u32,
                     (init_span.end as i32 + offset).max(0) as u32,
                 );
+                // `{@const` keeps its `@`; a declaration tag has only
+                // the keyword before the pattern.
+                let tag_head = ctx.source[..range.start as usize]
+                    .rsplit('{')
+                    .next()
+                    .unwrap_or_default();
+                self.declaration_tag_init = !tag_head.trim_start().starts_with('@');
                 self.walk_expr_range(abs, ctx, RefFlags::default());
+                self.declaration_tag_init = false;
             }
         }
         drop(parsed);
@@ -767,6 +1017,8 @@ impl TreeBuilder {
         // not be recorded as identifier references.
         if let Some((tok_start, token)) = bare_identifier(slice)
             && !is_reserved_word(token)
+            && token != "arguments"
+            && !is_rune_name(token)
         {
             let abs_start = range.start + tok_start as u32;
             let tok_range = Range::new(abs_start, abs_start + token.len() as u32);
@@ -785,7 +1037,14 @@ impl TreeBuilder {
         let leading = slice
             .bytes()
             .position(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'));
-        let needs_wrap = leading.and_then(|i| slice.as_bytes().get(i).copied()) == Some(b'{');
+        // A slice starting with a string literal needs the same
+        // treatment: at statement level oxc reads it as a directive
+        // prologue (`"use strict"`), not an expression, and the
+        // literal would never be visited.
+        let needs_wrap = matches!(
+            leading.and_then(|i| slice.as_bytes().get(i).copied()),
+            Some(b'{' | b'"' | b'\'')
+        );
         let wrapped: String;
         let (effective_slice, base_adjust): (&str, u32) = if needs_wrap && range.start > 0 {
             wrapped = format!("({slice})");
@@ -798,6 +1057,7 @@ impl TreeBuilder {
         let mut alloc = self.expr_alloc.take().unwrap_or_default();
         let parsed = parse_script_body(&alloc, effective_slice, ctx.lang);
         let start_depth = self.scopes[ctx.scope.0 as usize].function_depth;
+        let runes = self.runes;
         let mut walker = ScriptWalker {
             tree: self,
             // The prepended `(` shifts every oxc span by +1; offset
@@ -821,11 +1081,45 @@ impl TreeBuilder {
             // Template expressions count toward the runes await
             // trigger (upstream: fragment create_scopes has_await).
             counts_await: true,
-            hooks: None,
+            // The compiler's template walk runs the same expression
+            // visitors as its script walks. `is_instance: false` gives
+            // the non-instance class-nesting allowance, which a
+            // template expression (always nested deeper) exceeds
+            // either way.
+            hooks: Some(ScriptRuleHooks {
+                runes,
+                is_instance: false,
+                transpiled: false,
+            }),
+            in_reactive_expression: true,
+            props_calls: 0,
+            declarator_init_call: None,
+            bindable_positions: Vec::new(),
+            props_id_calls: 0,
+            declarator_binds_identifier: false,
+            field_init_call: None,
+            constructor_assignment_call: None,
+            statement_call: None,
+            trace_slot: None,
+            callee_span: None,
+            template_root_pending: true,
+            plain_function_depth: 0,
+            node_spans: Vec::new(),
+            state_fields: Vec::new(),
+            in_constructor_body: false,
+            reactive_statement: None,
         };
+        if std::mem::take(&mut walker.tree.declaration_tag_init)
+            && let Some(Statement::ExpressionStatement(es)) = parsed.program.body.first()
+        {
+            walker.declarator_init_call = direct_call_span(&es.expression);
+        }
+        let events_before = walker.tree.script_rule_events.len();
         for stmt in &parsed.program.body {
             walker.visit_stmt(stmt);
         }
+        let template_events = self.script_rule_events.split_off(events_before);
+        self.template_rule_events.extend(template_events);
         // Apply template flags to refs produced during that walk.
         // PendingRef doesn't yet carry template flags; set them on
         // the refs produced in this slice via a post-pass.
@@ -905,7 +1199,7 @@ impl TreeBuilder {
     /// when the expression is a member chain like `rest[0]`) onto
     /// the backing binding's `bind_reference_count`, for
     /// `bind_invalid_each_rest`.
-    fn register_bind_update(&mut self, range: Range, ctx: &mut TemplateCtx<'_>) {
+    fn register_bind_update(&mut self, range: Range, directive: Range, ctx: &mut TemplateCtx<'_>) {
         let Some(raw) = ctx.source.get(range.start as usize..range.end as usize) else {
             return;
         };
@@ -923,6 +1217,29 @@ impl TreeBuilder {
         let mut expr = &stmt.expression;
         while let Expression::ParenthesizedExpression(p) = expr {
             expr = &p.expression;
+        }
+        // The compiler strips TypeScript wrappers before it validates
+        // the binding, so `bind:value={x as T}` binds to `x`.
+        let mut target = expr;
+        loop {
+            target = match target {
+                Expression::ParenthesizedExpression(p) => &p.expression,
+                Expression::TSAsExpression(e) => &e.expression,
+                Expression::TSSatisfiesExpression(e) => &e.expression,
+                Expression::TSNonNullExpression(e) => &e.expression,
+                Expression::TSTypeAssertion(e) => &e.expression,
+                _ => break,
+            };
+        }
+        if let Expression::Identifier(id) = target {
+            self.pending_writes.push(PendingWrite {
+                scope: ctx.scope,
+                targets: vec![SmolStr::from(id.name.as_str())],
+                bare: true,
+                range: directive,
+                is_binding: true,
+                origin: WriteOrigin::Template,
+            });
         }
         // Bare identifier → also push a reassignment for
         // `non_reactive_update`.
@@ -1003,6 +1320,43 @@ struct LintScopeVisitor<'a, 'src> {
 }
 
 impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisitor<'_, 'src> {
+    // Lint answers the compiler's questions, so it needs the compiler's
+    // scope tree rather than the overlay's.
+    const COMPILER_SCOPES: bool = true;
+
+    fn declare_in_current_scope(&mut self, bindings: &[svn_analyze::template_scope::BoundIdent]) {
+        for b in bindings {
+            let bid = self.builder.declare(
+                self.ctx.scope,
+                b.name.clone(),
+                b.range,
+                BindingKind::Template,
+                DeclarationKind::Const,
+                InitialKind::EachBlock,
+            );
+            self.builder.bindings[bid.0 as usize].inside_rest = b.inside_rest;
+        }
+    }
+
+    /// The compiler declares a snippet's name in the scope enclosing
+    /// the `{#snippet}` block (`scope.declare(node.expression, 'normal',
+    /// 'function', node)`), so `{@render name()}` and other template
+    /// references resolve to the snippet rather than to a same-named
+    /// script binding.
+    fn visit_snippet_block(&mut self, block: &svn_parser::SnippetBlock) {
+        let Some(range) = snippet_name_range(block, self.ctx.source) else {
+            return;
+        };
+        self.builder.declare(
+            self.ctx.scope,
+            block.name.clone(),
+            range,
+            BindingKind::Normal,
+            DeclarationKind::Function,
+            InitialKind::SnippetBlock,
+        );
+    }
+
     fn enter_scope(
         &mut self,
         kind: svn_analyze::template_scope::ScopeKind,
@@ -1010,13 +1364,24 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
         scope_range: svn_core::Range,
     ) {
         use svn_analyze::template_scope::ScopeKind;
-        let parent = self.ctx.scope;
-        let child = self.builder.new_scope(Some(parent));
-        // Record the scope's lexical span so an on-event reference
-        // resolves against the element's scope, not the whole-file
-        // declaration set (l275).
+        let current = self.ctx.scope;
+        // A named-slot child's scope is a sibling of the component's
+        // default scope: its parent is the scope the default scope was
+        // opened from.
+        let parent = match kind {
+            ScopeKind::ComponentSlot => self.scope_stack.last().copied().unwrap_or(current),
+            _ => current,
+        };
+        let child = match kind {
+            // An element's children fragment is porous (`transparent`).
+            ScopeKind::ElementFragment => self.builder.new_porous_scope(parent),
+            _ => self.builder.new_scope(Some(parent)),
+        };
+        // Record the scope's lexical span so a reference inside it
+        // resolves against this scope, not the whole-file declaration
+        // set.
         self.builder.scopes[child.0 as usize].range = Some(scope_range);
-        self.scope_stack.push(parent);
+        self.scope_stack.push(current);
         self.ctx.scope = child;
 
         // Per-kind binding declaration. Convention for `Each`:
@@ -1030,11 +1395,22 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
         // them as `Each` lets each-specific rules
         // (`bind_invalid_each_rest`, etc.) misfire on `{:then
         // {...rest}}` / `{:catch {...rest}}` destructures.
-        let (declare_kind, retag_to_template) = match kind {
-            ScopeKind::Each { .. } => (BindingKind::Each, false),
-            ScopeKind::AwaitThen | ScopeKind::AwaitCatch => (BindingKind::Template, false),
-            ScopeKind::Snippet => (BindingKind::Each, true),
-            ScopeKind::LetDirective => (BindingKind::Each, true),
+        //
+        // `let:` bindings (on elements and component default scopes)
+        // are `Template`; the `{:then}` / `{:catch}` value scope
+        // declares the pattern's names as plain bindings.
+        let declare_kind = match kind {
+            ScopeKind::Each { .. } => BindingKind::Each,
+            ScopeKind::AwaitThen | ScopeKind::AwaitCatch => BindingKind::Template,
+            ScopeKind::AwaitValue => BindingKind::Normal,
+            ScopeKind::Snippet => BindingKind::Snippet,
+            ScopeKind::LetDirective | ScopeKind::Element | ScopeKind::ComponentDefault => {
+                BindingKind::Template
+            }
+            ScopeKind::Block | ScopeKind::ElementFragment | ScopeKind::ComponentSlot => {
+                debug_assert!(bindings.is_empty(), "{kind:?} scopes declare nothing");
+                BindingKind::Template
+            }
             ScopeKind::Fragment => unreachable!("walker doesn't call enter_scope for Fragment"),
         };
 
@@ -1043,16 +1419,26 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
             _ => bindings.len(),
         };
         let context_bindings = &bindings[..context_count];
+        // Snippet parameters are the one template binding the compiler
+        // declares with `let`.
+        let declaration_kind = if matches!(kind, ScopeKind::Snippet) {
+            DeclarationKind::Let
+        } else {
+            DeclarationKind::Const
+        };
         for b in context_bindings {
             let bid = self.builder.declare(
                 child,
                 b.name.clone(),
                 b.range,
                 declare_kind,
-                DeclarationKind::Const,
+                declaration_kind,
                 InitialKind::EachBlock,
             );
             self.builder.bindings[bid.0 as usize].inside_rest = b.inside_rest;
+            if matches!(kind, ScopeKind::AwaitThen | ScopeKind::AwaitCatch) {
+                self.builder.late_declared.push(bid);
+            }
         }
         if let ScopeKind::Each {
             has_index,
@@ -1069,6 +1455,7 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
             } else {
                 BindingKind::Static
             };
+            let had_error = self.builder.declaration_error.is_some();
             self.builder.declare(
                 child,
                 index.name.clone(),
@@ -1077,22 +1464,10 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
                 DeclarationKind::Const,
                 InitialKind::EachBlock,
             );
-        }
-
-        if retag_to_template {
-            // Snippet params and let-directive bindings are declared
-            // with `BindingKind::Each` above (so the shared declarer
-            // path stays uniform), then retagged to `Template` to
-            // match upstream's per-kind classification. Mirrors what
-            // the pre-Phase-4 `declare_snippet_params` /
-            // `declare_let_directive` did.
-            for bid in self.builder.bindings_in(child) {
-                if matches!(
-                    self.builder.bindings[bid.0 as usize].kind,
-                    BindingKind::Each
-                ) {
-                    self.builder.bindings[bid.0 as usize].kind = BindingKind::Template;
-                }
+            // The compiler declares the index from a bare name with no
+            // source position, so an error about it has none either.
+            if !had_error && let Some(error) = &mut self.builder.declaration_error {
+                error.2 = Range::new(0, 0);
             }
         }
     }
@@ -1208,6 +1583,7 @@ impl TreeBuilder {
         leading_ignores: &[SmolStr],
     ) {
         let base = script.content_range.start;
+        let preprocess_ts = self.preprocess_ts;
         let start_depth = self.scopes[root_scope.0 as usize].function_depth;
         // Index every comment in the script body so the walker can
         // resolve leading `// svelte-ignore …` runs per node. Offsets
@@ -1235,12 +1611,39 @@ impl TreeBuilder {
             script_content: script.content,
             ignore_frames: Vec::new(),
             counts_await: is_instance,
-            hooks: Some(ScriptRuleHooks { runes, is_instance }),
+            hooks: Some(ScriptRuleHooks {
+                runes,
+                is_instance,
+                transpiled: crate::rules::typescript_features::script_is_transpiled(
+                    script,
+                    preprocess_ts,
+                ),
+            }),
+            in_reactive_expression: false,
+            props_calls: 0,
+            declarator_init_call: None,
+            bindable_positions: Vec::new(),
+            props_id_calls: 0,
+            declarator_binds_identifier: false,
+            field_init_call: None,
+            constructor_assignment_call: None,
+            statement_call: None,
+            trace_slot: None,
+            callee_span: None,
+            template_root_pending: false,
+            plain_function_depth: 0,
+            node_spans: Vec::new(),
+            state_fields: Vec::new(),
+            in_constructor_body: false,
+            reactive_statement: None,
         };
         // Push the template-comment ignores so they apply to every
         // reference recorded during this script walk.
         if !leading_ignores.is_empty() {
             walker.ignore_frames.push(leading_ignores.to_vec());
+        }
+        for directive in &program.directives {
+            walker.string_literal_hook(&directive.expression);
         }
         for stmt in &program.body {
             walker.at_program_top = true;
@@ -1300,13 +1703,18 @@ impl TreeBuilder {
                         let local = match &spec.local {
                             ModuleExportName::IdentifierName(id) => id.name.as_str(),
                             ModuleExportName::IdentifierReference(id) => id.name.as_str(),
-                            ModuleExportName::StringLiteral(_) => continue,
+                            ModuleExportName::StringLiteral(l) => l.value.as_str(),
                         };
-                        let exported = match &spec.exported {
-                            ModuleExportName::IdentifierName(id) => Some(id.name.as_str()),
-                            ModuleExportName::IdentifierReference(id) => Some(id.name.as_str()),
-                            ModuleExportName::StringLiteral(_) => None,
+                        self.export_spec_locals.push(SmolStr::from(local));
+                        // Legacy mode promotes only `export { a as b }`
+                        // with identifier names on both sides.
+                        let exported = match (&spec.local, &spec.exported) {
+                            (ModuleExportName::StringLiteral(_), _)
+                            | (_, ModuleExportName::StringLiteral(_)) => continue,
+                            (_, ModuleExportName::IdentifierName(id)) => id.name.as_str(),
+                            (_, ModuleExportName::IdentifierReference(id)) => id.name.as_str(),
                         };
+                        let exported = Some(exported);
                         // Record the alias only when it differs from the
                         // local — matches the old `alias != local` gate.
                         let alias = exported.filter(|a| *a != local).map(SmolStr::from);
@@ -1377,7 +1785,28 @@ impl TreeBuilder {
             }
         }
 
-        synthesize_store_subs(&mut self, &mut unresolved, module_root, instance_root);
+        let pending_writes = std::mem::take(&mut self.pending_writes);
+        let write_violations = resolve_writes(&self, pending_writes);
+
+        let store_refs: Vec<StoreRef> = unresolved
+            .iter()
+            .filter(|r| {
+                let n = r.name.as_bytes();
+                n.first() == Some(&b'$') && n.len() > 1 && n[1] != b'$'
+            })
+            .map(|r| StoreRef {
+                name: r.name.clone(),
+                range: r.range,
+                nested_store: resolve_by_name(&self.scopes, r.scope, &r.name[1..]).is_some_and(
+                    |b| {
+                        let scope = self.bindings[b.0 as usize].scope;
+                        scope != module_root && scope != instance_root
+                    },
+                ),
+                parent_is_call: r.parent_is_call,
+            })
+            .collect();
+        synthesize_store_subs(&mut self, &mut unresolved, instance_root);
 
         ScopeTree {
             scopes: self.scopes,
@@ -1386,13 +1815,107 @@ impl TreeBuilder {
             instance_root,
             unresolved_refs: unresolved,
             has_await: self.has_await,
+            write_violations,
             custom_element_props_candidates: self.custom_element_props_candidates,
             custom_element_props_ignored: self.custom_element_props_ignored,
             nonrunes_export_idents: self.nonrunes_export_idents,
             nonrunes_export_specs: self.nonrunes_export_specs,
+            export_spec_locals: self.export_spec_locals,
             script_rule_events: self.script_rule_events,
+            declaration_error: self.declaration_error,
+            store_refs,
+            module_script_range: None,
+            reactive_statements: self.reactive_statements,
+            reactive_assignment_targets: self.reactive_assignment_targets.into_iter().collect(),
+            template_rule_events: {
+                let mut events = self.template_rule_events;
+                events.sort_by_key(|e| e.range().start);
+                events
+            },
         }
     }
+}
+
+/// The identifiers of an assignment target that the compiler's
+/// `validate_no_const_assignment` inspects: the identifier itself, or
+/// the plain identifier leaves of array / object patterns. Defaults,
+/// rest elements and member expressions are not inspected.
+fn checked_write_targets(t: &AssignmentTarget<'_>, out: &mut Vec<SmolStr>) {
+    use oxc_ast::ast::AssignmentTargetMaybeDefault as ATMD;
+    use oxc_ast::ast::AssignmentTargetProperty as ATP;
+    match t {
+        AssignmentTarget::AssignmentTargetIdentifier(id) => {
+            out.push(SmolStr::from(id.name.as_str()))
+        }
+        AssignmentTarget::ArrayAssignmentTarget(arr) => {
+            for el in arr.elements.iter().flatten() {
+                if !matches!(el, ATMD::AssignmentTargetWithDefault(_))
+                    && let Some(target) = el.as_assignment_target()
+                {
+                    checked_write_targets(target, out);
+                }
+            }
+        }
+        AssignmentTarget::ObjectAssignmentTarget(obj) => {
+            for p in &obj.properties {
+                match p {
+                    ATP::AssignmentTargetPropertyIdentifier(pi) if pi.init.is_none() => {
+                        out.push(SmolStr::from(pi.binding.name.as_str()));
+                    }
+                    ATP::AssignmentTargetPropertyIdentifier(_) => {}
+                    ATP::AssignmentTargetPropertyProperty(pp) => {
+                        if !matches!(pp.binding, ATMD::AssignmentTargetWithDefault(_))
+                            && let Some(target) = pp.binding.as_assignment_target()
+                        {
+                            checked_write_targets(target, out);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The compiler's `validate_assignment` over every recorded write:
+/// the first import or non-each `const` among the targets rejects the
+/// write; otherwise a bare target that is an each-block item or a
+/// snippet parameter does.
+fn resolve_writes(tree: &TreeBuilder, writes: Vec<PendingWrite>) -> Vec<WriteViolation> {
+    let mut out = Vec::new();
+    for w in writes {
+        let binding = |name: &SmolStr| {
+            resolve_by_name(&tree.scopes, w.scope, name).map(|bid| &tree.bindings[bid.0 as usize])
+        };
+        let constant = w.targets.iter().filter_map(binding).find(|b| {
+            b.declaration_kind == DeclarationKind::Import
+                || (b.declaration_kind == DeclarationKind::Const && b.kind != BindingKind::Each)
+        });
+        let kind = match constant {
+            Some(b) => Some(WriteViolationKind::Constant {
+                import: b.declaration_kind == DeclarationKind::Import,
+            }),
+            None if w.bare => w
+                .targets
+                .first()
+                .and_then(binding)
+                .and_then(|b| match b.kind {
+                    BindingKind::Each => Some(WriteViolationKind::EachItem),
+                    BindingKind::Snippet => Some(WriteViolationKind::SnippetParameter),
+                    _ => None,
+                }),
+            None => None,
+        };
+        if let Some(kind) = kind {
+            out.push(WriteViolation {
+                kind,
+                range: w.range,
+                is_binding: w.is_binding,
+                origin: w.origin,
+            });
+        }
+    }
+    out
 }
 
 /// For each unresolved `$name` reference that would be a store
@@ -1405,7 +1928,6 @@ impl TreeBuilder {
 fn synthesize_store_subs(
     tree: &mut TreeBuilder,
     unresolved: &mut Vec<UnresolvedRef>,
-    module_root: ScopeId,
     instance_root: ScopeId,
 ) {
     use std::collections::HashMap as StdMap;
@@ -1420,8 +1942,9 @@ fn synthesize_store_subs(
             continue;
         }
         let store_name = &n[1..];
-        let backing = resolve_by_name(&tree.scopes, module_root, store_name)
-            .or_else(|| resolve_by_name(&tree.scopes, instance_root, store_name));
+        // `instance.scope.get(store_name)` upstream: the instance scope
+        // first, then the module scope it is a child of.
+        let backing = resolve_by_name(&tree.scopes, instance_root, store_name);
         // No backing declaration → upstream leaves the reference in
         // `module.scope.references` (no store-sub synthesis). For
         // rune names that surviving reference is what flips the file
@@ -1436,28 +1959,34 @@ fn synthesize_store_subs(
         //   as a conflict).
         if let Some(bid) = backing {
             let backing_binding = &tree.bindings[bid.0 as usize];
-            if let InitialKind::RuneCall { rune, .. } = backing_binding.initial {
+            // The compiler synthesizes store subscriptions before its
+            // analyze pass rewires each `$props()` destructure binding's
+            // `initial` to the property default, so what it inspects is
+            // still the declarator's `$props()` call — for plain
+            // (`let { a } = $props()`), `$bindable` (`let { a =
+            // $bindable() } = $props()`) and rest bindings alike. Our
+            // builder has already applied that rewire, so the binding
+            // kinds that only a `$props()` destructure produces stand
+            // in for the original initializer.
+            let init_rune = match (&backing_binding.kind, &backing_binding.initial) {
+                (BindingKind::Prop | BindingKind::BindableProp, _) => Some(RuneCall::Props),
+                (_, InitialKind::RuneCall { rune, .. }) => Some(*rune),
+                _ => None,
+            };
+            // Upstream guards: a rune-initialised declaration is not a
+            // store, except that a `$props()` value named anything but
+            // `props` still is (`const foo = $props(); $foo()`).
+            // The rune-initialiser guard only applies to rune-named
+            // subscriptions: every other `$name` is a subscription to
+            // `name` whatever initialises it (`let { a } = $derived(x)`
+            // still makes `$a` a store read).
+            if is_rune_name(n)
+                && let Some(rune) = init_rune
+            {
                 let props_exception = store_name != "props" && rune == RuneCall::Props;
                 if !props_exception {
                     continue;
                 }
-            }
-            // Additional carve-out: `let { props } = $props()` destructures
-            // a field NAMED `props` out of the rune call. Our destructure
-            // handler rewires the field's `initial` to `None` (matching
-            // upstream `VariableDeclarator.js:104-130`), so the
-            // `RuneCall { Props }` check above doesn't catch it. The
-            // destructured `props` field carries `BindingKind::Prop`,
-            // which is unique to fields destructured from `$props()` —
-            // that's the signal we use to skip synthesis here.
-            //
-            // Without this skip, `let { props } = $props()` fires a
-            // false-positive `store_rune_conflict` on every reference to
-            // `$props(...)` in the script — verified against upstream
-            // svelte/compiler 5.53.6 on threlte/theatre, which does NOT
-            // fire the warning for this canonical pattern.
-            if store_name == "props" && backing_binding.kind == BindingKind::Prop {
-                continue;
             }
             // `import { derived } from 'svelte/store'` must not
             // capture `$derived` as a subscription — upstream skips
@@ -1596,6 +2125,145 @@ fn is_reserved_word(token: &str) -> bool {
     )
 }
 
+/// The `validate_identifier_name` error for a declared name, if any:
+/// `$` alone is `dollar_binding_invalid`, any other `$`-prefixed name
+/// `dollar_prefix_invalid`.
+pub(crate) fn dollar_name_error(name: &str) -> Option<(Code, String)> {
+    if name == "$" {
+        Some((
+            Code::dollar_binding_invalid,
+            crate::messages::dollar_binding_invalid(),
+        ))
+    } else if name.starts_with('$') {
+        Some((
+            Code::dollar_prefix_invalid,
+            crate::messages::dollar_prefix_invalid(),
+        ))
+    } else {
+        None
+    }
+}
+
+/// Source range of a `{#snippet NAME(…)}` block's name: the identifier
+/// following the `{#snippet` keyword.
+fn snippet_name_range(block: &svn_parser::SnippetBlock, source: &str) -> Option<Range> {
+    let text = source.get(block.range.start as usize..block.range.end as usize)?;
+    let after_kw = text.find("#snippet")? + "#snippet".len();
+    let name_off = after_kw + text[after_kw..].find(block.name.as_str())?;
+    let start = block.range.start + name_off as u32;
+    Some(Range::new(start, start + block.name.len() as u32))
+}
+
+/// A TypeScript-only function statement: `declare function f(): T` or
+/// a bodiless overload signature. Both are ESTree `TSDeclareFunction`
+/// nodes, which the compiler deletes before analysis.
+fn is_ts_declare_function(f: &oxc_ast::ast::Function<'_>) -> bool {
+    f.declare || f.body.is_none()
+}
+
+/// The identifier at the root of a member chain (`a` of `a.b[c].d`).
+fn member_root_identifier<'e, 'a>(e: &'e Expression<'a>) -> Option<&'e IdentifierReference<'a>> {
+    match e {
+        Expression::Identifier(id) => Some(id),
+        other => other
+            .as_member_expression()
+            .and_then(|m| member_root_identifier(m.object())),
+    }
+}
+
+/// `this.name`, `this.#name` or `this[<literal>]` — an assignment
+/// target that names a class field.
+fn is_this_field_target(t: &AssignmentTarget<'_>) -> bool {
+    match t {
+        AssignmentTarget::StaticMemberExpression(m) => {
+            matches!(m.object, Expression::ThisExpression(_))
+        }
+        AssignmentTarget::PrivateFieldExpression(m) => {
+            matches!(m.object, Expression::ThisExpression(_))
+        }
+        AssignmentTarget::ComputedMemberExpression(m) => {
+            matches!(m.object, Expression::ThisExpression(_))
+                && matches!(
+                    m.expression,
+                    Expression::StringLiteral(_)
+                        | Expression::NumericLiteral(_)
+                        | Expression::BooleanLiteral(_)
+                        | Expression::NullLiteral(_)
+                        | Expression::BigIntLiteral(_)
+                        | Expression::RegExpLiteral(_)
+                )
+        }
+        _ => false,
+    }
+}
+
+/// The compiler's `get_name` for a class member key: an identifier's
+/// name, `#name` for a private name, a literal's string value.
+fn class_key_name(key: &PropertyKey<'_>) -> Option<String> {
+    match key {
+        PropertyKey::StaticIdentifier(id) => Some(id.name.to_string()),
+        PropertyKey::PrivateIdentifier(id) => Some(format!("#{}", id.name)),
+        PropertyKey::StringLiteral(l) => Some(l.value.to_string()),
+        PropertyKey::NumericLiteral(n) => Some(js_number_string(n.value)),
+        _ => None,
+    }
+}
+
+/// `String(value)` of a literal used as a computed member key.
+fn literal_key_name(e: &Expression<'_>) -> Option<String> {
+    match e {
+        Expression::StringLiteral(l) => Some(l.value.to_string()),
+        Expression::NumericLiteral(n) => Some(js_number_string(n.value)),
+        Expression::BooleanLiteral(b) => Some(b.value.to_string()),
+        Expression::NullLiteral(_) => Some("null".to_string()),
+        _ => None,
+    }
+}
+
+/// A number the way JavaScript's `String(n)` prints the common cases.
+fn js_number_string(n: f64) -> String {
+    if n.fract() == 0.0 && n.abs() < 1e21 {
+        format!("{n:.0}")
+    } else {
+        n.to_string()
+    }
+}
+
+/// The field name `this.name` / `this.#name` / `this[<literal>]` writes.
+fn this_field_name(t: &AssignmentTarget<'_>) -> Option<String> {
+    match t {
+        AssignmentTarget::StaticMemberExpression(m) => Some(m.property.name.to_string()),
+        AssignmentTarget::PrivateFieldExpression(m) => Some(format!("#{}", m.field.name)),
+        AssignmentTarget::ComputedMemberExpression(m) => literal_key_name(&m.expression),
+        _ => None,
+    }
+}
+
+/// A member of `this` as an assignment target.
+fn is_this_member_target(t: &AssignmentTarget<'_>) -> bool {
+    match t {
+        AssignmentTarget::StaticMemberExpression(m) => {
+            matches!(m.object, Expression::ThisExpression(_))
+        }
+        AssignmentTarget::PrivateFieldExpression(m) => {
+            matches!(m.object, Expression::ThisExpression(_))
+        }
+        AssignmentTarget::ComputedMemberExpression(m) => {
+            matches!(m.object, Expression::ThisExpression(_))
+        }
+        _ => false,
+    }
+}
+
+/// The span of `e` when it is a call, once parentheses and TypeScript
+/// wrappers (which the compiler's AST does not have) are removed.
+fn direct_call_span(e: &Expression<'_>) -> Option<(u32, u32)> {
+    match unwrap_ts_wrappers(e) {
+        Expression::CallExpression(c) => Some((c.span.start, c.span.end)),
+        _ => None,
+    }
+}
+
 fn resolve_by_name(scopes: &[Scope], from: ScopeId, name: &str) -> Option<BindingId> {
     let mut cur = Some(from);
     while let Some(sid) = cur {
@@ -1669,6 +2337,66 @@ struct ScriptWalker<'b, 'src> {
     /// Hook sites buffer events into `tree.script_rule_events`;
     /// nothing is emitted during the walk.
     hooks: Option<ScriptRuleHooks>,
+    /// True while walking an expression whose `await`s suspend
+    /// rendering: a template expression or a `$derived(…)` argument,
+    /// up to the next function boundary (the compiler's
+    /// `state.expression`).
+    in_reactive_expression: bool,
+    /// `$props()` calls seen so far in this walk (the compiler's
+    /// `has_props_rune`).
+    props_calls: u32,
+    /// Span start of the call expression that is the direct
+    /// initializer of the declarator being walked — the only
+    /// position a `$props()` may take.
+    declarator_init_call: Option<(u32, u32)>,
+    /// Span starts of the `$bindable()` calls sitting directly as a
+    /// property default of a `$props()` destructure — the only
+    /// position a `$bindable()` may take.
+    bindable_positions: Vec<(u32, u32)>,
+    /// `$props.id()` calls seen so far in this walk.
+    props_id_calls: u32,
+    /// Whether the declarator owning `declarator_init_call` binds a
+    /// plain identifier (the only pattern `$props.id()` accepts).
+    declarator_binds_identifier: bool,
+    /// The call that is the value of the non-static, non-computed
+    /// class field being walked.
+    field_init_call: Option<(u32, u32)>,
+    /// The call assigned by a `this.<field> = …` statement directly in
+    /// a constructor body.
+    constructor_assignment_call: Option<(u32, u32)>,
+    /// The call that is the whole expression of the statement being
+    /// walked.
+    statement_call: Option<(u32, u32)>,
+    /// The call forming the first statement of the function body being
+    /// walked, and whether that function is a generator — the one
+    /// place `$inspect.trace()` may sit.
+    trace_slot: Option<(u32, u32, bool)>,
+    /// The callee of the call being walked (parentheses and TypeScript
+    /// wrappers removed), and the call.
+    callee_span: Option<((u32, u32), (u32, u32))>,
+    /// A template expression is parsed as a one-statement program;
+    /// that statement is not an expression statement to the compiler,
+    /// which sees the bare expression. Set until the walk passes it.
+    template_root_pending: bool,
+    /// Function declarations / expressions (not arrows) enclosing the
+    /// node being walked — outside all of them, `arguments` is an
+    /// error.
+    plain_function_depth: u32,
+    /// The state fields of the innermost class body being walked (runes
+    /// mode): name, span start of the declaring node, and whether a
+    /// constructor assignment declares it.
+    state_fields: Vec<(SmolStr, u32, bool)>,
+    /// Walking a constructor body, outside any nested function.
+    in_constructor_body: bool,
+    /// The index (in `tree.reactive_statements`) of the top-level `$:`
+    /// statement being walked.
+    reactive_statement: Option<usize>,
+    /// Spans of the statements, declarators and expressions enclosing
+    /// the node being walked, innermost last — the compiler's
+    /// `context.path` as far as its errors report a parent node.
+    /// Parentheses and TypeScript wrappers are skipped, as the
+    /// compiler's AST has neither.
+    node_spans: Vec<(u32, u32)>,
 }
 
 impl<'b, 'src> ScriptWalker<'b, 'src> {
@@ -1680,6 +2408,57 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
 
     fn abs(&self, start: u32, end: u32) -> Range {
         Range::new(start + self.base_offset, end + self.base_offset)
+    }
+
+    /// A string literal outside expression position (a property key,
+    /// a module source, a directive), which the compiler's `Literal`
+    /// visitor tests all the same.
+    fn string_literal_hook(&mut self, lit: &oxc_ast::ast::StringLiteral<'_>) {
+        if let Some(h) = self.hooks {
+            let range = self.abs(lit.span.start, lit.span.end);
+            h.string_literal(
+                &mut self.tree.script_rule_events,
+                &self.ignore_frames,
+                self.tree.bidi_warned.as_ref(),
+                &lit.value,
+                range,
+            );
+        }
+    }
+
+    /// A property key: a computed key is an expression, a plain string
+    /// key a literal.
+    fn visit_key(&mut self, key: &PropertyKey<'_>, computed: bool) {
+        if computed {
+            if let Some(k) = expression_from_property_key(key) {
+                self.visit_expr(k);
+            }
+        } else if let PropertyKey::StringLiteral(lit) = key {
+            self.string_literal_hook(lit);
+        }
+    }
+
+    fn write_origin(&self) -> WriteOrigin {
+        match &self.hooks {
+            Some(h) if h.is_instance => WriteOrigin::Instance,
+            Some(_) => WriteOrigin::Module,
+            None => WriteOrigin::Template,
+        }
+    }
+
+    fn push_write(&mut self, targets: Vec<SmolStr>, bare: bool, span: oxc_span::Span) {
+        if targets.is_empty() {
+            return;
+        }
+        let write = PendingWrite {
+            scope: self.cur_scope(),
+            targets,
+            bare,
+            range: self.abs(span.start, span.end),
+            is_binding: false,
+            origin: self.write_origin(),
+        };
+        self.tree.pending_writes.push(write);
     }
 
     fn with_scope<F, R>(&mut self, scope: ScopeId, f: F) -> R
@@ -1698,6 +2477,8 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     {
         let prev_depth = self.function_depth;
         let prev_closure = self.in_function_closure;
+        let prev_reactive = std::mem::replace(&mut self.in_reactive_expression, false);
+        let prev_constructor = std::mem::replace(&mut self.in_constructor_body, false);
         self.function_depth += 1;
         self.in_function_closure = true;
         // Open a fresh non-porous scope for the function body so
@@ -1716,6 +2497,56 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         self.scope_stack.pop();
         self.function_depth = prev_depth;
         self.in_function_closure = prev_closure;
+        self.in_reactive_expression = prev_reactive;
+        self.in_constructor_body = prev_constructor;
+    }
+
+    /// The statements of a function body. Its first statement is the
+    /// one place a `$inspect.trace()` call may stand; `plain` marks a
+    /// function declaration / expression (not an arrow), inside which
+    /// `arguments` is the function's own.
+    fn visit_function_body(&mut self, body: &FunctionBody<'_>, generator: bool, plain: bool) {
+        // A directive prologue is the body's first statement to the
+        // compiler.
+        let slot = match body.statements.first() {
+            Some(Statement::ExpressionStatement(es)) if body.directives.is_empty() => {
+                direct_call_span(&es.expression).map(|(start, end)| (start, end, generator))
+            }
+            _ => None,
+        };
+        let prev = std::mem::replace(&mut self.trace_slot, slot);
+        self.plain_function_depth += u32::from(plain);
+        for s in &body.statements {
+            self.visit_stmt(s);
+        }
+        self.plain_function_depth -= u32::from(plain);
+        self.trace_slot = prev;
+    }
+
+    /// A constructor body: a statement `this.<field> = <call>` directly
+    /// in it may create a state field with a rune call.
+    fn visit_constructor_body(&mut self, body: &FunctionBody<'_>) {
+        self.plain_function_depth += 1;
+        self.in_constructor_body = true;
+        for s in &body.statements {
+            let call = match s {
+                Statement::ExpressionStatement(es) => match unwrap_ts_wrappers(&es.expression) {
+                    Expression::AssignmentExpression(a)
+                        if a.operator == oxc_syntax::operator::AssignmentOperator::Assign
+                            && is_this_field_target(&a.left) =>
+                    {
+                        direct_call_span(&a.right)
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            let prev = std::mem::replace(&mut self.constructor_assignment_call, call);
+            self.visit_stmt(s);
+            self.constructor_assignment_call = prev;
+        }
+        self.in_constructor_body = false;
+        self.plain_function_depth -= 1;
     }
 
     fn visit_stmt(&mut self, stmt: &Statement<'_>) {
@@ -1723,7 +2554,10 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         // Only the Program-body loop sets the flag; every statement
         // visited from here down is nested.
         let at_program_top = std::mem::replace(&mut self.at_program_top, false);
+        let span = stmt.span();
+        self.node_spans.push((span.start, span.end));
         self.visit_stmt_inner(stmt, at_program_top);
+        self.node_spans.pop();
         if pushed {
             self.ignore_frames.pop();
         }
@@ -1795,6 +2629,10 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     fn visit_stmt_inner(&mut self, stmt: &Statement<'_>, at_program_top: bool) {
         match stmt {
             Statement::VariableDeclaration(vd) => self.visit_var_decl(vd),
+            // TypeScript-only statements (`declare function`, overload
+            // signatures) are deleted by the compiler's
+            // `remove_typescript_nodes` before any scope is built.
+            Statement::FunctionDeclaration(f) if is_ts_declare_function(f) => {}
             Statement::FunctionDeclaration(f) => {
                 if let Some(id) = &f.id {
                     self.declare_with_ignores(
@@ -1810,20 +2648,27 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     for p in &f.params.items {
                         w.declare_pattern(&p.pattern, DeclarationKind::Param);
                     }
+                    if let Some(rest) = &f.params.rest {
+                        w.declare_pattern(&rest.rest.argument, DeclarationKind::RestParam);
+                    }
                     if let Some(body) = &f.body {
-                        for s in &body.statements {
-                            w.visit_stmt(s);
-                        }
+                        w.visit_function_body(body, f.generator, true);
                     }
                 });
             }
             Statement::ClassDeclaration(cls) => self.visit_class_decl(cls),
+            // `import type …` never reaches the compiler's scope builder.
+            Statement::ImportDeclaration(imp) if imp.import_kind.is_type() => {}
             Statement::ImportDeclaration(imp) => {
+                self.check_runes_import(imp);
                 let source = SmolStr::from(imp.source.value.as_str());
                 if let Some(specs) = &imp.specifiers {
                     for s in specs {
                         use oxc_ast::ast::ImportDeclarationSpecifier as S;
                         let (name, span, is_default) = match s {
+                            // `import { type x }` — the specifier is
+                            // filtered out before analysis.
+                            S::ImportSpecifier(s) if s.import_kind.is_type() => continue,
                             S::ImportSpecifier(s) => (s.local.name.as_str(), s.local.span, false),
                             S::ImportDefaultSpecifier(s) => {
                                 (s.local.name.as_str(), s.local.span, true)
@@ -1845,6 +2690,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                         );
                     }
                 }
+                self.string_literal_hook(&imp.source);
             }
             Statement::ExportDeclaration(end) => {
                 {
@@ -1853,6 +2699,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     use oxc_ast::ast::Declaration;
                     match decl {
                         Declaration::VariableDeclaration(v) => self.visit_var_decl(v),
+                        Declaration::FunctionDeclaration(f) if is_ts_declare_function(f) => {}
                         Declaration::FunctionDeclaration(f) => {
                             if let Some(id) = &f.id {
                                 self.declare_with_ignores(
@@ -1868,17 +2715,60 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                                 for p in &f.params.items {
                                     w.declare_pattern(&p.pattern, DeclarationKind::Param);
                                 }
+                                if let Some(rest) = &f.params.rest {
+                                    w.declare_pattern(
+                                        &rest.rest.argument,
+                                        DeclarationKind::RestParam,
+                                    );
+                                }
                                 if let Some(body) = &f.body {
-                                    for s in &body.statements {
-                                        w.visit_stmt(s);
-                                    }
+                                    w.visit_function_body(body, f.generator, true);
                                 }
                             });
                         }
                         Declaration::ClassDeclaration(cls) => self.visit_class_decl(cls),
                         _ => {}
                     }
+                    // `ExportNamedDeclaration.js` (after visiting the
+                    // declaration): `export let` is legacy syntax in a
+                    // runes-mode instance script.
+                    if let Some(h) = self.hooks
+                        && h.runes
+                        && h.is_instance
+                        && let Declaration::VariableDeclaration(v) = decl
+                        && !v.declare
+                        && v.kind == oxc_ast::ast::VariableDeclarationKind::Let
+                    {
+                        let range = self.abs(end.span.start, end.span.end);
+                        self.push_error(
+                            Code::legacy_export_invalid,
+                            crate::messages::legacy_export_invalid(),
+                            range,
+                        );
+                    }
+                    if let Declaration::VariableDeclaration(v) = decl
+                        && !v.declare
+                    {
+                        let range = self.abs(end.span.start, end.span.end);
+                        for d in &v.declarations {
+                            for id in crate::scope_util::binding_idents_in_pattern(&d.id) {
+                                self.check_export(id.name.as_str(), range);
+                            }
+                        }
+                    }
                 }
+            }
+            Statement::ExportNamedDeclaration(end) if !end.export_kind.is_type() => {
+                self.check_export_specifiers(&end.specifiers);
+                self.check_default_export_specifiers(&end.specifiers, end.span);
+            }
+            Statement::ExportFromDeclaration(end) if !end.export_kind.is_type() => {
+                self.check_export_specifiers(&end.specifiers);
+                self.check_default_export_specifiers(&end.specifiers, end.span);
+                self.string_literal_hook(&end.source);
+            }
+            Statement::ExportAllDeclaration(all) if !all.export_kind.is_type() => {
+                self.string_literal_hook(&all.source);
             }
             Statement::BlockStatement(b) => {
                 // Non-function block — porous w.r.t. function_depth.
@@ -1936,9 +2826,15 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 self.visit_expr(&d.test);
             }
             Statement::TryStatement(t) => {
-                for s in &t.block.body {
-                    self.visit_stmt(s);
-                }
+                // The `try` and `finally` bodies are plain block
+                // statements, so each gets its own porous block scope
+                // (upstream `BlockStatement` → `create_block_scope`).
+                let s = self.tree.new_porous_scope(self.cur_scope());
+                self.with_scope(s, |w| {
+                    for s in &t.block.body {
+                        w.visit_stmt(s);
+                    }
+                });
                 if let Some(h) = &t.handler {
                     // Catch params live in a porous scope covering the
                     // handler (upstream `CatchClause` declares them
@@ -1955,9 +2851,12 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     });
                 }
                 if let Some(f) = &t.finalizer {
-                    for s in &f.body {
-                        self.visit_stmt(s);
-                    }
+                    let s = self.tree.new_porous_scope(self.cur_scope());
+                    self.with_scope(s, |w| {
+                        for s in &f.body {
+                            w.visit_stmt(s);
+                        }
+                    });
                 }
             }
             Statement::SwitchStatement(s) => {
@@ -1985,7 +2884,13 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                         self.base_offset,
                     );
                 }
-                self.visit_expr(&es.expression)
+                let is_statement = !std::mem::replace(&mut self.template_root_pending, false);
+                let call = is_statement
+                    .then(|| direct_call_span(&es.expression))
+                    .flatten();
+                let prev = std::mem::replace(&mut self.statement_call, call);
+                self.visit_expr(&es.expression);
+                self.statement_call = prev;
             }
             Statement::ReturnStatement(r) => {
                 if let Some(arg) = &r.argument {
@@ -1995,6 +2900,16 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             Statement::LabeledStatement(lbl) => self.visit_labeled(lbl, at_program_top),
             Statement::ThrowStatement(t) => self.visit_expr(&t.argument),
             Statement::ExportDefaultDeclaration(ed) => {
+                // `ExportDefaultDeclaration.js`: a component script may
+                // not default-export anything.
+                if self.hooks.is_some() {
+                    let range = self.abs(ed.span.start, ed.span.end);
+                    self.push_error(
+                        Code::module_illegal_default_export,
+                        crate::messages::module_illegal_default_export(),
+                        range,
+                    );
+                }
                 use oxc_ast::ast::ExportDefaultDeclarationKind as Ed;
                 match &ed.declaration {
                     Ed::FunctionDeclaration(f) => {
@@ -2002,10 +2917,11 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                             for p in &f.params.items {
                                 w.declare_pattern(&p.pattern, DeclarationKind::Param);
                             }
+                            if let Some(rest) = &f.params.rest {
+                                w.declare_pattern(&rest.rest.argument, DeclarationKind::RestParam);
+                            }
                             if let Some(body) = &f.body {
-                                for s in &body.statements {
-                                    w.visit_stmt(s);
-                                }
+                                w.visit_function_body(body, f.generator, true);
                             }
                         });
                     }
@@ -2018,6 +2934,125 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// `ImportDeclaration.js` (runes mode): `svelte/internal` is off
+    /// limits, and so are the legacy lifecycle functions.
+    fn check_runes_import(&mut self, imp: &oxc_ast::ast::ImportDeclaration<'_>) {
+        if !self.hooks.is_some_and(|h| h.runes) {
+            return;
+        }
+        let source = imp.source.value.as_str();
+        if source.starts_with("svelte/internal") {
+            let range = self.abs(imp.span.start, imp.span.end);
+            self.push_error(
+                Code::import_svelte_internal_forbidden,
+                crate::messages::import_svelte_internal_forbidden(),
+                range,
+            );
+        }
+        if source == "svelte" {
+            for spec in imp.specifiers.iter().flatten() {
+                use oxc_ast::ast::{ImportDeclarationSpecifier as S, ModuleExportName};
+                let S::ImportSpecifier(spec) = spec else {
+                    continue;
+                };
+                if spec.import_kind.is_type() {
+                    continue;
+                }
+                let ModuleExportName::IdentifierName(imported) = &spec.imported else {
+                    continue;
+                };
+                let name = imported.name.as_str();
+                if matches!(name, "beforeUpdate" | "afterUpdate") {
+                    let range = self.abs(spec.span.start, spec.span.end);
+                    self.push_error(
+                        Code::runes_mode_invalid_import,
+                        crate::messages::runes_mode_invalid_import(name),
+                        range,
+                    );
+                }
+            }
+        }
+    }
+
+    /// `validate_export` (runes mode): derived state, and state the
+    /// component reassigns, may not be exported. Which one `name` is
+    /// waits for the finished tree.
+    fn check_export(&mut self, name: &str, range: Range) {
+        if !self.hooks.is_some_and(|h| h.runes) {
+            return;
+        }
+        let scope = self.cur_scope();
+        self.push_gated_error(
+            ErrorGate::DerivedExport {
+                name: SmolStr::from(name),
+                scope,
+            },
+            Code::derived_invalid_export,
+            crate::messages::derived_invalid_export(),
+            range,
+        );
+        self.push_gated_error(
+            ErrorGate::ReassignedStateExport {
+                name: SmolStr::from(name),
+                scope,
+            },
+            Code::state_invalid_export,
+            crate::messages::state_invalid_export(),
+            range,
+        );
+    }
+
+    /// `ExportSpecifier.js`: outside the instance script, each exported
+    /// local goes through `validate_export`.
+    fn check_export_specifiers(&mut self, specifiers: &[oxc_ast::ast::ExportSpecifier<'_>]) {
+        use oxc_ast::ast::ModuleExportName;
+        if self.is_instance || self.hooks.is_none() {
+            return;
+        }
+        for spec in specifiers {
+            if spec.export_kind.is_type() {
+                continue;
+            }
+            let local = match &spec.local {
+                ModuleExportName::IdentifierName(id) => id.name.as_str(),
+                ModuleExportName::IdentifierReference(id) => id.name.as_str(),
+                ModuleExportName::StringLiteral(l) => l.value.as_str(),
+            };
+            let range = self.abs(spec.span.start, spec.span.end);
+            self.check_export(local, range);
+        }
+    }
+
+    /// `export { … as default }` — the error `ExportNamedDeclaration.js`
+    /// raises for a component script. Type-only specifiers are removed
+    /// before analysis.
+    fn check_default_export_specifiers(
+        &mut self,
+        specifiers: &[oxc_ast::ast::ExportSpecifier<'_>],
+        span: oxc_span::Span,
+    ) {
+        use oxc_ast::ast::ModuleExportName;
+        if self.hooks.is_none() {
+            return;
+        }
+        let exports_default = specifiers.iter().any(|s| {
+            !s.export_kind.is_type()
+                && match &s.exported {
+                    ModuleExportName::IdentifierName(id) => id.name == "default",
+                    ModuleExportName::IdentifierReference(id) => id.name == "default",
+                    ModuleExportName::StringLiteral(l) => l.value == "default",
+                }
+        });
+        if exports_default {
+            let range = self.abs(span.start, span.end);
+            self.push_error(
+                Code::module_illegal_default_export,
+                crate::messages::module_illegal_default_export(),
+                range,
+            );
         }
     }
 
@@ -2060,15 +3095,40 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     }
                 }
             }
+            // The compiler gives each top-level `$:` statement its own
+            // non-porous scope, one function level deeper.
             let prev = std::mem::replace(&mut self.in_reactive_statement, true);
-            self.visit_stmt(&lbl.body);
+            let parent_scope = self.cur_scope();
+            let scope = self.tree.new_scope(Some(parent_scope));
+            self.tree.reactive_statements.push(ReactiveStatement {
+                range: self.abs(lbl.span.start, lbl.span.end),
+                scope,
+                assignments: Vec::new(),
+            });
+            let prev_statement = self
+                .reactive_statement
+                .replace(self.tree.reactive_statements.len() - 1);
+            let events_before = self.tree.script_rule_events.len();
+            self.function_depth += 1;
+            self.with_scope(scope, |w| w.visit_stmt(&lbl.body));
+            self.function_depth -= 1;
             self.in_reactive_statement = prev;
+            self.reactive_statement = prev_statement;
+            // `LabeledStatement.js` walks a reactive statement's body
+            // twice (once to collect its dependencies, then again), so
+            // every script warning inside it is reported twice.
+            let repeated = self.tree.script_rule_events[events_before..].to_vec();
+            self.tree.script_rule_events.extend(repeated);
         } else {
             self.visit_stmt(&lbl.body);
         }
     }
 
     fn visit_class_decl(&mut self, cls: &Class<'_>) {
+        // `declare class` is removed before analysis.
+        if cls.declare {
+            return;
+        }
         if let Some(h) = self.hooks {
             let range = self.abs(cls.span.start, cls.span.end);
             h.class_declaration(
@@ -2108,42 +3168,248 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     }
 
     fn visit_class_body(&mut self, body: &ClassBody<'_>) {
+        let fields = if self.hooks.is_some_and(|h| h.runes) {
+            self.check_class_fields(body)
+        } else {
+            Vec::new()
+        };
+        let prev_fields = std::mem::replace(&mut self.state_fields, fields);
+        self.visit_class_members(body);
+        self.state_fields = prev_fields;
+    }
+
+    /// `ClassBody.js` (runes mode): collect the class's state fields
+    /// — fields and constructor `this.x = …` assignments initialised
+    /// by `$state` / `$state.raw` / `$derived` / `$derived.by` — and
+    /// reject a name declared twice, as the compiler does before
+    /// walking the members.
+    fn check_class_fields(&mut self, body: &ClassBody<'_>) -> Vec<(SmolStr, u32, bool)> {
+        use crate::messages as m;
+        let mut state_fields: Vec<(SmolStr, u32, bool)> = Vec::new();
+        let mut fields: Vec<(String, Vec<&'static str>)> = Vec::new();
+        let mut errors: Vec<(Code, String, oxc_span::Span)> = Vec::new();
+        let is_state_rune = |value: Option<&Expression<'_>>| {
+            value.is_some_and(|v| match unwrap_ts_wrappers(v) {
+                Expression::CallExpression(c) => rune_keypath(&c.callee).is_some_and(|(r, _)| {
+                    matches!(
+                        r.as_str(),
+                        "$state" | "$state.raw" | "$derived" | "$derived.by"
+                    )
+                }),
+                _ => false,
+            })
+        };
+        // The compiler's `handle(node, key, value)`.
+        let handle = |state_fields: &mut Vec<(SmolStr, u32, bool)>,
+                      fields: &[(String, Vec<&'static str>)],
+                      errors: &mut Vec<(Code, String, oxc_span::Span)>,
+                      span: oxc_span::Span,
+                      name: Option<String>,
+                      value: Option<&Expression<'_>>,
+                      assignment: bool| {
+            let Some(name) = name else { return };
+            if !is_state_rune(value) {
+                return;
+            }
+            if state_fields.iter().any(|(n, _, _)| n == name.as_str()) {
+                errors.push((
+                    Code::state_field_duplicate,
+                    m::state_field_duplicate(&name),
+                    span,
+                ));
+            }
+            if let Some((_, kinds)) = fields.iter().find(|(k, _)| *k == name)
+                && kinds.as_slice() != ["prop"]
+            {
+                errors.push((
+                    Code::duplicate_class_field,
+                    m::duplicate_class_field(&name),
+                    span,
+                ));
+            }
+            state_fields.push((SmolStr::from(name), span.start, assignment));
+        };
+        let mut constructor: Option<&oxc_ast::ast::Function<'_>> = None;
+        for member in &body.body {
+            match member {
+                ClassElement::PropertyDefinition(p) if !p.declare && !p.computed && !p.r#static => {
+                    handle(
+                        &mut state_fields,
+                        &fields,
+                        &mut errors,
+                        p.span,
+                        class_key_name(&p.key),
+                        p.value.as_ref(),
+                        false,
+                    );
+                    let key = class_key_name(&p.key).unwrap_or_default();
+                    if fields.iter().any(|(k, _)| *k == key) {
+                        errors.push((
+                            Code::duplicate_class_field,
+                            m::duplicate_class_field(&key),
+                            p.span,
+                        ));
+                    } else {
+                        let kind = if p.value.is_some() {
+                            "assigned_prop"
+                        } else {
+                            "prop"
+                        };
+                        fields.push((key, vec![kind]));
+                    }
+                }
+                ClassElement::MethodDefinition(md)
+                    if md.value.body.is_some()
+                        && md.r#type
+                            != oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition =>
+                {
+                    use oxc_ast::ast::MethodDefinitionKind as K;
+                    if md.kind == K::Constructor {
+                        constructor = Some(&md.value);
+                        continue;
+                    }
+                    if md.computed {
+                        continue;
+                    }
+                    let kind = match md.kind {
+                        K::Get => "get",
+                        K::Set => "set",
+                        _ => "method",
+                    };
+                    let key = format!(
+                        "{}{}",
+                        if md.r#static { "@" } else { "" },
+                        class_key_name(&md.key).unwrap_or_default()
+                    );
+                    let Some((_, existing)) = fields.iter_mut().find(|(k, _)| *k == key) else {
+                        fields.push((key, vec![kind]));
+                        continue;
+                    };
+                    if existing.contains(&kind)
+                        || existing.contains(&"prop")
+                        || existing.contains(&"assigned_prop")
+                    {
+                        errors.push((
+                            Code::duplicate_class_field,
+                            m::duplicate_class_field(&key),
+                            md.span,
+                        ));
+                    }
+                    let pairs = matches!(
+                        (kind, existing.as_slice()),
+                        ("get", ["set"]) | ("set", ["get"])
+                    );
+                    if pairs || kind == "method" {
+                        existing.push(kind);
+                        continue;
+                    }
+                    errors.push((
+                        Code::duplicate_class_field,
+                        m::duplicate_class_field(&key),
+                        md.span,
+                    ));
+                }
+                _ => {}
+            }
+        }
+        if let Some(body) = constructor.and_then(|f| f.body.as_ref()) {
+            for statement in &body.statements {
+                let Statement::ExpressionStatement(es) = statement else {
+                    continue;
+                };
+                let Expression::AssignmentExpression(a) = unwrap_ts_wrappers(&es.expression) else {
+                    continue;
+                };
+                if !is_this_field_target(&a.left) {
+                    continue;
+                }
+                handle(
+                    &mut state_fields,
+                    &fields,
+                    &mut errors,
+                    a.span,
+                    this_field_name(&a.left),
+                    Some(&a.right),
+                    true,
+                );
+            }
+        }
+        if let Some((code, message, span)) = errors.into_iter().next() {
+            let range = self.abs(span.start, span.end);
+            self.push_error(code, message, range);
+        }
+        state_fields
+    }
+
+    fn visit_class_members(&mut self, body: &ClassBody<'_>) {
         for m in &body.body {
+            // `declare` fields and abstract methods are removed before
+            // analysis.
+            let removed = match m {
+                ClassElement::PropertyDefinition(p) => p.declare,
+                ClassElement::MethodDefinition(md) => {
+                    md.r#type == oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition
+                }
+                _ => false,
+            };
+            if removed {
+                continue;
+            }
             let pushed = self.push_leading_ignores(Some(m.span().start));
             match m {
                 ClassElement::MethodDefinition(md) => {
-                    if md.computed
-                        && let Some(k) = expression_from_property_key(&md.key)
-                    {
-                        self.visit_expr(k);
-                    }
+                    self.visit_key(&md.key, md.computed);
+                    let constructor = md.kind == oxc_ast::ast::MethodDefinitionKind::Constructor;
                     self.with_function(|w| {
                         if let Some(body) = &md.value.body {
                             for p in &md.value.params.items {
                                 w.declare_pattern(&p.pattern, DeclarationKind::Param);
                             }
-                            for s in &body.statements {
-                                w.visit_stmt(s);
+                            if let Some(rest) = &md.value.params.rest {
+                                w.declare_pattern(&rest.rest.argument, DeclarationKind::RestParam);
+                            }
+                            if constructor {
+                                w.visit_constructor_body(body);
+                            } else {
+                                w.visit_function_body(body, md.value.generator, true);
                             }
                         }
                     });
                 }
                 ClassElement::PropertyDefinition(p) => {
-                    if p.computed
-                        && let Some(k) = expression_from_property_key(&p.key)
+                    // `PropertyDefinition.js`: a field with a value may
+                    // not precede the constructor assignment declaring
+                    // a state field of the same name.
+                    if p.value.is_some()
+                        && let Some(name) = class_key_name(&p.key)
+                        && let Some((_, start, _)) = self
+                            .state_fields
+                            .iter()
+                            .find(|(n, _, _)| n.as_str() == name)
+                        && *start != p.span.start
+                        && p.span.start < *start
                     {
-                        self.visit_expr(k);
+                        let range = self.abs(p.span.start, p.span.end);
+                        self.push_error(
+                            Code::state_field_invalid_assignment,
+                            crate::messages::state_field_invalid_assignment(),
+                            range,
+                        );
                     }
+                    self.visit_key(&p.key, p.computed);
                     if let Some(v) = &p.value {
+                        // A rune call may initialise an instance field
+                        // with a plain key.
+                        let call = (!p.r#static && !p.computed)
+                            .then(|| direct_call_span(v))
+                            .flatten();
+                        let prev = std::mem::replace(&mut self.field_init_call, call);
                         self.visit_expr(v);
+                        self.field_init_call = prev;
                     }
                 }
                 ClassElement::AccessorProperty(p) => {
-                    if p.computed
-                        && let Some(k) = expression_from_property_key(&p.key)
-                    {
-                        self.visit_expr(k);
-                    }
+                    self.visit_key(&p.key, p.computed);
                     if let Some(v) = &p.value {
                         self.visit_expr(v);
                     }
@@ -2168,6 +3434,10 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     }
 
     fn visit_var_decl(&mut self, vd: &VariableDeclaration<'_>) {
+        // `declare const x: T` is removed before analysis.
+        if vd.declare {
+            return;
+        }
         let decl_kind = match vd.kind {
             oxc_ast::ast::VariableDeclarationKind::Var => DeclarationKind::Var,
             oxc_ast::ast::VariableDeclarationKind::Let => DeclarationKind::Let,
@@ -2185,7 +3455,9 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         // (`const /* svelte-ignore … */ x = …`) leads the declarator
         // node, whose span starts at the pattern.
         let pushed = self.push_leading_ignores(Some(d.span.start));
+        self.node_spans.push((d.span.start, d.span.end));
         self.visit_declarator_inner(d, decl_kind);
+        self.node_spans.pop();
         if pushed {
             self.ignore_frames.pop();
         }
@@ -2208,7 +3480,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     .init
                     .as_ref()
                     .map(state_rune_primitive_arg)
-                    .unwrap_or(true);
+                    .unwrap_or(StateArg::Proxied);
                 (
                     BindingKind::State,
                     InitialKind::RuneCall {
@@ -2222,7 +3494,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     .init
                     .as_ref()
                     .map(state_rune_primitive_arg)
-                    .unwrap_or(true);
+                    .unwrap_or(StateArg::Proxied);
                 (
                     BindingKind::RawState,
                     InitialKind::RuneCall {
@@ -2235,21 +3507,21 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 BindingKind::Derived,
                 InitialKind::RuneCall {
                     rune: RuneCall::Derived,
-                    primitive_arg: false,
+                    primitive_arg: StateArg::Proxied,
                 },
             ),
             Some(RuneCall::DerivedBy) => (
                 BindingKind::Derived,
                 InitialKind::RuneCall {
                     rune: RuneCall::DerivedBy,
-                    primitive_arg: false,
+                    primitive_arg: StateArg::Proxied,
                 },
             ),
             Some(RuneCall::Props) => (
                 BindingKind::Prop,
                 InitialKind::RuneCall {
                     rune: RuneCall::Props,
-                    primitive_arg: false,
+                    primitive_arg: StateArg::Proxied,
                 },
             ),
             _ => match d.init.as_ref() {
@@ -2294,6 +3566,37 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
 
         self.declare_pattern_with(&d.id, decl_kind, binding_kind, &initial, is_props);
 
+        if let Some(h) = self.hooks {
+            self.check_module_import_conflict(&d.id);
+            // `VariableDeclarator.js` re-validates every declared name
+            // in runes mode, at any depth.
+            if h.runes {
+                for id in crate::scope_util::binding_idents_in_pattern(&d.id) {
+                    if let Some((code, message)) = dollar_name_error(id.name.as_str()) {
+                        let range = self.abs(id.span.start, id.span.end);
+                        self.push_error(code, message, range);
+                    }
+                }
+                if is_props {
+                    self.check_props_pattern(d);
+                }
+            } else {
+                self.check_legacy_rune_init(d);
+            }
+            // A `$bindable()` may only be the default of a property of
+            // a `$props()` destructure.
+            if is_props && let BindingPattern::ObjectPattern(op) = &d.id {
+                for prop in &op.properties {
+                    if let BindingPattern::AssignmentPattern(ap) = &prop.value
+                        && let Expression::CallExpression(call) = unwrap_ts_wrappers(&ap.right)
+                    {
+                        self.bindable_positions
+                            .push((call.span.start, call.span.end));
+                    }
+                }
+            }
+        }
+
         // `let { … } = $props()` bare identifier → RestProp (ambient-
         // style). Fix up the binding we just created.
         if is_props_identifier
@@ -2325,7 +3628,14 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             // for references inside the argument, mirroring upstream
             // `CallExpression.js:244-262`. Handled inside `visit_call`
             // below so we just continue the normal walk.
+            let prev = std::mem::replace(&mut self.declarator_init_call, direct_call_span(init));
+            let prev_ident = std::mem::replace(
+                &mut self.declarator_binds_identifier,
+                matches!(&d.id, BindingPattern::BindingIdentifier(_)),
+            );
             self.visit_expr(init);
+            self.declarator_init_call = prev;
+            self.declarator_binds_identifier = prev_ident;
         }
     }
 
@@ -2395,7 +3705,11 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                         BindingKind::BindableProp,
                         InitialKind::RuneCall {
                             rune: RuneCall::Bindable,
-                            primitive_arg: primitive,
+                            primitive_arg: if primitive {
+                                StateArg::Primitive
+                            } else {
+                                StateArg::Proxied
+                            },
                         },
                     )
                 } else {
@@ -2497,13 +3811,37 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     /// comment at all, so the common case adds one boolean check.
     fn visit_expr(&mut self, e: &Expression<'_>) {
         let pushed = self.push_leading_ignores(Some(e.span().start));
+        let is_node = !matches!(
+            e,
+            Expression::ParenthesizedExpression(_)
+                | Expression::TSAsExpression(_)
+                | Expression::TSSatisfiesExpression(_)
+                | Expression::TSNonNullExpression(_)
+                | Expression::TSTypeAssertion(_)
+                | Expression::TSInstantiationExpression(_)
+        );
+        if is_node {
+            let span = e.span();
+            self.node_spans.push((span.start, span.end));
+        }
         self.visit_expr_inner(e);
+        if is_node {
+            self.node_spans.pop();
+        }
         if pushed {
             self.ignore_frames.pop();
         }
     }
 
     fn visit_expr_inner(&mut self, e: &Expression<'_>) {
+        if matches!(
+            e,
+            Expression::Identifier(_)
+                | Expression::StaticMemberExpression(_)
+                | Expression::ComputedMemberExpression(_)
+        ) {
+            self.check_rune_reference(e, self.call_of_callee(e));
+        }
         match e {
             Expression::Identifier(id) => self.record_ref(id, RefParentKind::Read),
             Expression::ArrowFunctionExpression(arr) => {
@@ -2511,11 +3849,12 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     for p in &arr.params.items {
                         w.declare_pattern(&p.pattern, DeclarationKind::Param);
                     }
+                    if let Some(rest) = &arr.params.rest {
+                        w.declare_pattern(&rest.rest.argument, DeclarationKind::RestParam);
+                    }
                     match &arr.body {
                         oxc_ast::ast::ArrowFunctionBody::FunctionBody(body) => {
-                            for s in &body.statements {
-                                w.visit_stmt(s);
-                            }
+                            w.visit_function_body(body, false, false);
                         }
                         // A concise body holds an expression, which
                         // still references names the scope tree needs.
@@ -2548,10 +3887,11 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     for p in &f.params.items {
                         w.declare_pattern(&p.pattern, DeclarationKind::Param);
                     }
+                    if let Some(rest) = &f.params.rest {
+                        w.declare_pattern(&rest.rest.argument, DeclarationKind::RestParam);
+                    }
                     if let Some(body) = &f.body {
-                        for s in &body.statements {
-                            w.visit_stmt(s);
-                        }
+                        w.visit_function_body(body, f.generator, true);
                     }
                 });
             }
@@ -2569,7 +3909,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 }
                 self.visit_expr(&n.callee);
                 for a in &n.arguments {
-                    self.visit_argument(a, false);
+                    self.visit_argument(a, false, false);
                 }
             }
             Expression::ClassExpression(cls) => self.visit_class_common(cls),
@@ -2641,34 +3981,36 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 // inner expression.
                 self.visit_expr(&p.expression);
             }
-            Expression::StringLiteral(lit) => {
-                if let Some(h) = self.hooks {
-                    let range = self.abs(lit.span.start, lit.span.end);
-                    h.string_literal(
-                        &mut self.tree.script_rule_events,
-                        &self.ignore_frames,
-                        &lit.value,
-                        range,
-                    );
-                }
-            }
+            Expression::StringLiteral(lit) => self.string_literal_hook(lit),
             Expression::TemplateLiteral(t) => {
+                for e in &t.expressions {
+                    self.visit_expr(e);
+                }
                 if let Some(h) = self.hooks {
                     h.template_literal(
                         &mut self.tree.script_rule_events,
                         &self.ignore_frames,
+                        self.tree.bidi_warned.as_ref(),
                         t,
                         self.base_offset,
                     );
-                }
-                for e in &t.expressions {
-                    self.visit_expr(e);
                 }
             }
             Expression::TaggedTemplateExpression(t) => {
                 self.visit_expr(&t.tag);
                 for e in &t.quasi.expressions {
                     self.visit_expr(e);
+                }
+                // The template of a tagged template is an ordinary
+                // template literal to the compiler's visitors.
+                if let Some(h) = self.hooks {
+                    h.template_literal(
+                        &mut self.tree.script_rule_events,
+                        &self.ignore_frames,
+                        self.tree.bidi_warned.as_ref(),
+                        &t.quasi,
+                        self.base_offset,
+                    );
                 }
             }
             Expression::AwaitExpression(a) => {
@@ -2678,6 +4020,18 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 // exactly the three excluded node types.
                 if self.counts_await && !self.in_function_closure {
                     self.tree.has_await = true;
+                }
+                // `AwaitExpression.js`: a top-level instance `await`
+                // (function depth 1, which `$:` bodies, `$inspect` and
+                // `$props()` defaults raise) or one inside a template
+                // expression / `$derived(…)` suspends, which needs the
+                // `experimental.async` option and runes mode.
+                let top_level = self.is_instance && self.function_depth == 1 && self.rune_bump == 0;
+                if self.hooks.is_some() && (top_level || self.in_reactive_expression) {
+                    let range = self.abs(a.span.start, a.span.end);
+                    self.tree
+                        .script_rule_events
+                        .push(ScriptRuleEvent::SuspendingAwait { range });
                 }
                 self.visit_expr(&a.argument)
             }
@@ -2698,7 +4052,26 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
 
     fn visit_member_expr(&mut self, e: &Expression<'_>) {
         match e {
-            Expression::StaticMemberExpression(m) => self.visit_member_object(&m.object),
+            Expression::StaticMemberExpression(m) => {
+                // `MemberExpression.js`: a `$$` name read off a
+                // `$props()` rest binding.
+                if self.hooks.is_some()
+                    && let Expression::Identifier(object) = &m.object
+                    && m.property.name.starts_with("$$")
+                {
+                    let range = self.abs(m.property.span.start, m.property.span.end);
+                    self.push_gated_error(
+                        ErrorGate::RestProp {
+                            object: SmolStr::from(object.name.as_str()),
+                            scope: self.cur_scope(),
+                        },
+                        Code::props_illegal_name,
+                        crate::messages::props_illegal_name(),
+                        range,
+                    );
+                }
+                self.visit_member_object(&m.object)
+            }
             Expression::ComputedMemberExpression(m) => {
                 self.visit_member_object(&m.object);
                 self.visit_expr(&m.expression);
@@ -2742,13 +4115,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             let pushed = self.push_leading_ignores(Some(p.span().start));
             match p {
                 ObjectPropertyKind::ObjectProperty(op) => {
-                    if op.computed {
-                        if let PropertyKey::StaticIdentifier(_) = &op.key {
-                            // ignore
-                        } else if let Some(e) = expression_from_property_key(&op.key) {
-                            self.visit_expr(e);
-                        }
-                    }
+                    self.visit_key(&op.key, op.computed);
                     self.visit_expr(&op.value);
                 }
                 // `{ ...rest }` — walk the spread argument so
@@ -2770,25 +4137,486 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         // If this is a $derived(...) / $inspect(...) call, bump the
         // analyze-phase function_depth for its arguments.
         let rune = detect_rune_call_from_call(c);
-        let bump = matches!(
-            rune,
-            Some(RuneCall::Derived) | Some(RuneCall::DerivedBy) | Some(RuneCall::Inspect)
-        );
+        let bump = matches!(rune, Some(RuneCall::Derived) | Some(RuneCall::Inspect));
         // Track `nested_in_state_call` for refs inside arg subtrees —
         // used by state_referenced_locally's message discriminator.
         let push_state = matches!(rune, Some(RuneCall::State) | Some(RuneCall::StateRaw));
-        // Callee — flag the identifier (if any) as being the callee
-        // of a CallExpression for `store_rune_conflict`'s sake.
+        if self.hooks.is_some() {
+            self.check_rune_call(c);
+        }
+        // Callee — flag the identifier (if any) as a child of the
+        // CallExpression for `store_rune_conflict`'s sake; arguments
+        // are flagged in `visit_argument`.
+        let callee = unwrap_ts_wrappers(&c.callee).span();
+        let prev_callee = self
+            .callee_span
+            .replace(((callee.start, callee.end), (c.span.start, c.span.end)));
         self.visit_callee(&c.callee);
+        self.callee_span = prev_callee;
         if bump {
             self.rune_bump += 1;
         }
-        for a in &c.arguments {
-            self.visit_argument(a, push_state);
+        let prev_reactive = self.in_reactive_expression;
+        if rune == Some(RuneCall::Derived) {
+            self.in_reactive_expression = true;
         }
+        for a in &c.arguments {
+            self.visit_argument(a, push_state, true);
+        }
+        self.in_reactive_expression = prev_reactive;
         if bump {
             self.rune_bump -= 1;
         }
+    }
+
+    /// The errors `CallExpression.js` raises for a rune call — the
+    /// argument checks and where each rune may stand — in the order the
+    /// compiler raises them. Every one is gated on the rune name not
+    /// resolving to a binding, which is how the compiler recognises a
+    /// rune call.
+    fn check_rune_call(&mut self, c: &CallExpression<'_>) {
+        use crate::messages as m;
+        let Some((rune, root)) = rune_keypath(&c.callee) else {
+            return;
+        };
+        let range = self.abs(c.span.start, c.span.end);
+        let span = Some((c.span.start, c.span.end));
+        let args = c.arguments.len();
+        let at_instance_top = self.is_instance && self.cur_scope() == self.scope_stack[0];
+        let mut errors: Vec<(Code, String)> = Vec::new();
+        if rune != "$inspect"
+            && c.arguments
+                .iter()
+                .any(|a| matches!(a, oxc_ast::ast::Argument::SpreadElement(_)))
+        {
+            errors.push((Code::rune_invalid_spread, m::rune_invalid_spread(&rune)));
+        }
+        let exactly_one = |errors: &mut Vec<(Code, String)>| {
+            if args != 1 {
+                errors.push((
+                    Code::rune_invalid_arguments_length,
+                    m::rune_invalid_arguments_length(&rune, "exactly one argument"),
+                ));
+            }
+        };
+        match rune.as_str() {
+            "$bindable" => {
+                if args > 1 {
+                    errors.push((
+                        Code::rune_invalid_arguments_length,
+                        m::rune_invalid_arguments_length(&rune, "zero or one arguments"),
+                    ));
+                }
+                if !self
+                    .bindable_positions
+                    .contains(&(c.span.start, c.span.end))
+                {
+                    errors.push((
+                        Code::bindable_invalid_location,
+                        m::bindable_invalid_location(),
+                    ));
+                }
+            }
+            "$host" => {
+                if args > 0 {
+                    errors.push((
+                        Code::rune_invalid_arguments,
+                        m::rune_invalid_arguments(&rune),
+                    ));
+                } else {
+                    // Whether the component is a custom element is
+                    // known only once the template is read.
+                    self.push_rune_errors(&root, std::mem::take(&mut errors), range);
+                    let host_gate = ErrorGate::Host {
+                        scope: self.cur_scope(),
+                        module: self.write_origin() == WriteOrigin::Module,
+                    };
+                    self.push_gated_error(
+                        host_gate,
+                        Code::host_invalid_placement,
+                        m::host_invalid_placement(),
+                        range,
+                    );
+                    return;
+                }
+            }
+            "$props" => {
+                self.props_calls += 1;
+                if self.props_calls > 1 {
+                    errors.push((Code::props_duplicate, m::props_duplicate(&rune)));
+                }
+                if self.declarator_init_call != span || !at_instance_top {
+                    errors.push((Code::props_invalid_placement, m::props_invalid_placement()));
+                }
+                if args > 0 {
+                    errors.push((
+                        Code::rune_invalid_arguments,
+                        m::rune_invalid_arguments(&rune),
+                    ));
+                }
+            }
+            "$props.id" => {
+                self.props_id_calls += 1;
+                if self.props_id_calls > 1 {
+                    errors.push((Code::props_duplicate, m::props_duplicate(&rune)));
+                }
+                if self.declarator_init_call != span
+                    || !self.declarator_binds_identifier
+                    || !at_instance_top
+                {
+                    errors.push((
+                        Code::props_id_invalid_placement,
+                        m::props_id_invalid_placement(),
+                    ));
+                }
+                if args > 0 {
+                    errors.push((
+                        Code::rune_invalid_arguments,
+                        m::rune_invalid_arguments(&rune),
+                    ));
+                }
+            }
+            "$state" | "$state.raw" | "$derived" | "$derived.by" => {
+                let valid = self.declarator_init_call == span
+                    || self.field_init_call == span
+                    || self.constructor_assignment_call == span;
+                if !valid {
+                    errors.push((
+                        Code::state_invalid_placement,
+                        m::state_invalid_placement(&rune),
+                    ));
+                }
+                if rune.starts_with("$derived") {
+                    exactly_one(&mut errors);
+                } else if args > 1 {
+                    errors.push((
+                        Code::rune_invalid_arguments_length,
+                        m::rune_invalid_arguments_length(&rune, "zero or one arguments"),
+                    ));
+                }
+            }
+            "$effect" | "$effect.pre" => {
+                if self.statement_call != span {
+                    errors.push((
+                        Code::effect_invalid_placement,
+                        m::effect_invalid_placement(),
+                    ));
+                }
+                exactly_one(&mut errors);
+            }
+            "$effect.tracking" => {
+                if args != 0 {
+                    errors.push((
+                        Code::rune_invalid_arguments,
+                        m::rune_invalid_arguments(&rune),
+                    ));
+                }
+            }
+            "$effect.root" | "$inspect().with" | "$state.eager" | "$state.snapshot" => {
+                exactly_one(&mut errors);
+            }
+            "$inspect" => {
+                if args < 1 {
+                    errors.push((
+                        Code::rune_invalid_arguments_length,
+                        m::rune_invalid_arguments_length(&rune, "one or more arguments"),
+                    ));
+                }
+            }
+            "$inspect.trace" => {
+                if args > 1 {
+                    errors.push((
+                        Code::rune_invalid_arguments_length,
+                        m::rune_invalid_arguments_length(&rune, "zero or one arguments"),
+                    ));
+                }
+                match self.trace_slot {
+                    Some((start, end, generator)) if Some((start, end)) == span => {
+                        if generator {
+                            errors.push((
+                                Code::inspect_trace_generator,
+                                m::inspect_trace_generator(),
+                            ));
+                        }
+                    }
+                    _ => errors.push((
+                        Code::inspect_trace_invalid_placement,
+                        m::inspect_trace_invalid_placement(),
+                    )),
+                }
+            }
+            _ => {}
+        }
+        self.push_rune_errors(&root, errors, range);
+    }
+
+    fn push_rune_errors(&mut self, root: &str, errors: Vec<(Code, String)>, range: Range) {
+        let scope = self.cur_scope();
+        for (code, message) in errors {
+            self.push_gated_error(
+                ErrorGate::Unshadowed {
+                    name: SmolStr::from(root),
+                    scope,
+                },
+                code,
+                message,
+                range,
+            );
+        }
+    }
+
+    /// The call whose callee `e` is, if any.
+    fn call_of_callee(&self, e: &Expression<'_>) -> Option<(u32, u32)> {
+        let span = e.span();
+        self.callee_span
+            .filter(|(callee, _)| *callee == (span.start, span.end))
+            .map(|(_, call)| call)
+    }
+
+    /// `Identifier.js` in runes mode: a rune name may only be read as a
+    /// call's callee, through a member chain that spells a rune
+    /// (`$state.raw`). `e` is an identifier or member chain rooted at
+    /// one; `parent_call` is the call whose callee `e` is.
+    fn check_rune_reference(&mut self, e: &Expression<'_>, parent_call: Option<(u32, u32)>) {
+        let parent_is_call = parent_call.is_some();
+        use crate::messages as m;
+        if !self.hooks.is_some_and(|h| h.runes) {
+            return;
+        }
+        // The chain from the root identifier outwards.
+        let mut chain: Vec<&Expression<'_>> = vec![e];
+        let mut cur = e;
+        loop {
+            cur = match cur {
+                Expression::StaticMemberExpression(mem) => &mem.object,
+                Expression::ComputedMemberExpression(mem) => &mem.object,
+                _ => break,
+            };
+            chain.push(cur);
+        }
+        chain.reverse();
+        let Some(Expression::Identifier(root)) = chain.first() else {
+            return;
+        };
+        let root_name = root.name.as_str();
+        if !is_rune_name(root_name) {
+            return;
+        }
+        // The node enclosing `e` (the compiler reports some errors on
+        // it): the call when `e` is a callee, else the enclosing node
+        // the walk recorded.
+        let outer_parent = if parent_is_call {
+            parent_call
+        } else {
+            let n = self.node_spans.len();
+            // `node_spans` ends with `e` itself when it came through
+            // `visit_expr`.
+            let top = self.node_spans.last().copied();
+            let espan = (e.span().start, e.span().end);
+            if top == Some(espan) {
+                n.checked_sub(2)
+                    .and_then(|i| self.node_spans.get(i).copied())
+            } else {
+                top
+            }
+        };
+        let mut name = root_name.to_string();
+        let mut error: Option<(Code, String, (u32, u32))> = None;
+        for (i, link) in chain.iter().enumerate().skip(1) {
+            let link_span = (link.span().start, link.span().end);
+            let parent = match chain.get(i + 1) {
+                Some(p) => Some((p.span().start, p.span().end)),
+                None => outer_parent,
+            };
+            let property = match link {
+                Expression::StaticMemberExpression(mem) => mem.property.name.as_str(),
+                Expression::ComputedMemberExpression(_) => {
+                    error = Some((
+                        Code::rune_invalid_computed_property,
+                        m::rune_invalid_computed_property(),
+                        link_span,
+                    ));
+                    break;
+                }
+                _ => break,
+            };
+            name.push('.');
+            name.push_str(property);
+            if !is_rune_name(&name) {
+                let Some(parent) = parent else {
+                    return;
+                };
+                let (code, message) = match name.as_str() {
+                    "$effect.active" => (
+                        Code::rune_renamed,
+                        m::rune_renamed("$effect.active", "$effect.tracking"),
+                    ),
+                    "$state.frozen" => (
+                        Code::rune_renamed,
+                        m::rune_renamed("$state.frozen", "$state.raw"),
+                    ),
+                    "$state.is" => (Code::rune_removed, m::rune_removed("$state.is")),
+                    _ => (Code::rune_invalid_name, m::rune_invalid_name(&name)),
+                };
+                error = Some((code, message, parent));
+                break;
+            }
+        }
+        if error.is_none() && !parent_is_call {
+            let espan = e.span();
+            error = Some((
+                Code::rune_missing_parentheses,
+                m::rune_missing_parentheses(),
+                (espan.start, espan.end),
+            ));
+        }
+        if let Some((code, message, (start, end))) = error {
+            let range = self.abs(start, end);
+            let scope = self.cur_scope();
+            self.push_gated_error(
+                ErrorGate::Unshadowed {
+                    name: SmolStr::from(root_name),
+                    scope,
+                },
+                code,
+                message,
+                range,
+            );
+        }
+    }
+
+    /// `ensure_no_module_import_conflict`: a top-level instance
+    /// declaration may not reuse the name of a `<script module>`
+    /// import.
+    fn check_module_import_conflict(&mut self, id: &BindingPattern<'_>) {
+        if !self.is_instance || self.cur_scope() != self.scope_stack[0] {
+            return;
+        }
+        let Some(module_root) = self.tree.scopes[self.cur_scope().0 as usize].parent else {
+            return;
+        };
+        let module_scope = &self.tree.scopes[module_root.0 as usize];
+        let conflict = crate::scope_util::binding_idents_in_pattern(id)
+            .iter()
+            .any(|ident| {
+                module_scope
+                    .declarations
+                    .get(ident.name.as_str())
+                    .is_some_and(|b| {
+                        self.tree.bindings[b.0 as usize].declaration_kind == DeclarationKind::Import
+                    })
+            });
+        if conflict {
+            let span = id.span();
+            let range = self.abs(span.start, span.end);
+            self.push_error(
+                Code::declaration_duplicate_module_import,
+                crate::messages::declaration_duplicate_module_import(),
+                range,
+            );
+        }
+    }
+
+    /// The pattern a runes-mode `$props()` declarator may bind: an
+    /// identifier, or an object destructure of plain, non-computed,
+    /// non-`$$` properties.
+    fn check_props_pattern(&mut self, d: &VariableDeclarator<'_>) {
+        let scope = self.cur_scope();
+        let gate = || ErrorGate::Unshadowed {
+            name: SmolStr::new_static("$props"),
+            scope,
+        };
+        match &d.id {
+            BindingPattern::BindingIdentifier(_) => {}
+            BindingPattern::ObjectPattern(op) => {
+                for prop in &op.properties {
+                    let range = self.abs(prop.span.start, prop.span.end);
+                    if prop.computed {
+                        self.push_gated_error(
+                            gate(),
+                            Code::props_invalid_pattern,
+                            crate::messages::props_invalid_pattern(),
+                            range,
+                        );
+                    }
+                    if let PropertyKey::StaticIdentifier(key) = &prop.key
+                        && key.name.starts_with("$$")
+                    {
+                        self.push_gated_error(
+                            gate(),
+                            Code::props_illegal_name,
+                            crate::messages::props_illegal_name(),
+                            range,
+                        );
+                    }
+                    let value = match &prop.value {
+                        BindingPattern::AssignmentPattern(ap) => &ap.left,
+                        other => other,
+                    };
+                    if !matches!(value, BindingPattern::BindingIdentifier(_)) {
+                        self.push_gated_error(
+                            gate(),
+                            Code::props_invalid_pattern,
+                            crate::messages::props_invalid_pattern(),
+                            range,
+                        );
+                    }
+                }
+            }
+            _ => {
+                let range = self.abs(d.span.start, d.span.end);
+                self.push_gated_error(
+                    gate(),
+                    Code::props_invalid_identifier,
+                    crate::messages::props_invalid_identifier(),
+                    range,
+                );
+            }
+        }
+    }
+
+    /// Outside runes mode a declarator may not be initialised by a
+    /// `$state`, `$derived` or `$props` call (unless the name is a
+    /// store subscription).
+    fn check_legacy_rune_init(&mut self, d: &VariableDeclarator<'_>) {
+        let Some(Expression::CallExpression(c)) = d.init.as_ref().map(unwrap_ts_wrappers) else {
+            return;
+        };
+        let Expression::Identifier(callee) = &c.callee else {
+            return;
+        };
+        let name = callee.name.as_str();
+        if matches!(name, "$state" | "$derived" | "$props") {
+            let range = self.abs(c.span.start, c.span.end);
+            self.push_gated_error(
+                ErrorGate::NotStoreSub {
+                    name: SmolStr::from(name),
+                    scope: self.cur_scope(),
+                },
+                Code::rune_invalid_usage,
+                crate::messages::rune_invalid_usage(name),
+                range,
+            );
+        }
+    }
+
+    fn push_gated_error(&mut self, gate: ErrorGate, code: Code, message: String, range: Range) {
+        self.tree
+            .script_rule_events
+            .push(ScriptRuleEvent::GatedError {
+                gate,
+                code,
+                message,
+                range,
+            });
+    }
+
+    fn push_error(&mut self, code: Code, message: String, range: Range) {
+        self.tree.script_rule_events.push(ScriptRuleEvent::Error {
+            code,
+            message,
+            range,
+        });
     }
 
     /// One call/new argument. `as_expression()` is None for
@@ -2796,7 +4624,12 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     /// `f(...props)` must record the references inside the spread
     /// argument (verified: upstream counts them, and a `$state` read
     /// inside `f(...[count])` fires `state_referenced_locally`).
-    fn visit_argument(&mut self, a: &oxc_ast::ast::Argument<'_>, in_state_call: bool) {
+    fn visit_argument(
+        &mut self,
+        a: &oxc_ast::ast::Argument<'_>,
+        in_state_call: bool,
+        of_call: bool,
+    ) {
         if let oxc_ast::ast::Argument::SpreadElement(s) = a {
             // Anchor leading ignores at the `...`, mirroring the
             // array-spread path.
@@ -2814,6 +4647,38 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 self.ignore_frames.pop();
             }
         } else if let Some(e) = a.as_expression() {
+            // A `$name` passed straight to a call has the call as its
+            // parent node once parentheses and type wrappers are gone,
+            // which is what `store_rune_conflict` asks about.
+            let mut bare = e;
+            loop {
+                bare = match bare {
+                    Expression::ParenthesizedExpression(p) => &p.expression,
+                    Expression::TSAsExpression(x) => &x.expression,
+                    Expression::TSSatisfiesExpression(x) => &x.expression,
+                    Expression::TSNonNullExpression(x) => &x.expression,
+                    Expression::TSTypeAssertion(x) => &x.expression,
+                    _ => break,
+                };
+            }
+            if of_call
+                && let Expression::Identifier(id) = bare
+                && id.name.starts_with('$')
+            {
+                let pushed = self.push_leading_ignores(Some(e.span().start));
+                self.check_rune_reference(bare, None);
+                self.record_ref_id_full(
+                    id.name.as_str(),
+                    id.span.start,
+                    id.span.end,
+                    RefParentKind::Read,
+                    true,
+                );
+                if pushed {
+                    self.ignore_frames.pop();
+                }
+                return;
+            }
             if in_state_call {
                 self.visit_arg_inside_state_call(e);
             } else {
@@ -2850,7 +4715,10 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         match e {
             // Direct identifier / member at top level: NOT flagged
             // (mirrors upstream bug).
-            Expression::Identifier(id) => self.record_ref(id, RefParentKind::Read),
+            Expression::Identifier(id) => {
+                self.check_rune_reference(e, None);
+                self.record_ref(id, RefParentKind::Read);
+            }
             // Nested — walk with the flag ON.
             _ => {
                 let saved = std::mem::replace(&mut self.in_state_arg_nested, true);
@@ -2863,22 +4731,93 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         }
     }
 
+    /// What an assignment inside a `$:` statement tells the compiler's
+    /// reactive-statement ordering: the identifiers it assigns (not
+    /// members), and — for a plain `=` — the target identifier or
+    /// member root, whose reference is then no dependency.
+    fn note_reactive_assignment(&mut self, index: usize, a: &AssignmentExpression<'_>) {
+        let mut names = Vec::new();
+        assignment_target_identifiers(&a.left, &mut names);
+        let scope = self.cur_scope();
+        for (name, _, _) in names {
+            self.tree.reactive_statements[index]
+                .assignments
+                .push((SmolStr::from(name), scope));
+        }
+        if a.operator == oxc_syntax::operator::AssignmentOperator::Assign {
+            let target = match &a.left {
+                AssignmentTarget::AssignmentTargetIdentifier(id) => Some(id.span.start),
+                other => other
+                    .as_member_expression()
+                    .and_then(|m| member_root_identifier(m.object()))
+                    .map(|id| id.span.start),
+            };
+            if let Some(start) = target {
+                self.tree
+                    .reactive_assignment_targets
+                    .push(start + self.base_offset);
+            }
+        }
+    }
+
+    /// The state-field half of the compiler's `validate_assignment`: in
+    /// a constructor, a write to a state field may not precede the
+    /// assignment declaring it.
+    fn check_state_field_write(&mut self, name: Option<String>, span: oxc_span::Span) {
+        if !self.in_constructor_body {
+            return;
+        }
+        let Some(name) = name else { return };
+        let Some(&(_, declared_at, by_assignment)) = self
+            .state_fields
+            .iter()
+            .find(|(n, _, _)| n.as_str() == name)
+        else {
+            return;
+        };
+        if by_assignment && declared_at != span.start && span.start < declared_at {
+            let range = self.abs(span.start, span.end);
+            self.push_error(
+                Code::state_field_invalid_assignment,
+                crate::messages::state_field_invalid_assignment(),
+                range,
+            );
+        }
+    }
+
     fn visit_assignment(&mut self, a: &AssignmentExpression<'_>) {
+        if !self.state_fields.is_empty() && is_this_member_target(&a.left) {
+            self.check_state_field_write(this_field_name(&a.left), a.span);
+        }
+        if let Some(index) = self.reactive_statement {
+            self.note_reactive_assignment(index, a);
+        }
+        let mut targets = Vec::new();
+        checked_write_targets(&a.left, &mut targets);
+        let bare = matches!(a.left, AssignmentTarget::AssignmentTargetIdentifier(_));
+        self.push_write(targets, bare, a.span);
         // Record the target.
         self.visit_assignment_target(&a.left);
         self.visit_expr(&a.right);
     }
 
     fn visit_assignment_target(&mut self, t: &AssignmentTarget<'_>) {
+        self.visit_assignment_target_as(t, RefParentKind::AssignmentLeft);
+    }
+
+    /// `id_kind` is the parent kind recorded when `t` itself is a bare
+    /// identifier. Only the direct `left` of an assignment is a
+    /// write-position reference to the compiler (`parent.left ===
+    /// node`); identifiers inside a destructuring target sit under an
+    /// ArrayPattern / Property / RestElement / AssignmentPattern and
+    /// count as reads for `state_referenced_locally`, so nested
+    /// targets recurse with `Read`. The update bookkeeping is the same
+    /// for both.
+    fn visit_assignment_target_as(&mut self, t: &AssignmentTarget<'_>, id_kind: RefParentKind) {
         match t {
             AssignmentTarget::AssignmentTargetIdentifier(id) => {
                 // foo = …
-                self.record_ref_id(
-                    id.name.as_str(),
-                    id.span.start,
-                    id.span.end,
-                    RefParentKind::AssignmentLeft,
-                );
+                self.record_ref_id(id.name.as_str(), id.span.start, id.span.end, id_kind);
                 self.tree.pending_updates.push(PendingUpdate {
                     scope: self.cur_scope(),
                     name: SmolStr::from(id.name.as_str()),
@@ -2932,7 +4871,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     self.visit_assignment_target_maybe_default(el);
                 }
                 if let Some(rest) = &arr.rest {
-                    self.visit_assignment_target(&rest.target);
+                    self.visit_assignment_target_as(&rest.target, RefParentKind::Read);
                 }
             }
             AssignmentTarget::ObjectAssignmentTarget(obj) => {
@@ -2946,7 +4885,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                                 pi.binding.name.as_str(),
                                 pi.binding.span.start,
                                 pi.binding.span.end,
-                                RefParentKind::AssignmentLeft,
+                                RefParentKind::Read,
                             );
                             self.tree.pending_updates.push(PendingUpdate {
                                 scope: self.cur_scope(),
@@ -2959,17 +4898,13 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                             }
                         }
                         ATP::AssignmentTargetPropertyProperty(pp) => {
-                            if pp.computed
-                                && let Some(k) = expression_from_property_key(&pp.name)
-                            {
-                                self.visit_expr(k);
-                            }
+                            self.visit_key(&pp.name, pp.computed);
                             self.visit_assignment_target_maybe_default(&pp.binding);
                         }
                     }
                 }
                 if let Some(rest) = &obj.rest {
-                    self.visit_assignment_target(&rest.target);
+                    self.visit_assignment_target_as(&rest.target, RefParentKind::Read);
                 }
             }
             _ => {}
@@ -2983,12 +4918,12 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         use oxc_ast::ast::AssignmentTargetMaybeDefault as ATMD;
         match t {
             ATMD::AssignmentTargetWithDefault(d) => {
-                self.visit_assignment_target(&d.binding);
+                self.visit_assignment_target_as(&d.binding, RefParentKind::Read);
                 self.visit_expr(&d.init);
             }
             other => {
                 if let Some(target) = other.as_assignment_target() {
-                    self.visit_assignment_target(target);
+                    self.visit_assignment_target_as(target, RefParentKind::Read);
                 }
             }
         }
@@ -3078,11 +5013,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                             }
                         }
                         ATP::AssignmentTargetPropertyProperty(pp) => {
-                            if pp.computed
-                                && let Some(k) = expression_from_property_key(&pp.name)
-                            {
-                                self.visit_expr(k);
-                            }
+                            self.visit_key(&pp.name, pp.computed);
                             maybe_default(self, &pp.binding);
                         }
                     }
@@ -3098,6 +5029,41 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     fn visit_update(&mut self, u: &UpdateExpression<'_>) {
         // `foo++` / `foo.bar++`
         let target = &u.argument;
+        if let Some(index) = self.reactive_statement {
+            let root = match target {
+                SimpleAssignmentTarget::AssignmentTargetIdentifier(id) => Some(id.name.as_str()),
+                other => other
+                    .as_member_expression()
+                    .and_then(|m| member_root_identifier(m.object()))
+                    .map(|id| id.name.as_str()),
+            };
+            if let Some(name) = root {
+                let scope = self.cur_scope();
+                self.tree.reactive_statements[index]
+                    .assignments
+                    .push((SmolStr::from(name), scope));
+            }
+        }
+        if !self.state_fields.is_empty()
+            && let Some(member) = target.as_member_expression()
+            && matches!(member.object(), Expression::ThisExpression(_))
+        {
+            let name = match member {
+                oxc_ast::ast::MemberExpression::StaticMemberExpression(m) => {
+                    Some(m.property.name.to_string())
+                }
+                oxc_ast::ast::MemberExpression::PrivateFieldExpression(m) => {
+                    Some(format!("#{}", m.field.name))
+                }
+                oxc_ast::ast::MemberExpression::ComputedMemberExpression(m) => {
+                    literal_key_name(&m.expression)
+                }
+            };
+            self.check_state_field_write(name, u.span);
+        }
+        if let SimpleAssignmentTarget::AssignmentTargetIdentifier(id) = target {
+            self.push_write(vec![SmolStr::from(id.name.as_str())], true, u.span);
+        }
         match target {
             SimpleAssignmentTarget::AssignmentTargetIdentifier(id) => {
                 self.record_ref_id(
@@ -3168,6 +5134,16 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         parent_kind: RefParentKind,
         parent_is_call: bool,
     ) {
+        // `arguments` outside every function declaration / expression
+        // (arrows have none of their own).
+        if name == "arguments" && self.plain_function_depth == 0 && self.hooks.is_some() {
+            let range = self.abs(start, end);
+            self.push_error(
+                Code::invalid_arguments_usage,
+                crate::messages::invalid_arguments_usage(),
+                range,
+            );
+        }
         let ignored = self.current_ignore_snapshot();
         self.tree.pending_refs.push(PendingRef {
             scope: self.cur_scope(),

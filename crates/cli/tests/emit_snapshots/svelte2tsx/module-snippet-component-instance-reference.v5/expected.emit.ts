@@ -4,31 +4,24 @@
   // ...
 /** @typedef {{icon: any}} $$ComponentProps */
 function $$render_e40e2c10() {
-    const iconSnippet = () => { async () => {
+    const iconSnippet = /** @returns {ReturnType<import('svelte').Snippet>} */ () => { async () => {
         {
             const __svn_C_76 = __svn_ensure_component(Icon);
             new __svn_C_76({ target: __svn_any(), props: {"size": (16)} });
         }
         };
-        return null;
+        return __svn_any(0);
     };
-    void iconSnippet;
 
   const { icon: Icon } = $props();
     ;(async () => {
         // template type-check body (incremental)
-        (iconSnippet());
+        __svn_ensure_snippet(iconSnippet());
     });
     return { props: /** @type {$$ComponentProps} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
- */
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
- */
-/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
+/** @type {import('svelte').Component<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;

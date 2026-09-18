@@ -13,27 +13,56 @@
 //!    against `parent_inst.$$slot_def["X"]`. Driven from
 //!    [`walk_child_with_slot_let`].
 //!
-//! The "fallback" path for an `<element let:foo>` that's NOT inside a
-//! slot is [`emit_children_with_let_bindings`] — emits a loose
-//! `{ let foo: any; void foo; …children… }` wrapper so the names
-//! resolve as `any`. Type precision is the next iteration's job.
+//! 3. `let:` on a child element (or `<svelte:fragment>`) with no
+//!    `slot=` — it fills the parent's default slot, so the same wrapper
+//!    destructures against `parent_inst.$$slot_def.default`.
+//!
+//! Any other `<element let:foo>` gets no declaration: svelte2tsx writes
+//! the directive as an ordinary attribute (see
+//! [`emit_children_with_let_bindings`]).
 
 use std::collections::HashMap;
 use std::fmt::Write;
 
-use smol_str::SmolStr;
 use svn_core::Range;
 use svn_parser::{Fragment, Node};
 
 use crate::emit_buffer::EmitBuffer;
+
+thread_local! {
+    /// For each template position being walked, the instance of the
+    /// component a slot-filling element there belongs to (its
+    /// `node_start`), or `None` inside an element or snippet.
+    /// svelte2tsx pairs an element with the innermost enclosing element
+    /// or component, looking through `{#if}` / `{#each}` / `{#await}` /
+    /// `{#key}` blocks, so blocks leave this untouched.
+    static SLOT_PARENT: std::cell::RefCell<Vec<Option<u32>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// Start offsets of the first `let:` directive of each element whose
+    /// `let:` names a parent component already destructured from its
+    /// default slot. The element's own emit must not shadow them.
+    static PARENT_DESTRUCTURED_LETS: std::cell::RefCell<Vec<u32>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Start offset of the first `let:` directive among `attributes`.
+fn first_let_start(attributes: &[svn_parser::Attribute]) -> Option<u32> {
+    attributes.iter().find_map(|a| match a {
+        svn_parser::Attribute::Directive(d) if d.kind == svn_parser::DirectiveKind::Let => {
+            Some(d.range.start)
+        }
+        _ => None,
+    })
+}
 use crate::emit_template_body;
 use crate::emit_template_node;
-use crate::util::is_simple_js_identifier;
 
 /// One `<Comp let:NAME[={alias|pattern}]>` directive on a component
 /// instantiation, captured for the consumer-side slot-def
 /// destructure emit (`const { …, NAME } = inst.$$slot_def[…];`).
 pub(crate) struct LetDestructure {
+    /// In-tag comments written around the `let:` directive.
+    comments: svn_analyze::CommentThread,
     /// Length in bytes of the leading NAME portion of `pattern_text`
     /// — anchor for the TokenMap entry that maps the NAME bytes in
     /// the destructure literal back to the source `let:NAME`
@@ -48,106 +77,42 @@ pub(crate) struct LetDestructure {
     /// diagnostic on the destructure literal maps to the source
     /// NAME the user wrote.
     name_range: Range,
+    /// Source position a diagnostic on text written after this item
+    /// maps to: the brace closing its `={…}` value, or the last
+    /// character of NAME when it has none.
+    tail_anchor: Range,
     /// Source slice for the destructure pattern. For bare `let:foo`
     /// this is `"foo"`; for `let:foo={alias}` it's `"foo: alias"`;
     /// for destructure `let:foo={{a, b}}` it's `"foo: {a, b}"`.
     /// Spliced verbatim into the destructure literal — the leading
     /// `name_byte_len` bytes get a TokenMap entry, the rest is plain.
     pattern_text: String,
-    /// The local binding the destructure introduces — `name` for
-    /// shorthand, the alias for `let:foo={alias}`. None for
-    /// non-identifier nested patterns (`let:foo={{a, b}}`); those
-    /// don't get a `void <X>;` suppressor since the inner names
-    /// resolve in the body's natural scope.
-    void_target: Option<SmolStr>,
 }
 
 /// Walk the children of an element that carries `let:NAME` directives.
 ///
-/// `let:` directives on a regular element (not a component) introduce
-/// names into the consumer's scope without a producer-side `slot=`
-/// binding. We emit a looser `let name: any;` block so the names
-/// resolve inside the subtree. Type precision is lost (the narrower
-/// flow-sensitive typing upstream does is the next iteration's job),
-/// but TS2304 goes away and any expression referencing the let-name
-/// type-checks as `any`.
-///
-/// If there are no `let:` directives, this is a straight passthrough
-/// to `emit_template_body`.
+/// When a parent component destructured the names (see
+/// [`walk_child_with_slot_let`]) they are already in scope. Otherwise
+/// svelte2tsx writes each `let:` as an ordinary attribute
+/// (`Let.ts` → `handleAttribute`) and declares nothing, so the names
+/// stay undeclared in the children as well.
 pub(crate) fn emit_children_with_let_bindings(
     buf: &mut EmitBuffer,
     source: &str,
-    attributes: &[svn_parser::Attribute],
+    _attributes: &[svn_parser::Attribute],
     children: &Fragment,
     depth: usize,
     insts: &HashMap<u32, &svn_analyze::ComponentInstantiation>,
     action_counter: &mut usize,
 ) {
-    let let_names = collect_let_directive_names(source, attributes);
-    // When the element ALSO has `slot="X"`, the parent component's
-    // child-walk already opened a wrapper destructuring the same
-    // let-names against `parent_inst.$$slot_def["X"]` (see
-    // `try_emit_slot_let_consumer_open`). Re-emitting `let X: any`
-    // shadows here would mask the typed outer destructure — the
-    // consumer expressions inside would all resolve to `any` and lose
-    // strictness. Pass through to the children walk instead so the
-    // outer destructure stays in scope.
-    let parent_destructured = svn_analyze::literal_attr_value(attributes, "slot", source).is_some();
-    if let_names.is_empty() || parent_destructured {
-        emit_template_body(buf, source, children, depth, insts, action_counter);
-        return;
-    }
-    let indent = "    ".repeat(depth);
-    let inner = "    ".repeat(depth + 1);
-    let _ = writeln!(buf, "{indent}{{");
-    for name in &let_names {
-        let _ = writeln!(buf, "{inner}let {name}: any;");
-        let _ = writeln!(buf, "{inner}void {name};");
-    }
-    for node in &children.nodes {
-        emit_template_node(buf, source, node, depth + 1, insts, action_counter);
-    }
-    let _ = writeln!(buf, "{indent}}}");
+    emit_template_body(buf, source, children, depth, insts, action_counter);
 }
 
-/// Extract every binding name introduced by `let:X` directives on
-/// `attributes`. Handles both shorthand (`let:item` → "item") and
-/// aliased form (`let:item={i}` → "i"). Non-identifier destructure
-/// patterns (`let:item={{a, b}}`) aren't narrowed — we take the
-/// original directive name as the binding instead, which is a
-/// harmless no-op but avoids parse-ambiguity.
-fn collect_let_directive_names(source: &str, attributes: &[svn_parser::Attribute]) -> Vec<SmolStr> {
-    use svn_parser::{Attribute, Directive, DirectiveKind, DirectiveValue};
-    let mut out: Vec<SmolStr> = Vec::new();
-    for attr in attributes {
-        if let Attribute::Directive(Directive {
-            kind: DirectiveKind::Let,
-            name,
-            value,
-            ..
-        }) = attr
-        {
-            let bound = match value {
-                Some(DirectiveValue::Expression {
-                    expression_range, ..
-                }) => {
-                    let start = expression_range.start as usize;
-                    let end = expression_range.end as usize;
-                    let slice = source.get(start..end).unwrap_or("").trim();
-                    if is_simple_js_identifier(slice) {
-                        SmolStr::from(slice)
-                    } else {
-                        name.clone()
-                    }
-                }
-                _ => name.clone(),
-            };
-            if !out.iter().any(|n| n == &bound) {
-                out.push(bound);
-            }
-        }
-    }
-    out
+/// Were the `let:` directives among `attributes` destructured by the
+/// enclosing component's child walk? Otherwise they are attributes.
+pub(crate) fn lets_destructured_by_parent(attributes: &[svn_parser::Attribute]) -> bool {
+    first_let_start(attributes)
+        .is_some_and(|start| PARENT_DESTRUCTURED_LETS.with(|set| set.borrow().contains(&start)))
 }
 
 /// Build the `LetDestructure` list for one let-bearing element/component.
@@ -162,7 +127,7 @@ pub(crate) fn collect_let_destructures(
 ) -> Vec<LetDestructure> {
     use svn_parser::{Attribute, Directive, DirectiveKind, DirectiveValue};
     let mut out: Vec<LetDestructure> = Vec::new();
-    for attr in attributes {
+    for (index, attr) in attributes.iter().enumerate() {
         let Attribute::Directive(d) = attr else {
             continue;
         };
@@ -176,43 +141,47 @@ pub(crate) fn collect_let_destructures(
         else {
             continue;
         };
-        let (pattern_text, void_target): (String, Option<SmolStr>) = match value {
+        let pattern_text = match value {
             Some(DirectiveValue::Expression {
                 expression_range, ..
             }) => {
                 let start = expression_range.start as usize;
                 let end = expression_range.end as usize;
                 let slice = source.get(start..end).unwrap_or("").trim();
-                if slice.is_empty() {
-                    (name.to_string(), Some(name.clone()))
-                } else if is_simple_js_identifier(slice) && slice == name.as_str() {
-                    // `let:foo={foo}` — same name on both sides;
-                    // emit shorthand `foo`.
-                    (name.to_string(), Some(name.clone()))
-                } else if is_simple_js_identifier(slice) {
-                    // `let:foo={alias}` — alias rename. The introduced
-                    // local is the alias; `void <alias>;` suppresses
-                    // TS6133 on it.
-                    (
-                        format!("{}: {}", name.as_str(), slice),
-                        Some(SmolStr::from(slice)),
-                    )
+                if slice.is_empty() || slice == name.as_str() {
+                    // `let:foo` / `let:foo={foo}` — shorthand `foo`.
+                    name.to_string()
                 } else {
-                    // `let:foo={{a, b}}` — nested pattern. Emit as
-                    // `foo: <pattern>`. No `void` target — the inner
-                    // names resolve in the body's natural scope.
-                    (format!("{}: {}", name.as_str(), slice), None)
+                    // `let:foo={alias}` or `let:foo={{a, b}}`.
+                    format!("{}: {}", name.as_str(), slice)
                 }
             }
-            _ => (name.to_string(), Some(name.clone())),
+            _ => name.to_string(),
         };
         let name_start = range.start + DirectiveKind::Let.prefix_len_with_colon();
         let name_end = name_start + name.len() as u32;
+        // Upstream moves `NAME` (and `:EXPR`) into the destructure and
+        // writes its own text after it; its source map resolves that
+        // text to the closing brace after an expression, or to the
+        // name's last character.
+        let tail_anchor = match value {
+            Some(DirectiveValue::Expression {
+                expression_range, ..
+            }) => {
+                let raw = source
+                    .get(expression_range.start as usize..expression_range.end as usize)
+                    .unwrap_or("");
+                let end = expression_range.end - (raw.len() - raw.trim_end().len()) as u32;
+                Range::new(end, end + 1)
+            }
+            _ => Range::new(name_end.saturating_sub(1), name_end),
+        };
         out.push(LetDestructure {
+            comments: svn_analyze::comment_thread(attributes, index, source),
             name_byte_len: name.len(),
             name_range: Range::new(name_start, name_end),
+            tail_anchor,
             pattern_text,
-            void_target,
         });
     }
     out
@@ -240,6 +209,7 @@ pub(crate) fn collect_let_destructures(
 /// of the name, as upstream's does.
 pub(crate) fn emit_let_slot_destructure(
     buf: &mut EmitBuffer,
+    source: &str,
     inst: &svn_analyze::ComponentInstantiation,
     let_destructures: &[LetDestructure],
     slot_name: &str,
@@ -269,10 +239,12 @@ pub(crate) fn emit_let_slot_destructure(
         // dropped — leaving a real divergence with upstream
         // (e.g. slot-typechecks fixture's TS2339 on `let:d` against
         // a slot typed `{a: boolean, b: string}`).
+        crate::nodes::comment::write_leading_comments(buf, source, &d.comments);
         buf.append_with_source(&d.pattern_text[..d.name_byte_len], d.name_range);
         if d.name_byte_len < d.pattern_text.len() {
             buf.push_str(&d.pattern_text[d.name_byte_len..]);
         }
+        crate::nodes::comment::write_trailing_comments(buf, source, &d.comments);
     }
     match slot_anchor {
         Some((child_start, name_range)) => {
@@ -290,27 +262,22 @@ pub(crate) fn emit_let_slot_destructure(
             buf.push_str("]; $$_$$;\n");
         }
         None if slot_name == "default" => {
-            let _ = writeln!(buf, " }} = {inst_local}.$$slot_def.default; $$_$$;");
+            // A diagnostic on the slot access (a component whose slots
+            // are `unknown`) lands where upstream's does: after the
+            // last `let:` item.
+            buf.push_str(" } = ");
+            let access = format!("{inst_local}.$$slot_def.default");
+            match let_destructures.last() {
+                Some(last) => buf.append_with_source(&access, last.tail_anchor),
+                None => buf.push_str(&access),
+            }
+            buf.push_str("; $$_$$;\n");
         }
         None => {
             let _ = writeln!(
                 buf,
                 " }} = {inst_local}.$$slot_def[\"{slot_name}\"]; $$_$$;"
             );
-        }
-    }
-    // `void <name>;` per let-binding suppresses TS6133 on names the
-    // user's slot body doesn't reference. Without this the new
-    // TokenMap entry on the destructure name surfaces 6133 at the
-    // source `let:NAME` position — a regression for slot-let
-    // wrappers that forward without consuming (canonical layerchart
-    // pattern: `<Wrapper let:tooltip><slot {tooltip} /></Wrapper>`).
-    // 2339 / 2367 / 2353 on the destructure entry still fire
-    // because they target the destructure pattern itself, not the
-    // local binding's later use.
-    for d in let_destructures {
-        if let Some(target) = &d.void_target {
-            let _ = writeln!(buf, "{indent}void {target};");
         }
     }
 }
@@ -329,15 +296,30 @@ fn slot_let_attrs(node: &Node) -> Option<&[svn_parser::Attribute]> {
     }
 }
 
-/// True when `node` is a child element carrying `slot="X"` — a slot
-/// consumer of its parent component. Used to pre-flag the parent so its
-/// instance gets hoisted to a local (the wrapper destructure references
-/// `parent_inst.$$slot_def["X"]`).
+/// True when `node` is a slot consumer of its parent component: a child
+/// carrying `slot="X"`, or an element / `<svelte:fragment>` whose `let:`
+/// reads the default slot. Used to pre-flag the parent so its instance
+/// gets hoisted to a local (the wrapper destructure references
+/// `parent_inst.$$slot_def`).
 pub(crate) fn child_is_slot_let_consumer(source: &str, node: &Node) -> bool {
     let Some(attrs) = slot_let_attrs(node) else {
         return false;
     };
     svn_analyze::literal_attr_value(attrs, "slot", source).is_some()
+        || (fills_parent_default_slot(node) && first_let_start(attrs).is_some())
+}
+
+/// Whether `let:` on `node` (with no `slot=`) reads its parent
+/// component's default slot rather than a slot of its own.
+fn fills_parent_default_slot(node: &Node) -> bool {
+    match node {
+        Node::Element(_) => true,
+        Node::SvelteElement(e) => !matches!(
+            e.kind,
+            svn_parser::SvelteElementKind::SelfRef | svn_parser::SvelteElementKind::Component
+        ),
+        _ => false,
+    }
 }
 
 /// If `node` is a child element carrying `slot="X"`, open a wrapper
@@ -367,13 +349,17 @@ fn try_emit_slot_let_consumer_open(
     let Some((slot_name, name_range)) =
         svn_analyze::literal_attr_value_range(attrs, "slot", source)
     else {
-        return false;
+        return try_emit_default_slot_let_open(buf, source, node, attrs, parent_inst, depth);
     };
     let lets = collect_let_destructures(source, attrs);
+    if let Some(start) = first_let_start(attrs) {
+        PARENT_DESTRUCTURED_LETS.with(|set| set.borrow_mut().push(start));
+    }
     let indent = "    ".repeat(depth);
     let _ = writeln!(buf, "{indent}{{");
     emit_let_slot_destructure(
         buf,
+        source,
         parent_inst,
         &lets,
         slot_name,
@@ -383,16 +369,42 @@ fn try_emit_slot_let_consumer_open(
     true
 }
 
+/// An element (or `<svelte:fragment>`) with `let:` directives and no
+/// `slot=` fills its parent component's default slot, so svelte2tsx
+/// destructures its `let:` names from the parent's
+/// `$$slot_def.default` (`Element.ts` slot-let transformation). A
+/// component child is excluded: its `let:` reads its own default slot.
+fn try_emit_default_slot_let_open(
+    buf: &mut EmitBuffer,
+    source: &str,
+    node: &Node,
+    attrs: &[svn_parser::Attribute],
+    parent_inst: &svn_analyze::ComponentInstantiation,
+    depth: usize,
+) -> bool {
+    let Some(first_let) = first_let_start(attrs) else {
+        return false;
+    };
+    if !fills_parent_default_slot(node) {
+        return false;
+    }
+    let lets = collect_let_destructures(source, attrs);
+    let indent = "    ".repeat(depth);
+    let _ = writeln!(buf, "{indent}{{");
+    emit_let_slot_destructure(buf, source, parent_inst, &lets, "default", None, depth + 1);
+    PARENT_DESTRUCTURED_LETS.with(|set| set.borrow_mut().push(first_let));
+    true
+}
+
 #[inline]
 fn emit_slot_let_consumer_close(buf: &mut EmitBuffer, depth: usize) {
     let indent = "    ".repeat(depth);
     let _ = writeln!(buf, "{indent}}}");
 }
 
-/// Walk one child of a component, opening a slot-let consumer wrapper
-/// first when the child is a `<Inner slot="X" let:foo>` pattern.
-/// Bumps the walk depth by one inside the wrapper so the child's own
-/// emit nests under the destructure.
+/// Walk one child of a component. Elements it (or a block inside it)
+/// contains that fill one of the component's slots are wrapped by
+/// [`emit_slot_parented_node`].
 pub(crate) fn walk_child_with_slot_let(
     buf: &mut EmitBuffer,
     source: &str,
@@ -402,12 +414,76 @@ pub(crate) fn walk_child_with_slot_let(
     action_counter: &mut usize,
     parent_inst: Option<&svn_analyze::ComponentInstantiation>,
 ) {
-    let opened = parent_inst
+    with_slot_parent(parent_inst.map(|p| p.node_start), || {
+        emit_template_node(buf, source, node, depth, insts, action_counter);
+    });
+}
+
+/// Run `f` with `parent` as the slot parent of the nodes it walks.
+pub(crate) fn with_slot_parent<R>(parent: Option<u32>, f: impl FnOnce() -> R) -> R {
+    SLOT_PARENT.with(|s| s.borrow_mut().push(parent));
+    let out = f();
+    SLOT_PARENT.with(|s| s.borrow_mut().pop());
+    out
+}
+
+/// Emit an element-like node (element, component, special element),
+/// first opening a slot-let consumer wrapper when it fills a slot of
+/// the enclosing component (`<Inner slot="X" let:foo>`, or an element
+/// with `let:` filling the default slot). The node's own children get
+/// no slot parent unless it is a component and sets its own.
+pub(crate) fn emit_slot_parented_node(
+    buf: &mut EmitBuffer,
+    source: &str,
+    node: &Node,
+    depth: usize,
+    insts: &HashMap<u32, &svn_analyze::ComponentInstantiation>,
+    emit: impl FnOnce(&mut EmitBuffer, usize),
+) {
+    let parent = SLOT_PARENT
+        .with(|s| s.borrow().last().copied().flatten())
+        .and_then(|key| insts.get(&key).copied());
+    let opened = parent
         .map(|p| try_emit_slot_let_consumer_open(buf, source, node, p, depth))
         .unwrap_or(false);
     let walk_depth = if opened { depth + 1 } else { depth };
-    emit_template_node(buf, source, node, walk_depth, insts, action_counter);
+    with_slot_parent(None, || emit(buf, walk_depth));
     if opened {
         emit_slot_let_consumer_close(buf, depth);
     }
+}
+
+/// Does a component's content hold a slot consumer of it — directly
+/// or inside blocks, but not inside elements, components or snippets?
+pub(crate) fn fragment_has_slot_let_consumer(source: &str, fragment: &Fragment) -> bool {
+    fragment.nodes.iter().any(|n| match n {
+        Node::IfBlock(b) => {
+            fragment_has_slot_let_consumer(source, &b.consequent)
+                || b.elseif_arms
+                    .iter()
+                    .any(|arm| fragment_has_slot_let_consumer(source, &arm.body))
+                || b.alternate
+                    .as_ref()
+                    .is_some_and(|f| fragment_has_slot_let_consumer(source, f))
+        }
+        Node::EachBlock(b) => {
+            fragment_has_slot_let_consumer(source, &b.body)
+                || b.alternate
+                    .as_ref()
+                    .is_some_and(|f| fragment_has_slot_let_consumer(source, f))
+        }
+        Node::AwaitBlock(b) => {
+            b.pending
+                .as_ref()
+                .is_some_and(|f| fragment_has_slot_let_consumer(source, f))
+                || b.then_branch
+                    .as_ref()
+                    .is_some_and(|t| fragment_has_slot_let_consumer(source, &t.body))
+                || b.catch_branch
+                    .as_ref()
+                    .is_some_and(|c| fragment_has_slot_let_consumer(source, &c.body))
+        }
+        Node::KeyBlock(b) => fragment_has_slot_let_consumer(source, &b.body),
+        other => child_is_slot_let_consumer(source, other),
+    })
 }

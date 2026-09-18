@@ -1,0 +1,16 @@
+{
+    "errors": [
+        {
+            "file": "src/TsAs.svelte",
+            "line": 3,
+            "column": 7,
+            "code": "constant_binding"
+        },
+        {
+            "file": "src/Wrap.svelte",
+            "line": 5,
+            "column": 6,
+            "code": 2322
+        }
+    ]
+}

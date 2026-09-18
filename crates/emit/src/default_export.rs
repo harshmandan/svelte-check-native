@@ -4,9 +4,10 @@
 //! path can be read together. Two entry points used by the main flow:
 //!
 //! - [`emit_default_export_declarations_js`] — the JS-overlay shape:
-//!   a JSDoc-typed `Component<__SvnDefaultProps>` const + `export
-//!   default`. No interfaces, no class declarations (TS-only constructs
-//!   would abort tsgo's whole-program check on JS overlays).
+//!   a JSDoc-typed const (`Component<…>` or the shim's
+//!   `__SvnIsomorphicComponent<…>`) + `export default`. No interfaces,
+//!   no class declarations (TS-only constructs would abort tsgo's
+//!   whole-program check on JS overlays).
 //! - [`emit_default_export_declarations_ts`] — the TS-overlay shape:
 //!   `interface $$IsomorphicComponent`, optional class wrapper for the
 //!   generic + Props case, and the Svelte-4 widening intersections.
@@ -22,74 +23,72 @@ use crate::svelte4::compat::{fragment_contains_default_slot, fragment_contains_s
 use crate::util::{generic_arg_names, render_class_name};
 use svn_analyze::AmbientRefs;
 
-/// JS-overlay default-export shape. Captures Props via
-/// `Awaited<ReturnType<typeof $$render>>['props']` so consumer
-/// overlays see real per-element prop types (e.g. the user's local
-/// `@typedef {Object} Props` JSDoc) — not the previous loose
-/// `Record<string, any>` which let every excess prop silently pass.
-/// Closes ~40 TS2353 under-fire sites on a real-world CMS bench.
+/// JS-overlay default-export shape — upstream's
+/// `addSimpleComponentExport` for a JS file under `emitJsDoc`, written
+/// with JSDoc types because a JS overlay cannot hold TS syntax.
 ///
-/// `$$render` was modified earlier to `return { props: /** @type
-/// {PropsName} */({}) }` when PropsInfo provided a root name;
-/// otherwise it returns an empty object literal and the extracted
-/// type falls back to `{}` which degrades gracefully (no excess-prop
-/// check but no regression).
+/// Same choice as the TS path: a runes component without slots or
+/// events is a plain Svelte 5 `Component<Props, Exports, Bindings>`
+/// (upstream's `__sveltets_2_fn_component`); anything else is the
+/// isomorphic component (`__sveltets_2_isomorphic_component[_slots]`),
+/// constructible and callable, whose instance carries the component's
+/// events and slots.
 ///
-/// TS-only machinery (`interface`, `declare class`, type
-/// intersections) is intentionally absent here since those parse
-/// errors abort tsgo's whole-program check on JS overlays. See
-/// `design/js_overlay/fixture/src/03_default_export.svelte.svn.js`
-/// for the vetted shape.
+/// For a legacy (non-runes) component the props and slots go through
+/// upstream's `__sveltets_2_partial` treatment: an `undefined`-typed
+/// entry becomes `any`. A reference to `$$props` / `$$restProps` adds
+/// the any-prop index signature (`__sveltets_2_partial_with_any`).
 ///
-/// `| null` in the const's type would cause downstream
-/// `__svn_ensure_component(C)` calls to skip the strict
-/// `Component<P>` overload and fall through to the
-/// `unknown → props?: any` overload — masking excess-prop checks at
-/// every consumer. Use a double-cast so the const's TYPE is
-/// `Component<Props>` while its runtime VALUE is `null` (no actual
-/// runtime needed in a .d.ts-esque overlay).
-///
-/// The const is `export const` (not bare) and is followed by a
-/// matching `@typedef ReturnType<typeof X> X` so the same identifier
-/// has both value and type meaning. Without that pair, a consumer
-/// doing `import C from "./foo.svelte"` followed by `const x: C = …`
-/// fires TS2749 ("C refers to a value, but is being used as a type
-/// here"). The named export carries the type alias through the
-/// `.d.svelte.ts` sidecar's `export *` re-export, and the dual
-/// meaning rides on the default identifier itself — `ReturnType` is
-/// the right utility because `Component<P>` is callable-only (no ctor
-/// signature), matching the TS fn-component path's choice in
-/// [`emit_fn_component_default_export`].
+/// The const is exported and paired with a same-named `@typedef`, so
+/// `import C from './C.svelte'` gives `C` both a value and a type
+/// meaning (the instance type), as upstream's declaration merge does.
 pub(crate) fn emit_default_export_declarations_js(
     buf: &mut EmitBuffer,
+    fragment: &Fragment,
+    source: &str,
     render_name: &SmolStr,
-    has_default_slot: bool,
+    runes_mode: bool,
+    has_events: bool,
+    ambients: AmbientRefs,
 ) {
-    // A default slot adds `children?: any` to the consumer-facing
-    // props (upstream `__sveltets_2_isomorphic_component_slots` →
-    // `__sveltets_2_PropsWithChildren`), the same as the TS shape.
-    let props = format!("Awaited<ReturnType<typeof {render_name}>>['props']");
-    let props = if has_default_slot {
-        format!("__SvnSvelte4SlotedProps<{props}, {props}>")
+    let render = format!("Awaited<ReturnType<typeof {render_name}>>");
+    if runes_mode && !fragment_contains_slot(fragment) && !has_events {
+        let _ = writeln!(
+            buf,
+            "/** @type {{import('svelte').Component<{render}['props'], {render}['exports'], {render}['bindings']>}} */"
+        );
+        let _ = writeln!(
+            buf,
+            "export const __svn_component_default = /** @type {{any}} */ (null);"
+        );
+        let _ = writeln!(
+            buf,
+            "/** @typedef {{ReturnType<typeof __svn_component_default>}} __svn_component_default */"
+        );
+        buf.push_str("export default __svn_component_default;\n");
+        return;
+    }
+    let (props, slots) = if runes_mode {
+        (format!("{render}['props']"), format!("{render}['slots']"))
     } else {
-        props
+        (
+            format!("__SvnExpand<__SvnPropsAnyFallback<{render}['props']>>"),
+            format!("__SvnExpand<__SvnSlotsAnyFallback<{render}['slots']>>"),
+        )
     };
-    let _ = writeln!(buf, "/**\n * @typedef {{{props}}} __SvnDefaultProps\n */");
-    // Project the render return's `exports` surface into `Component`'s
-    // second type parameter — `ReturnType<Component<P, X>>` is
-    // `{ $on?; $set? } & X`, so instance members (`export function` /
-    // `export const` / accessors) type precisely at consumers instead
-    // of widening to `any` through the default `Exports = {}`.
-    // Mirrors upstream, whose JS path feeds createExportsStr()'s
-    // exports field into the isomorphic-component projection. Shape
-    // validated at design/js_render_full_projection/.
+    let widened = if ambients.props || ambients.rest_props {
+        format!("{props} & __SvnAllProps")
+    } else {
+        props.clone()
+    };
+    let props_arg = if fragment_contains_default_slot(fragment, source) {
+        format!("__SvnSvelte4SlotedProps<{props}, {widened}>")
+    } else {
+        widened
+    };
     let _ = writeln!(
         buf,
-        "/**\n * @typedef {{Awaited<ReturnType<typeof {render_name}>>['exports']}} __SvnDefaultExports\n */"
-    );
-    let _ = writeln!(
-        buf,
-        "/** @type {{import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>}} */"
+        "/** @type {{__SvnIsomorphicComponent<{props_arg}, {render}['events'], {slots}, {render}['exports'], {render}['bindings']>}} */"
     );
     let _ = writeln!(
         buf,
@@ -97,7 +96,7 @@ pub(crate) fn emit_default_export_declarations_js(
     );
     let _ = writeln!(
         buf,
-        "/** @typedef {{ReturnType<typeof __svn_component_default>}} __svn_component_default */"
+        "/** @typedef {{InstanceType<typeof __svn_component_default>}} __svn_component_default */"
     );
     buf.push_str("export default __svn_component_default;\n");
 }
@@ -125,10 +124,9 @@ pub(crate) fn emit_default_export_declarations_ts(
     generics: Option<&str>,
     prop_type_source: Option<&str>,
     has_dispatcher_call: bool,
-    has_concrete_dispatcher_events: bool,
+    has_events: bool,
     has_synth_events_alias: bool,
     has_strict_events_decl: bool,
-    has_bubbled_events: bool,
     runes_mode: bool,
     ambients: AmbientRefs,
 ) {
@@ -144,14 +142,7 @@ pub(crate) fn emit_default_export_declarations_ts(
     // Threlte's instancing pattern (gap-A discovery, 2026-04-27) is
     // the canonical example. See `design/gap_a_iso_extraction/` for
     // tsgo-validated repro.
-    if should_emit_fn_component_shape(
-        fragment,
-        generics,
-        has_concrete_dispatcher_events,
-        has_strict_events_decl,
-        has_bubbled_events,
-        runes_mode,
-    ) {
+    if should_emit_fn_component_shape(fragment, generics, has_events, runes_mode) {
         // Round-9 follow-up #1: fn-shape doesn't carry the typed-
         // events marker (upstream's `__sveltets_2_fn_component` is a
         // plain `Component<P, X, B>` with no events channel). For
@@ -182,30 +173,19 @@ pub(crate) fn emit_default_export_declarations_ts(
     }
 
     let prop_ty_root_name = prop_type_source.and_then(svn_analyze::root_type_name_of);
-    // v0.3 Item 3: carry the typed event surface as `& { readonly
-    // __svn_events: <Events> }` on the default export so
-    // `__svn_ensure_component`'s marker branch resolves and
-    // narrows `$on(K, cb)` per declared event.
-    //
-    // Two sources fire this:
-    //   (a) Explicit `interface $$Events` / `type $$Events` —
-    //       reference `$$Events` at module scope (it's hoisted).
-    //   (b) Synthesised `type $$Events = …` from
-    //       `createEventDispatcher<T>()` or untyped
-    //       `dispatch('name', …)` calls (#3a slice). The synth
-    //       lives INSIDE the render body, so we project it back
-    //       out via `Awaited<ReturnType<typeof $$render>>['events']`
-    //       — same indirection used for props / exports.
-    let typed_events_intersection: String = if has_strict_events_decl {
-        " & { readonly __svn_events: $$Events }".to_string()
-    } else if has_dispatcher_call || has_synth_events_alias {
-        // `has_synth_events_alias` covers the bubbled-DOM-only path
-        // (reviewer item #3c part 2): a Child with `<button on:click>`
-        // and no dispatcher synthesises `$$Events = { "click":
-        // HTMLElementEventMap["click"] }` for which the consumer must
-        // see the marker so `__svn_ensure_component`'s typed branch
-        // fires. `has_dispatcher_call` keeps the marker firing on
-        // dispatcher-only / dispatcher+bubbled mixed cases.
+    // Carry the typed event surface as `& { readonly __svn_events:
+    // <Events> }` on the default export so `__svn_ensure_component`'s
+    // marker branch resolves and narrows `$on(K, cb)` per declared
+    // event. It fires for an explicit `interface`/`type $$Events`, for
+    // events synthesised from `createEventDispatcher` / `dispatch(…)`
+    // calls, and for bubbled DOM events. Every one of those types lives
+    // in the render function (a declared `$$Events` stays there, as
+    // upstream leaves it), so the surface is projected back out of the
+    // render function's return, like props and exports.
+    let typed_events_intersection: String = if has_strict_events_decl
+        || has_dispatcher_call
+        || has_synth_events_alias
+    {
         format!(
             " & {{ readonly __svn_events: Awaited<ReturnType<typeof {render_name}>>['events'] }}"
         )
@@ -325,9 +305,13 @@ pub(crate) fn emit_default_export_declarations_ts(
         buf,
         "    new {g_prefix}(options: import('svelte').ComponentConstructorOptions<{props_arg}>): import('svelte').SvelteComponent<{svelte_component_props}, {events_src}, {slots_src}> & {{ $$bindings?: {bindings_src} }} & {exports_src};"
     );
+    // The call signature takes the props plus the `$$events` /
+    // `$$slots` carriers, or only those when the component has no
+    // props (upstream's `__sveltets_2_IsomorphicComponent`).
+    let carriers = format!("{{ $$events?: {events_src}; $$slots?: {slots_src} }}");
     let _ = writeln!(
         buf,
-        "    {g_prefix}(internal: unknown, props: {props_arg}): {exports_src} & {{ $set?: any; $on?: any }};"
+        "    {g_prefix}(internal: unknown, props: {props_arg} extends Record<string, never> ? {carriers} : {props_arg} & {carriers}): {exports_src} & {{ $set?: any; $on?: any }};"
     );
     let _ = writeln!(buf, "    z_$$bindings?: {bindings_any_src};");
     let _ = writeln!(buf, "}}");
@@ -365,34 +349,17 @@ pub(crate) fn emit_default_export_declarations_ts(
 /// exportedNames.isRunesMode() && !usesSlots && !events.hasEvents()
 /// ```
 ///
-/// Where `events.hasEvents()` (`ComponentEvents.ts`) is true if any
-/// of: declared `$$Events` interface/type, a typed
-/// `createEventDispatcher<T>()` whose `<T>` contributes properties,
-/// an untyped dispatcher whose `dispatch('name', …)` calls supply a
-/// string-literal first arg, OR a bubbled DOM/component event. We
-/// pass the equivalent set in as `has_strict_events_decl ||
-/// has_concrete_dispatcher_events || has_bubbled_events`.
+/// `has_events` is upstream's `events.hasEvents()` — whether the
+/// component's event map has any entry. A declared `$$Events` is the
+/// only source when present and contributes the events it names (an
+/// empty interface or a `type $$Events = Base` alias names none);
+/// otherwise the entries come from typed dispatchers with inline
+/// members, untyped dispatchers called with a literal name, and
+/// bubbled events. A dispatcher that is created but never produces a
+/// name contributes nothing.
 ///
-/// Round-7 follow-up #6: `has_concrete_dispatcher_events` (computed
-/// from `synthesized_events_type.is_some()` upstream of the call)
-/// only fires when there's a real event source — typed dispatcher
-/// with a type arg, or untyped dispatcher with at least one
-/// string-literal `dispatch('name', …)` call. Pre-fix native passed
-/// `has_dispatcher_call` here, which fires for ANY
-/// `createEventDispatcher()` call site regardless of whether it
-/// produces actual events. A runes component that creates a
-/// dispatcher but never dispatches anything (or doesn't supply a
-/// type arg) was wrongly disqualified from the fn-component shape.
-///
-/// Round-6 follow-up #3: pre-fix the native gate also blocked on
-/// `<svelte:options strictEvents />` (no-op in runes mode),
-/// `$$slots`/`$$restProps`/`$$props` substrings (Svelte-4 features
-/// that runes mode disallows anyway), `export let` in the instance
-/// or module script, and any non-empty `exported_locals`. None of
-/// those affect upstream's gate, so they were drift — they pushed
-/// otherwise-eligible runes components onto the iso shape and broke
-/// `Parameters<typeof Comp>` / `(typeof Comp)[]` patterns that
-/// require the callable-only Component<> form.
+/// Runes mode alone decides the rest: `<svelte:options strictEvents>`,
+/// `$$props`, `export let` and exported locals do not affect the gate.
 ///
 /// The Component<> shape's lack of a `new(...)` ctor is what makes
 /// `Parameters<typeof Comp>` and `(typeof Comp)[]` user patterns work
@@ -402,9 +369,7 @@ pub(crate) fn emit_default_export_declarations_ts(
 fn should_emit_fn_component_shape(
     fragment: &Fragment,
     generics: Option<&str>,
-    has_concrete_dispatcher_events: bool,
-    has_strict_events_decl: bool,
-    has_bubbled_events: bool,
+    has_events: bool,
     runes_mode: bool,
 ) -> bool {
     if generics.is_some() {
@@ -416,19 +381,7 @@ fn should_emit_fn_component_shape(
     if fragment_contains_slot(fragment) {
         return false;
     }
-    // events.hasEvents() — declared interface, typed/untyped
-    // dispatcher contributing concrete event names, or bubbled
-    // DOM/component events. Upstream's gate folds all three sources
-    // behind one boolean; we maintain three booleans so we can apply
-    // each at the right emit site, but at the gate they collapse to
-    // the same OR. The dispatcher signal is `concrete_dispatcher_events`
-    // (Some(synthesized_events_type)), not the broader "any
-    // createEventDispatcher() exists" — a dispatcher with no type arg
-    // and no actual `dispatch('name', …)` calls produces zero events.
-    if has_strict_events_decl || has_concrete_dispatcher_events || has_bubbled_events {
-        return false;
-    }
-    true
+    !has_events
 }
 
 /// Emit `Component<P, X, B>` default export — the

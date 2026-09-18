@@ -45,7 +45,7 @@ use oxc_ast::ast::{
 };
 use oxc_parser::Parser;
 use oxc_span::SourceType;
-use svn_core::sveltekit::{KitFilesSettings, normalise_path as normalise_kit_path};
+use svn_core::sveltekit::KitFilesSettings;
 
 /// Recognised filter operations. Each entry is a "drop this warning
 /// if" predicate; the CLI ORs them together.
@@ -191,6 +191,11 @@ pub fn find_vite_config(workspace: &Path) -> Option<PathBuf> {
 pub struct SvelteConfigSummary {
     pub warning_filter_plan: WarningFilterPlan,
     pub kit_files_settings: KitFilesSettings,
+    /// `kit_files_settings` could not be read statically (a computed
+    /// path, a `files` object imported from another module, …). Upstream
+    /// executes the config, so the caller should do the same through
+    /// [`execute_kit_files`] before trusting the defaults left here.
+    pub kit_files_unresolved: bool,
     /// `compilerOptions.namespace === 'foreign'` — preserve DOM
     /// attribute-name case in emit (upstream `preserveAttributeCase`).
     pub preserve_attribute_case: bool,
@@ -199,6 +204,24 @@ pub struct SvelteConfigSummary {
     /// `runes: true` / `runes: false` FORCES the mode; `None` keeps the
     /// per-file auto-detection.
     pub runes: Option<bool>,
+    /// `compilerOptions.experimental.async === true` — lets `await`
+    /// suspend in template expressions, `$derived` and at the top
+    /// level of a component.
+    pub experimental_async: bool,
+    /// The config's `preprocess` turns `<script lang="ts">` bodies into
+    /// JavaScript before the compiler sees them (see
+    /// [`preprocess_transpiles_ts`]). Without any config the language
+    /// server's fallback preprocessor does the same, so callers set this
+    /// for the no-config case themselves.
+    pub ts_scripts_transpiled: bool,
+    /// The config sets a `preprocess` of its own. Without one, the
+    /// language server compiles with its fallback preprocessor and
+    /// svelte-check drops parse errors it blames on missing
+    /// preprocessing (see `svn_lint::LintOptions::preprocess_configured`).
+    pub preprocess_configured: bool,
+    /// What the compiler's validation of `compilerOptions` reports, when
+    /// the options can be read statically and it reports anything.
+    pub compile_options: Option<std::sync::Arc<svn_lint::CompileOptionsCheck>>,
 }
 
 /// The per-file subset of a config — the settings upstream applies PER
@@ -209,19 +232,39 @@ pub struct ResolvedConfig {
     pub warning_filter_plan: WarningFilterPlan,
     /// `compilerOptions.runes` — see [`SvelteConfigSummary::runes`].
     pub runes: Option<bool>,
+    /// See [`SvelteConfigSummary::experimental_async`].
+    pub experimental_async: bool,
+    /// See [`SvelteConfigSummary::ts_scripts_transpiled`].
+    pub ts_scripts_transpiled: bool,
+    /// See [`SvelteConfigSummary::preprocess_configured`].
+    pub preprocess_configured: bool,
+    /// See [`SvelteConfigSummary::compile_options`].
+    pub compile_options: Option<std::sync::Arc<svn_lint::CompileOptionsCheck>>,
+}
+
+impl ResolvedConfig {
+    /// A file with no Svelte config above it: the language server
+    /// compiles it with its fallback preprocessor, which transpiles
+    /// `<script lang="ts">` bodies.
+    pub fn without_config() -> Self {
+        Self {
+            ts_scripts_transpiled: true,
+            ..Self::default()
+        }
+    }
 }
 
 /// Per-file nearest-config resolution for `warningFilter` / `runes`.
 ///
 /// Upstream's language server resolves each document's Svelte config by
 /// searching UPWARD from the file's own directory (`Document.ts` →
-/// `configLoader.awaitConfig` → `searchConfigPathUpwards`): the nearest
-/// config wins outright — no merging between configs. We mirror that
-/// between each `.svelte` file and the workspace root; files with no
-/// nearer config fall back to the workspace-root resolution the CLI
-/// already performed (which covers the `--config` override and the
-/// vite-plugin-options fallback). We deliberately do NOT search above
-/// the workspace root.
+/// `configLoader.awaitConfig` → `searchConfigPathUpwards`) all the way
+/// to the filesystem root: the nearest config wins outright — no
+/// merging between configs. A file whose search reaches the workspace
+/// root takes the workspace-root resolution the CLI already performed
+/// (which covers the `--config` override and the vite-plugin-options
+/// fallback) when the workspace has a config of its own; otherwise the
+/// search carries on through the workspace's ancestors.
 ///
 /// An explicit `--config` pins that one config for every file —
 /// upstream documents that nested configs below it are ignored.
@@ -241,6 +284,9 @@ pub struct ConfigResolver {
     root: std::sync::Arc<ResolvedConfig>,
     /// `--config` was given — every file resolves to `root`.
     explicit: bool,
+    /// `root` came from a config file in (or named for) the workspace,
+    /// so the upward search ends there.
+    root_has_config: bool,
     by_dir: std::collections::HashMap<PathBuf, std::sync::Arc<ResolvedConfig>>,
     /// Below-root configs discovered during `prime`, keyed by config
     /// path (a config shared by several directories is analysed once).
@@ -248,11 +294,17 @@ pub struct ConfigResolver {
 }
 
 impl ConfigResolver {
-    pub fn new(workspace: PathBuf, root: ResolvedConfig, explicit_config: bool) -> Self {
+    pub fn new(
+        workspace: PathBuf,
+        root: ResolvedConfig,
+        explicit_config: bool,
+        root_has_config: bool,
+    ) -> Self {
         Self {
             workspace,
             root: std::sync::Arc::new(root),
             explicit: explicit_config,
+            root_has_config,
             by_dir: std::collections::HashMap::new(),
             nested: Vec::new(),
         }
@@ -276,7 +328,7 @@ impl ConfigResolver {
         if let Some(hit) = self.by_dir.get(dir) {
             return hit.clone();
         }
-        let resolved = if dir == self.workspace.as_path() || !dir.starts_with(&self.workspace) {
+        let resolved = if dir == self.workspace.as_path() && self.root_has_config {
             // The workspace root's own config was already resolved by
             // the CLI (with --config / vite fallback) — reuse it rather
             // than re-probing the root dir.
@@ -288,6 +340,10 @@ impl ConfigResolver {
                 let rc = std::sync::Arc::new(ResolvedConfig {
                     warning_filter_plan: summary.warning_filter_plan,
                     runes: summary.runes,
+                    experimental_async: summary.experimental_async,
+                    ts_scripts_transpiled: summary.ts_scripts_transpiled,
+                    preprocess_configured: summary.preprocess_configured,
+                    compile_options: summary.compile_options,
                 });
                 self.nested.push((cfg_path, rc.clone()));
                 rc
@@ -380,8 +436,12 @@ pub fn analyse(config_path: &Path) -> SvelteConfigSummary {
     }
 
     // Kit-files extraction.
-    if let Some(files_obj) = extract_kit_files_object(&parsed.program) {
-        apply_kit_files_overrides(files_obj, &mut summary.kit_files_settings);
+    match default_export_config_object(&parsed.program) {
+        Some(root) => match read_kit_files(root) {
+            Some(settings) => summary.kit_files_settings = settings,
+            None => summary.kit_files_unresolved = true,
+        },
+        None => summary.kit_files_unresolved = true,
     }
 
     // namespace: 'foreign' → preserve attribute case.
@@ -390,7 +450,30 @@ pub fn analyse(config_path: &Path) -> SvelteConfigSummary {
     // compilerOptions.runes — config-forced runes mode.
     summary.runes =
         default_export_config_object(&parsed.program).and_then(|obj| runes_in_object(obj));
+    summary.experimental_async = default_export_config_object(&parsed.program)
+        .is_some_and(|obj| experimental_async_in_object(obj));
+    summary.ts_scripts_transpiled = default_export_config_object(&parsed.program)
+        .is_some_and(|obj| preprocess_transpiles_ts(obj, &parsed.program));
+    summary.preprocess_configured =
+        default_export_config_object(&parsed.program).is_some_and(sets_preprocess);
+    summary.compile_options =
+        default_export_config_object(&parsed.program).and_then(compile_options_check);
 
+    summary
+}
+
+/// [`analyse`], plus the kit file settings of a config that can only be
+/// read by running it (see [`execute_kit_files`]). For the config whose
+/// `kit.files` drives kit-file discovery and injection; per-directory
+/// lookups that only need compiler options use [`analyse`].
+pub fn analyse_with_kit_files(config_path: &Path) -> SvelteConfigSummary {
+    let mut summary = analyse(config_path);
+    if summary.kit_files_unresolved
+        && let Some(settings) = execute_kit_files(config_path)
+    {
+        summary.kit_files_settings = settings;
+        summary.kit_files_unresolved = false;
+    }
     summary
 }
 
@@ -436,11 +519,11 @@ pub fn analyse_vite_config(config_path: &Path) -> Option<SvelteConfigSummary> {
 
     // kit.files — only the SvelteKit plugin carries `files`, spread at
     // the top level of the options object (not under a `kit` key).
-    if is_kit
-        && let Some(files) = lookup_object_property(plugin_obj, "files")
-        && let Expression::ObjectExpression(files_obj) = files
-    {
-        apply_kit_files_overrides(files_obj, &mut summary.kit_files_settings);
+    if is_kit {
+        match read_files_settings(lookup_object_property(plugin_obj, "files")) {
+            Some(settings) => summary.kit_files_settings = settings,
+            None => summary.kit_files_unresolved = true,
+        }
     }
 
     // namespace: 'foreign' → preserve attribute case.
@@ -449,6 +532,10 @@ pub fn analyse_vite_config(config_path: &Path) -> Option<SvelteConfigSummary> {
     // compilerOptions.runes — same relative position as in
     // `svelte.config.js`.
     summary.runes = runes_in_object(plugin_obj);
+    summary.experimental_async = experimental_async_in_object(plugin_obj);
+    summary.ts_scripts_transpiled = preprocess_transpiles_ts(plugin_obj, &parsed.program);
+    summary.preprocess_configured = sets_preprocess(plugin_obj);
+    summary.compile_options = compile_options_check(plugin_obj);
 
     Some(summary)
 }
@@ -613,6 +700,73 @@ fn compiler_options_in_object<'a>(
     }
 }
 
+/// The compiler's validation of the config-root object's
+/// `compilerOptions`, when the object literal can be read statically
+/// (no spread or computed keys) and the validation reports anything.
+fn compile_options_check(
+    obj: &ObjectExpression<'_>,
+) -> Option<std::sync::Arc<svn_lint::CompileOptionsCheck>> {
+    let options = compiler_options_in_object(obj)?;
+    let svn_lint::OptionValue::Object(entries) = option_value_of_object(options) else {
+        return None;
+    };
+    let check = svn_lint::check_compile_options(&entries);
+    (!check.is_empty()).then(|| std::sync::Arc::new(check))
+}
+
+/// An object literal as a compile-option value: its entries in source
+/// order, or unknown when a spread or computed key hides them.
+fn option_value_of_object(obj: &ObjectExpression<'_>) -> svn_lint::OptionValue {
+    use svn_lint::OptionValue;
+    let mut entries = Vec::new();
+    for prop in &obj.properties {
+        let ObjectPropertyKind::ObjectProperty(p) = prop else {
+            return OptionValue::Unknown;
+        };
+        if p.computed {
+            return OptionValue::Unknown;
+        }
+        let key = match &p.key {
+            PropertyKey::StaticIdentifier(id) => id.name.to_string(),
+            PropertyKey::StringLiteral(s) => s.value.to_string(),
+            _ => return OptionValue::Unknown,
+        };
+        let value = match p.kind {
+            oxc_ast::ast::PropertyKind::Init if p.method => OptionValue::Function,
+            oxc_ast::ast::PropertyKind::Init => option_value_of(&p.value),
+            _ => OptionValue::Unknown,
+        };
+        entries.push((key, value));
+    }
+    OptionValue::Object(entries)
+}
+
+/// A compile-option value, as far as a static read can tell.
+fn option_value_of(expr: &Expression<'_>) -> svn_lint::OptionValue {
+    use svn_lint::OptionValue;
+    match expr {
+        Expression::ParenthesizedExpression(p) => option_value_of(&p.expression),
+        Expression::TSAsExpression(t) => option_value_of(&t.expression),
+        Expression::TSSatisfiesExpression(t) => option_value_of(&t.expression),
+        Expression::BooleanLiteral(b) => OptionValue::Bool(b.value),
+        Expression::StringLiteral(s) => OptionValue::Str(s.value.to_string()),
+        Expression::NumericLiteral(n) => OptionValue::Num(n.value),
+        Expression::NullLiteral(_) => OptionValue::Null,
+        Expression::Identifier(id) if id.name == "undefined" => OptionValue::Undefined,
+        Expression::TemplateLiteral(t) if t.expressions.is_empty() => t
+            .quasis
+            .first()
+            .and_then(|q| q.value.cooked.as_ref())
+            .map_or(OptionValue::Unknown, |c| OptionValue::Str(c.to_string())),
+        Expression::ArrayExpression(_) => OptionValue::Array,
+        Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => {
+            OptionValue::Function
+        }
+        Expression::ObjectExpression(o) => option_value_of_object(o),
+        _ => OptionValue::Unknown,
+    }
+}
+
 /// `compilerOptions.namespace === 'foreign'` inside a config-root object.
 fn preserve_case_in_object(obj: &ObjectExpression<'_>) -> bool {
     compiler_options_in_object(obj)
@@ -631,14 +785,149 @@ fn runes_in_object(obj: &ObjectExpression<'_>) -> Option<bool> {
     }
 }
 
-/// `kit.files` inside the exported config object. Export-shape
-/// traversal (default export, `module.exports`, named-const
-/// indirection, `defineConfig` / `satisfies` wrappers) is shared via
-/// [`default_export_config_object`].
-fn extract_kit_files_object<'a>(
+/// `compilerOptions.experimental.async` is the literal `true` inside a
+/// config-root object.
+fn experimental_async_in_object(obj: &ObjectExpression<'_>) -> bool {
+    let Some(Expression::ObjectExpression(experimental)) =
+        compiler_options_in_object(obj).and_then(|co| lookup_object_property(co, "experimental"))
+    else {
+        return false;
+    };
+    matches!(
+        lookup_object_property(experimental, "async"),
+        Some(Expression::BooleanLiteral(b)) if b.value
+    )
+}
+
+/// Whether the config-root object's `preprocess` transpiles
+/// `<script lang="ts">` bodies to JavaScript before the compiler runs:
+///
+/// - `vitePreprocess()` only does so with `{ script: true }`;
+/// - `sveltePreprocess(...)` does unless given `typescript: false`;
+/// - a hand-written preprocessor object does when it has a `script`
+///   hook;
+/// - an array does when any of its preprocessors does.
+///
+/// Anything else (no `preprocess`, an unrecognised call) is taken to
+/// leave scripts alone.
+/// Whether the config object's `preprocess` is set to anything but a
+/// falsy literal.
+fn sets_preprocess(obj: &ObjectExpression<'_>) -> bool {
+    match lookup_object_property(obj, "preprocess") {
+        None => false,
+        Some(Expression::NullLiteral(_)) => false,
+        Some(Expression::BooleanLiteral(b)) => b.value,
+        Some(Expression::Identifier(id)) => id.name != "undefined",
+        Some(_) => true,
+    }
+}
+
+fn preprocess_transpiles_ts(
+    obj: &ObjectExpression<'_>,
+    program: &oxc_ast::ast::Program<'_>,
+) -> bool {
+    lookup_object_property(obj, "preprocess")
+        .is_some_and(|value| preprocessor_transpiles_ts(value, program, 0))
+}
+
+fn preprocessor_transpiles_ts(
+    expr: &Expression<'_>,
+    program: &oxc_ast::ast::Program<'_>,
+    depth: u8,
+) -> bool {
+    if depth > 8 {
+        return false;
+    }
+    match expr {
+        Expression::ParenthesizedExpression(p) => {
+            preprocessor_transpiles_ts(&p.expression, program, depth + 1)
+        }
+        Expression::TSAsExpression(e) => {
+            preprocessor_transpiles_ts(&e.expression, program, depth + 1)
+        }
+        Expression::TSSatisfiesExpression(e) => {
+            preprocessor_transpiles_ts(&e.expression, program, depth + 1)
+        }
+        Expression::ArrayExpression(arr) => arr.elements.iter().any(|el| {
+            el.as_expression()
+                .is_some_and(|e| preprocessor_transpiles_ts(e, program, depth + 1))
+        }),
+        Expression::ObjectExpression(o) => o.properties.iter().any(|p| {
+            matches!(p, ObjectPropertyKind::ObjectProperty(p)
+                if matches!(&p.key, PropertyKey::StaticIdentifier(id) if id.name == "script"))
+        }),
+        Expression::Identifier(id) => top_level_const_init(program, id.name.as_str())
+            .is_some_and(|init| preprocessor_transpiles_ts(init, program, depth + 1)),
+        Expression::CallExpression(call) => {
+            let Expression::Identifier(callee) = &call.callee else {
+                return false;
+            };
+            let options = call
+                .arguments
+                .first()
+                .and_then(|a| a.as_expression())
+                .and_then(|e| match e {
+                    Expression::ObjectExpression(o) => Some(&**o),
+                    _ => None,
+                });
+            let flag = |key: &str| match options.and_then(|o| lookup_object_property(o, key)) {
+                Some(Expression::BooleanLiteral(b)) => Some(b.value),
+                _ => None,
+            };
+            match import_source(program, callee.name.as_str()) {
+                Some(("@sveltejs/vite-plugin-svelte" | "@sveltejs/kit/vite", "vitePreprocess")) => {
+                    flag("script") == Some(true)
+                }
+                Some(("svelte-preprocess", _)) => flag("typescript") != Some(false),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// The module and imported name a top-level import binds to `local`
+/// (`"default"` for a default import).
+fn import_source<'a>(
     program: &'a oxc_ast::ast::Program<'a>,
-) -> Option<&'a ObjectExpression<'a>> {
-    kit_files_from_root(default_export_config_object(program)?)
+    local: &str,
+) -> Option<(&'a str, &'a str)> {
+    use oxc_ast::ast::ImportDeclarationSpecifier as S;
+    program.body.iter().find_map(|stmt| {
+        let Statement::ImportDeclaration(decl) = stmt else {
+            return None;
+        };
+        decl.specifiers
+            .iter()
+            .flatten()
+            .find_map(|spec| match spec {
+                S::ImportSpecifier(s) if s.local.name == local => {
+                    Some((decl.source.value.as_str(), s.imported.name().as_str()))
+                }
+                S::ImportDefaultSpecifier(s) if s.local.name == local => {
+                    Some((decl.source.value.as_str(), "default"))
+                }
+                _ => None,
+            })
+    })
+}
+
+/// The initializer of a top-level `const`/`let`/`var` named `name`.
+fn top_level_const_init<'a>(
+    program: &'a oxc_ast::ast::Program<'a>,
+    name: &str,
+) -> Option<&'a Expression<'a>> {
+    program.body.iter().find_map(|stmt| {
+        let Statement::VariableDeclaration(vd) = stmt else {
+            return None;
+        };
+        vd.declarations.iter().find_map(|d| match &d.id {
+            oxc_ast::ast::BindingPattern::BindingIdentifier(id) if id.name == name => {
+                d.init.as_ref()
+            }
+            _ => None,
+        })
+    })
 }
 
 /// Strip common one-level wrappers that don't change the underlying
@@ -668,49 +957,210 @@ fn unwrap_config_wrapper<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
     }
 }
 
-/// Given the root config object, return its `kit.files` if present.
-fn kit_files_from_root<'a>(root: &'a ObjectExpression<'a>) -> Option<&'a ObjectExpression<'a>> {
-    let kit = lookup_object_property(root, "kit")?;
-    let Expression::ObjectExpression(kit_obj) = kit else {
+/// The kit file settings a config-root object yields, or `None` when
+/// they depend on something only running the config can tell.
+///
+/// Mirrors how upstream svelte-check reads the executed config: the
+/// kit options are the root itself when it has a `files` key (the
+/// SvelteKit 3 shape) and its `kit` object otherwise, and each path is
+/// `files.params ?? default` / `files.hooks?.server ?? default` —
+/// taken verbatim, with no normalisation.
+fn read_kit_files(root: &ObjectExpression<'_>) -> Option<KitFilesSettings> {
+    if has_unknown_keys(root) {
         return None;
-    };
-    let files = lookup_object_property(kit_obj, "files")?;
-    if let Expression::ObjectExpression(files_obj) = files {
-        Some(files_obj)
-    } else {
-        None
+    }
+    if let Some(files) = lookup_object_property(root, "files") {
+        return read_files_settings(Some(files));
+    }
+    match lookup_object_property(root, "kit").map(unwrap_parens) {
+        None => Some(KitFilesSettings::default()),
+        Some(kit) if is_nullish(kit) => Some(KitFilesSettings::default()),
+        Some(Expression::ObjectExpression(kit)) if !has_unknown_keys(kit) => {
+            read_files_settings(lookup_object_property(kit, "files"))
+        }
+        Some(_) => None,
     }
 }
 
-/// Apply each recognised key in `files: { … }` onto `settings`.
-/// String values get normalised — leading `./` and trailing `/` are
-/// stripped so the suffix-match in `classify` lines up regardless of
-/// how the user spelled the path.
-fn apply_kit_files_overrides(files_obj: &ObjectExpression<'_>, settings: &mut KitFilesSettings) {
-    if let Some(p) = lookup_string_property(files_obj, "params") {
-        settings.params_path = normalise_kit_path(&p);
+/// Settings from a `files` value (absent when `None`); `None` when the
+/// value can't be read statically.
+fn read_files_settings(files: Option<&Expression<'_>>) -> Option<KitFilesSettings> {
+    let mut settings = KitFilesSettings::default();
+    let Some(files) = files.map(unwrap_parens) else {
+        return Some(settings);
+    };
+    if is_nullish(files) {
+        return Some(settings);
     }
-    if let Some(hooks_expr) = lookup_object_property(files_obj, "hooks") {
-        match hooks_expr {
-            // Legacy form: `hooks: 'src/myhooks'` → universal only.
-            Expression::StringLiteral(s) => {
-                settings.universal_hooks_path = normalise_kit_path(s.value.as_str());
+    let Expression::ObjectExpression(files) = files else {
+        return None;
+    };
+    if has_unknown_keys(files) {
+        return None;
+    }
+    if let Some(p) = read_path_value(lookup_object_property(files, "params"))? {
+        settings.params_path = p;
+    }
+    let hooks = lookup_object_property(files, "hooks").map(unwrap_parens);
+    match hooks {
+        None => {}
+        Some(h) if is_nullish(h) => {}
+        // `hooks?.server` on a string (or any other primitive) is
+        // `undefined`, so every hooks path keeps its default.
+        Some(
+            Expression::StringLiteral(_)
+            | Expression::TemplateLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BooleanLiteral(_),
+        ) => {}
+        Some(Expression::ObjectExpression(h)) if !has_unknown_keys(h) => {
+            if let Some(p) = read_path_value(lookup_object_property(h, "server"))? {
+                settings.server_hooks_path = p;
             }
-            // Modern form: `hooks: { server, client, universal }`.
-            Expression::ObjectExpression(hobj) => {
-                if let Some(p) = lookup_string_property(hobj, "server") {
-                    settings.server_hooks_path = normalise_kit_path(&p);
-                }
-                if let Some(p) = lookup_string_property(hobj, "client") {
-                    settings.client_hooks_path = normalise_kit_path(&p);
-                }
-                if let Some(p) = lookup_string_property(hobj, "universal") {
-                    settings.universal_hooks_path = normalise_kit_path(&p);
-                }
+            if let Some(p) = read_path_value(lookup_object_property(h, "client"))? {
+                settings.client_hooks_path = p;
             }
-            _ => {}
+            if let Some(p) = read_path_value(lookup_object_property(h, "universal"))? {
+                settings.universal_hooks_path = p;
+            }
+        }
+        Some(_) => return None,
+    }
+    Some(settings)
+}
+
+/// A path value: `Some(None)` when absent or nullish (the default
+/// applies), `Some(Some(path))` for a string, `None` when unknown.
+fn read_path_value(value: Option<&Expression<'_>>) -> Option<Option<String>> {
+    let Some(value) = value.map(unwrap_parens) else {
+        return Some(None);
+    };
+    if is_nullish(value) {
+        return Some(None);
+    }
+    match value {
+        Expression::StringLiteral(s) => Some(Some(s.value.to_string())),
+        Expression::TemplateLiteral(t) if t.expressions.is_empty() => t
+            .quasis
+            .first()
+            .map(|q| Some(q.value.cooked.as_ref().unwrap_or(&q.value.raw).to_string())),
+        _ => None,
+    }
+}
+
+/// An object whose keys can't all be read statically — a spread or a
+/// computed key could supply any property.
+fn has_unknown_keys(obj: &ObjectExpression<'_>) -> bool {
+    obj.properties.iter().any(|prop| match prop {
+        ObjectPropertyKind::SpreadProperty(_) => true,
+        ObjectPropertyKind::ObjectProperty(p) => p.computed,
+    })
+}
+
+fn is_nullish(expr: &Expression<'_>) -> bool {
+    match expr {
+        Expression::NullLiteral(_) => true,
+        Expression::Identifier(id) => id.name == "undefined",
+        _ => false,
+    }
+}
+
+fn unwrap_parens<'a>(mut expr: &'a Expression<'a>) -> &'a Expression<'a> {
+    while let Expression::ParenthesizedExpression(p) = expr {
+        expr = &p.expression;
+    }
+    expr
+}
+
+/// Read a `svelte.config.{js,cjs,mjs}`'s kit file settings by running
+/// it, as upstream svelte-check does: the config module is imported
+/// with Node and its default export read exactly like
+/// [`read_kit_files`] reads the literal.
+///
+/// `None` when Node can't be started, so the caller keeps its static
+/// best effort. A config that fails to load (or exports nothing)
+/// yields the defaults, which is what upstream falls back to.
+pub fn execute_kit_files(config_path: &Path) -> Option<KitFilesSettings> {
+    const SCRIPT: &str = r#"
+const { pathToFileURL } = await import('node:url');
+let out = null;
+try {
+    const config = (await import(pathToFileURL(process.argv[1]).href))?.default;
+    const kit = config && ('files' in config ? config : config.kit);
+    const files = kit?.files;
+    const str = (v) => (v === undefined || v === null ? null : String(v));
+    out = files
+        ? {
+              params: str(files.params),
+              server: str(files.hooks?.server),
+              client: str(files.hooks?.client),
+              universal: str(files.hooks?.universal)
+          }
+        : {};
+} catch {
+    out = {};
+}
+process.stdout.write('\n' + JSON.stringify(out) + '\n');
+process.exit(0);
+"#;
+    let ext = config_path.extension().and_then(|e| e.to_str())?;
+    if !matches!(ext, "js" | "cjs" | "mjs") {
+        return None;
+    }
+    let mut child = std::process::Command::new("node")
+        .arg("--input-type=module")
+        .arg("-e")
+        .arg(SCRIPT)
+        .arg(config_path)
+        .current_dir(config_path.parent()?)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    // Drain stdout on its own thread so a config that prints a lot can't
+    // block on a full pipe while we wait.
+    let mut pipe = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = std::io::Read::read_to_string(&mut pipe, &mut text);
+        text
+    });
+    // A config that never settles (an open handle, a server started at
+    // import time) must not hang the check.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Some(KitFilesSettings::default());
+            }
         }
     }
+    let stdout = reader.join().ok()?;
+    // The config may print; the result is the last line.
+    let line = stdout.lines().rev().find(|l| l.starts_with('{'))?;
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    let mut settings = KitFilesSettings::default();
+    let field = |key: &str| value.get(key).and_then(|v| v.as_str()).map(str::to_string);
+    if let Some(p) = field("params") {
+        settings.params_path = p;
+    }
+    if let Some(p) = field("server") {
+        settings.server_hooks_path = p;
+    }
+    if let Some(p) = field("client") {
+        settings.client_hooks_path = p;
+    }
+    if let Some(p) = field("universal") {
+        settings.universal_hooks_path = p;
+    }
+    Some(settings)
 }
 
 /// Look up a string-keyed property on an ObjectExpression and return
@@ -1451,7 +1901,8 @@ export default {
         )
         .unwrap();
 
-        let mut resolver = ConfigResolver::new(root.clone(), ResolvedConfig::default(), false);
+        let mut resolver =
+            ConfigResolver::new(root.clone(), ResolvedConfig::default(), false, false);
         let nested_file = app.join("src/App.svelte");
         let root_file = root.join("lib/Root.svelte");
         resolver.prime([&nested_file, &root_file]);
@@ -1490,7 +1941,7 @@ export default {
         )
         .unwrap();
 
-        let mut resolver = ConfigResolver::new(root, ResolvedConfig::default(), false);
+        let mut resolver = ConfigResolver::new(root, ResolvedConfig::default(), false, false);
         let file = deep.join("Deep.svelte");
         resolver.prime([&file]);
         assert_eq!(resolver.for_path(&file).runes, Some(true));
@@ -1514,7 +1965,9 @@ export default {
             ResolvedConfig {
                 warning_filter_plan: WarningFilterPlan::default(),
                 runes: Some(false),
+                ..ResolvedConfig::default()
             },
+            true,
             true,
         );
         let file = app.join("App.svelte");
@@ -1522,11 +1975,151 @@ export default {
         assert_eq!(resolver.for_path(&file).runes, Some(false));
     }
 
+    #[test]
+    fn config_resolver_searches_above_a_workspace_without_config() {
+        // The workspace (packages/app) has no config of its own; the
+        // nearest one is two levels up.
+        let ws = tempfile::tempdir().unwrap();
+        let top = ws.path().to_path_buf();
+        let app = top.join("packages/app");
+        std::fs::create_dir_all(app.join("src")).unwrap();
+        std::fs::write(
+            top.join("svelte.config.js"),
+            "export default { compilerOptions: { runes: true } };",
+        )
+        .unwrap();
+        let file = app.join("src/A.svelte");
+
+        let mut resolver =
+            ConfigResolver::new(app.clone(), ResolvedConfig::default(), false, false);
+        resolver.prime([&file]);
+        assert_eq!(resolver.for_path(&file).runes, Some(true));
+
+        // A workspace with its own config ends the search there.
+        let mut resolver = ConfigResolver::new(app, ResolvedConfig::default(), false, true);
+        resolver.prime([&file]);
+        assert_eq!(resolver.for_path(&file).runes, None);
+    }
+
+    #[test]
+    fn kit_files_paths_are_taken_verbatim() {
+        let s = summary_of(
+            "export default { kit: { files: { params: './src/m/', hooks: { server: './src/hooks.server' } } } };",
+        );
+        assert!(!s.kit_files_unresolved);
+        assert_eq!(s.kit_files_settings.params_path, "./src/m/");
+        assert_eq!(s.kit_files_settings.server_hooks_path, "./src/hooks.server");
+        assert_eq!(s.kit_files_settings.client_hooks_path, "src/hooks.client");
+    }
+
+    #[test]
+    fn kit_files_string_hooks_keep_every_default() {
+        // `files.hooks?.server` on a string is undefined.
+        let s = summary_of("export default { kit: { files: { hooks: 'src/h' } } };");
+        assert!(!s.kit_files_unresolved);
+        assert_eq!(s.kit_files_settings, KitFilesSettings::default());
+    }
+
+    #[test]
+    fn kit_files_top_level_files_wins_over_kit() {
+        let s = summary_of(
+            "export default { files: { params: 'a' }, kit: { files: { params: 'b' } } };",
+        );
+        assert_eq!(s.kit_files_settings.params_path, "a");
+    }
+
+    #[test]
+    fn kit_files_computed_values_are_unresolved() {
+        for src in [
+            "import path from 'node:path';\nexport default { kit: { files: { params: path.join('src', 'm') } } };",
+            "import { files } from './f.js';\nexport default { kit: { files } };",
+            "const kit = { files: {} };\nexport default { kit: { ...kit } };",
+            "export default makeConfig();",
+        ] {
+            assert!(summary_of(src).kit_files_unresolved, "{src}");
+        }
+        assert!(!summary_of("export default { compilerOptions: {} };").kit_files_unresolved);
+    }
+
+    #[test]
+    fn kit_files_are_read_by_running_the_config() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("files.js"),
+            "export const files = { params: ['src', 'matchers'].join('/'), hooks: { client: 'c' } };",
+        )
+        .unwrap();
+        let path = dir.path().join("svelte.config.mjs");
+        std::fs::write(
+            &path,
+            "import { files } from './files.js';\nconsole.log('noise');\nexport default { kit: { files } };",
+        )
+        .unwrap();
+        // Without Node on the machine the static defaults stay.
+        if std::process::Command::new("node")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let s = analyse_with_kit_files(&path);
+        assert!(!s.kit_files_unresolved);
+        assert_eq!(s.kit_files_settings.params_path, "src/matchers");
+        assert_eq!(s.kit_files_settings.client_hooks_path, "c");
+        assert_eq!(s.kit_files_settings.server_hooks_path, "src/hooks.server");
+
+        // A config that throws while loading yields the defaults.
+        std::fs::write(
+            &path,
+            "throw new Error('no');\nexport default { kit: { files } };",
+        )
+        .unwrap();
+        assert_eq!(
+            analyse_with_kit_files(&path).kit_files_settings,
+            KitFilesSettings::default()
+        );
+    }
+
     fn summary_of(src: &str) -> SvelteConfigSummary {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("svelte.config.mjs");
         std::fs::write(&path, src).unwrap();
         analyse(&path)
+    }
+
+    #[test]
+    fn script_preprocessors_that_transpile_typescript() {
+        let transpiles = |src: &str| summary_of(src).ts_scripts_transpiled;
+        let vite = "import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';\n";
+        assert!(!transpiles("export default {};"));
+        assert!(!transpiles(&format!(
+            "{vite}export default {{ preprocess: vitePreprocess() }};"
+        )));
+        assert!(!transpiles(&format!(
+            "{vite}export default {{ preprocess: vitePreprocess({{ script: false }}) }};"
+        )));
+        assert!(transpiles(&format!(
+            "{vite}export default {{ preprocess: vitePreprocess({{ script: true }}) }};"
+        )));
+        assert!(transpiles(&format!(
+            "{vite}const pre = [vitePreprocess({{ script: true }})];\nexport default {{ preprocess: pre }};"
+        )));
+        assert!(transpiles(
+            "import { vitePreprocess } from '@sveltejs/kit/vite';\nexport default { preprocess: [vitePreprocess({ script: true })] };"
+        ));
+        assert!(transpiles(
+            "import sveltePreprocess from 'svelte-preprocess';\nexport default { preprocess: sveltePreprocess() };"
+        ));
+        assert!(!transpiles(
+            "import sveltePreprocess from 'svelte-preprocess';\nexport default { preprocess: sveltePreprocess({ typescript: false }) };"
+        ));
+        assert!(transpiles(
+            "export default { preprocess: { script: ({ content }) => ({ code: content }) } };"
+        ));
+        assert!(!transpiles(
+            "import { mdsvex } from 'mdsvex';\nexport default { preprocess: [mdsvex()] };"
+        ));
     }
 
     #[test]

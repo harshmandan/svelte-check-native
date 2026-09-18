@@ -1,0 +1,53 @@
+{
+    "errors": [
+        {
+            "file": "src/Head.svelte",
+            "line": 3,
+            "column": 21,
+            "code": 2353
+        },
+        {
+            "file": "src/Parent2.svelte",
+            "line": 3,
+            "column": 53,
+            "code": 2345
+        },
+        {
+            "file": "src/Parent.svelte",
+            "line": 10,
+            "column": 6,
+            "code": 2345
+        },
+        {
+            "file": "src/Parent.svelte",
+            "line": 11,
+            "column": 6,
+            "code": 2345
+        },
+        {
+            "file": "src/Parent.svelte",
+            "line": 12,
+            "column": 11,
+            "code": 2345
+        },
+        {
+            "file": "src/Parent.svelte",
+            "line": 15,
+            "column": 11,
+            "code": 2345
+        },
+        {
+            "file": "src/Parent.svelte",
+            "line": 16,
+            "column": 9,
+            "code": 2345
+        },
+        {
+            "file": "src/Parent.svelte",
+            "line": 18,
+            "column": 29,
+            "code": 2339
+        }
+    ],
+    "_note": "Event typing follows upstream's ComponentEvents. strictEvents is on when any script or style tag of the file (including one written inside the markup) has an attribute named exactly strictEvents, whatever its value; a differently-cased name does not count. An untyped dispatcher's events include names it is called with in the template (on:click={() => fire('go')}, fire(7) gives event 7), and only the first createEventDispatcher import specifier is a dispatcher constructor, so a second alias's typed map is not an event source. JavaScript components get the same collected event map as TS ones (strict: unknown on: names are TS2345; bubbled DOM events keep their DOM type). Warnings are not asserted. Verified against upstream svelte-check --tsgo with svelte 5.55."
+}

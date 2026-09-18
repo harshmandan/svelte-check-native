@@ -3,46 +3,38 @@
 async function $$render_e40e2c10<T>() {
     type $$ComponentProps = { prop?: T };
     type $$Events = {};
-    const x = (): any => { async () => {
-        (await promise);
+    const x = (): ReturnType<import('svelte').Snippet> => { async () => {
+        await promise;
         };
-        return null as any;
+        return __svn_any(0);
     };
-    void x;
 
     let { prop }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     const foo = await fetch('/foo');
     const promise = fetch('/bar');
     ;(async () => {
         // template type-check body (incremental)
-        (foo);
-        (await promise);
+        foo;
+        await promise;
         for (let item of __svn_each_items(await promise)) {
-            (item);
-            void item;
+            item;
         }
         for (let item of __svn_each_items(await promise)) {
-            let i: number = 0;
-            (item);
-            (i);
-            void item;
-            void i;
+            let i = 1;
+            item;
+            i;
         }
         for (let item of __svn_each_items(await promise)) {
-            let i: number = 0;
+            let i = 1;
             (item.x);
-            (item);
-            (i);
-            void item;
-            void i;
+            item;
+            i;
         }
         for (let __svn_each_unused of __svn_each_items(await promise)) {
-            void __svn_each_unused;
+            __svn_each_unused;
         }
         if ((await promise)) {
-            void [promise];
         } else if ((await promise)) {
-            void [promise];
         }
         {
             const __svn_C_1f6 = __svn_ensure_component(Component);
@@ -52,11 +44,10 @@ async function $$render_e40e2c10<T>() {
             "attribute": (await promise),
         });
         }
-        (x(await promise));
+        __svn_ensure_snippet(x(await promise));
         if ((true)) {
             const x = await promise;
-            void x;
-            (x);
+            x;
         }
     });
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
@@ -71,7 +62,7 @@ declare class __svn_Render_e40e2c10<T> {
 }
 interface $$IsomorphicComponent {
     new <T>(options: import('svelte').ComponentConstructorOptions<ReturnType<__svn_Render_e40e2c10<T>['props']>>): import('svelte').SvelteComponent<ReturnType<__svn_Render_e40e2c10<T>['props']>, ReturnType<__svn_Render_e40e2c10<T>['events']>, ReturnType<__svn_Render_e40e2c10<T>['slots']>> & { $$bindings?: ReturnType<__svn_Render_e40e2c10<T>['bindings']> } & ReturnType<__svn_Render_e40e2c10<T>['exports']>;
-    <T>(internal: unknown, props: ReturnType<__svn_Render_e40e2c10<T>['props']>): ReturnType<__svn_Render_e40e2c10<T>['exports']> & { $set?: any; $on?: any };
+    <T>(internal: unknown, props: ReturnType<__svn_Render_e40e2c10<T>['props']> extends Record<string, never> ? { $$events?: ReturnType<__svn_Render_e40e2c10<T>['events']>; $$slots?: ReturnType<__svn_Render_e40e2c10<T>['slots']> } : ReturnType<__svn_Render_e40e2c10<T>['props']> & { $$events?: ReturnType<__svn_Render_e40e2c10<T>['events']>; $$slots?: ReturnType<__svn_Render_e40e2c10<T>['slots']> }): ReturnType<__svn_Render_e40e2c10<T>['exports']> & { $set?: any; $on?: any };
     z_$$bindings?: ReturnType<__svn_Render_e40e2c10<any>['bindings']>;
 }
 const __svn_component_default: $$IsomorphicComponent & { readonly __svn_events: Awaited<ReturnType<typeof $$render_e40e2c10>>['events'] } = null as any;

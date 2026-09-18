@@ -5,34 +5,26 @@
     import { store } from './foo';
 function $$render_e40e2c10() {
     /*svn:ignore_start*/;let $store = __svn_store_get(store);;let $store2 = __svn_store_get(store2);/*svn:ignore_end*/
-    const _foo = () => { async () => {
-        ($store);
+    const _foo = /** @returns {ReturnType<import('svelte').Snippet>} */ () => { async () => {
+        $store;
         };
-        return null;
+        return __svn_any(0);
     };
-    void _foo;
-    const _foo2 = () => { async () => {
-        ($store2);
+    const _foo2 = /** @returns {ReturnType<import('svelte').Snippet>} */ () => { async () => {
+        $store2;
         };
-        return null;
+        return __svn_any(0);
     };
-    void _foo2;
 
                                   
     ;(async () => {
         // template type-check body (incremental)
     });
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
- */
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
- */
-/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
+/** @type {__SvnIsomorphicComponent<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */
 export const __svn_component_default = /** @type {any} */ (null);
-/** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
+/** @typedef {InstanceType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;
 

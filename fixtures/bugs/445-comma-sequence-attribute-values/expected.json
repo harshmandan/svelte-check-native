@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "src/Comp.svelte",
+            "line": 4,
+            "column": 9,
+            "code": 2353
+        },
+        {
+            "file": "src/Const.svelte",
+            "line": 3,
+            "column": 23,
+            "code": 2695
+        }
+    ],
+    "warnings": []
+}

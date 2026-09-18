@@ -3,48 +3,36 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
-        { const $$_promise = (object);
-            const $$_await = await $$_promise; const { a, ...rest } = $$_await;
-            void a;
-            void rest;
-        }
-        { const $$_promise = (array);
-            const $$_await = await $$_promise; const [a, b, ...rest] = $$_await;
-            void a;
-            void b;
-            void rest;
-        }
-        { const $$_promise = (objectReject);
-            const $$_await = await $$_promise; const value = $$_await;
-            void value;
+        {
+            const $$_value = await (object);
+            { const { a, ...rest } = $$_value;
+            }
         }
         {
-            const { a, ...rest } = __svn_any();
-            void a;
-            void rest;
-        }
-        { const $$_promise = (arrayReject);
-            const $$_await = await $$_promise; const value = $$_await;
-            void value;
+            const $$_value = await (array);
+            { const [a, b, ...rest] = $$_value;
+            }
         }
         {
-            const [a, b, ...rest] = __svn_any();
-            void a;
-            void b;
-            void rest;
+            try { const $$_value = await (objectReject);
+            { const value = $$_value;
+            }
+            } catch ($$_e) { const { a, ...rest } = __svn_any();
+            }
+        }
+        {
+            try { const $$_value = await (arrayReject);
+            { const value = $$_value;
+            }
+            } catch ($$_e) { const [a, b, ...rest] = __svn_any();
+            }
         }
     });
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
- */
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
- */
-/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
+/** @type {__SvnIsomorphicComponent<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */
 export const __svn_component_default = /** @type {any} */ (null);
-/** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
+/** @typedef {InstanceType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;
 

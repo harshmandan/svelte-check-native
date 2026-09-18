@@ -11,6 +11,9 @@
 
 //! Message-text builders for each warning code.
 
+mod template_errors;
+pub use template_errors::*;
+
 /// Avoid using accesskey
 pub fn a11y_accesskey() -> String {
     format!("Avoid using accesskey\nhttps://svelte.dev/e/a11y_accesskey")

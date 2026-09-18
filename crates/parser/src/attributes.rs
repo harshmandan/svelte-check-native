@@ -564,6 +564,20 @@ fn parse_attr_value(scanner: &mut Scanner<'_>, errors: &mut Vec<ParseError>) -> 
                 }
             };
             scanner.set_pos(end + 1);
+            // An unquoted value runs on past the expression until a
+            // terminator (`{a}{b}` and `{a}px` are one value of several
+            // chunks); re-read such a value as a sequence.
+            let ends_value = match scanner.peek_byte() {
+                None => true,
+                Some(b'/') => scanner.peek_byte_at(1) == Some(b'>'),
+                Some(b) => {
+                    b.is_ascii_whitespace() || matches!(b, b'>' | b'"' | b'\'' | b'=' | b'<' | b'`')
+                }
+            };
+            if !ends_value {
+                scanner.set_pos(start);
+                return parse_unquoted_value(scanner);
+            }
             Some(AttrValue {
                 parts: vec![AttrValuePart::Expression {
                     expression_range: Range::new(expr_start, end),
@@ -573,89 +587,92 @@ fn parse_attr_value(scanner: &mut Scanner<'_>, errors: &mut Vec<ParseError>) -> 
                 quoted: false,
             })
         }
-        _ => {
-            // Unquoted literal value — read until whitespace/>/, but
-            // also recognize `{…}` interpolations so the user-visible
-            // shape of `foo=hi{bar}hi` mirrors the quoted form
-            // (`foo="hi{bar}hi"`). Reviewer follow-up #4: pre-fix
-            // this parser produced ONE Text part with the literal
-            // string content `hi{bar}hi` — the `{bar}` interpolation
-            // was never extracted as an expression and downstream
-            // emit silently typed it as a literal substring.
-            //
-            // Mirrors the quoted-value parser at `parse_quoted_value`
-            // above: flush a Text chunk on `{`, scan the mustache
-            // body via the shared brace-balancing scanner, push an
-            // Expression part. Terminator remains whitespace / `>`
-            // / `/`.
-            let start = scanner.pos();
-            let mut parts: Vec<AttrValuePart> = Vec::new();
-            let mut chunk_start = start;
-            while let Some(b) = scanner.peek_byte() {
-                if b.is_ascii_whitespace() || matches!(b, b'>' | b'"' | b'\'' | b'=' | b'<' | b'`')
-                {
-                    break;
-                }
-                // A bare `/` is part of an unquoted value (`href=/foo`,
-                // `src=//cdn/x.js`). Svelte terminates unquoted values
-                // only at whitespace or `>`; the sole `/` exception is
-                // the self-closing `/>`. So break on `/` ONLY when it's
-                // immediately followed by `>`.
-                if b == b'/' && scanner.peek_byte_at(1) == Some(b'>') {
-                    break;
-                }
-                if b == b'{' {
-                    let text_end = scanner.pos();
-                    if text_end > chunk_start {
-                        parts.push(AttrValuePart::Text {
-                            range: Range::new(chunk_start, text_end),
-                        });
-                    }
-                    let brace_start = scanner.pos();
-                    scanner.advance_byte(); // past `{`
-                    let expr_start = scanner.pos();
-                    let Some(end) = find_mustache_end(scanner.source(), expr_start) else {
-                        // Unterminated mustache — best-effort: emit
-                        // what we have so far, terminate the value.
-                        let trailing_end = scanner.pos();
-                        return Some(AttrValue {
-                            parts,
-                            range: Range::new(start, trailing_end),
-                            quoted: false,
-                        });
-                    };
-                    scanner.set_pos(end + 1);
-                    parts.push(AttrValuePart::Expression {
-                        expression_range: Range::new(expr_start, end),
-                        range: Range::new(brace_start, end + 1),
-                    });
-                    chunk_start = scanner.pos();
-                    continue;
-                }
-                scanner.advance_char();
-            }
-            let end = scanner.pos();
-            if end > chunk_start {
-                parts.push(AttrValuePart::Text {
-                    range: Range::new(chunk_start, end),
-                });
-            }
-            // Empty-value edge: scanner immediately hit a terminator.
-            // Preserve a single empty Text part so downstream
-            // `parts.len() == 1` literal-value handling still
-            // matches.
-            if parts.is_empty() {
-                parts.push(AttrValuePart::Text {
-                    range: Range::new(start, end),
-                });
-            }
-            Some(AttrValue {
-                parts,
-                range: Range::new(start, end),
-                quoted: false,
-            })
-        }
+        _ => parse_unquoted_value(scanner),
     }
+}
+
+/// An unquoted attribute value: text and `{…}` chunks up to whitespace,
+/// a quote, `=`, `<`, `>`, a backtick or the self-closing `/>`.
+fn parse_unquoted_value(scanner: &mut Scanner<'_>) -> Option<AttrValue> {
+    // Unquoted literal value — read until whitespace/>/, but
+    // also recognize `{…}` interpolations so the user-visible
+    // shape of `foo=hi{bar}hi` mirrors the quoted form
+    // (`foo="hi{bar}hi"`). Reviewer follow-up #4: pre-fix
+    // this parser produced ONE Text part with the literal
+    // string content `hi{bar}hi` — the `{bar}` interpolation
+    // was never extracted as an expression and downstream
+    // emit silently typed it as a literal substring.
+    //
+    // Mirrors the quoted-value parser at `parse_quoted_value`
+    // above: flush a Text chunk on `{`, scan the mustache
+    // body via the shared brace-balancing scanner, push an
+    // Expression part. Terminator remains whitespace / `>`
+    // / `/`.
+    let start = scanner.pos();
+    let mut parts: Vec<AttrValuePart> = Vec::new();
+    let mut chunk_start = start;
+    while let Some(b) = scanner.peek_byte() {
+        if b.is_ascii_whitespace() || matches!(b, b'>' | b'"' | b'\'' | b'=' | b'<' | b'`') {
+            break;
+        }
+        // A bare `/` is part of an unquoted value (`href=/foo`,
+        // `src=//cdn/x.js`). Svelte terminates unquoted values
+        // only at whitespace or `>`; the sole `/` exception is
+        // the self-closing `/>`. So break on `/` ONLY when it's
+        // immediately followed by `>`.
+        if b == b'/' && scanner.peek_byte_at(1) == Some(b'>') {
+            break;
+        }
+        if b == b'{' {
+            let text_end = scanner.pos();
+            if text_end > chunk_start {
+                parts.push(AttrValuePart::Text {
+                    range: Range::new(chunk_start, text_end),
+                });
+            }
+            let brace_start = scanner.pos();
+            scanner.advance_byte(); // past `{`
+            let expr_start = scanner.pos();
+            let Some(end) = find_mustache_end(scanner.source(), expr_start) else {
+                // Unterminated mustache — best-effort: emit
+                // what we have so far, terminate the value.
+                let trailing_end = scanner.pos();
+                return Some(AttrValue {
+                    parts,
+                    range: Range::new(start, trailing_end),
+                    quoted: false,
+                });
+            };
+            scanner.set_pos(end + 1);
+            parts.push(AttrValuePart::Expression {
+                expression_range: Range::new(expr_start, end),
+                range: Range::new(brace_start, end + 1),
+            });
+            chunk_start = scanner.pos();
+            continue;
+        }
+        scanner.advance_char();
+    }
+    let end = scanner.pos();
+    if end > chunk_start {
+        parts.push(AttrValuePart::Text {
+            range: Range::new(chunk_start, end),
+        });
+    }
+    // Empty-value edge: scanner immediately hit a terminator.
+    // Preserve a single empty Text part so downstream
+    // `parts.len() == 1` literal-value handling still
+    // matches.
+    if parts.is_empty() {
+        parts.push(AttrValuePart::Text {
+            range: Range::new(start, end),
+        });
+    }
+    Some(AttrValue {
+        parts,
+        range: Range::new(start, end),
+        quoted: false,
+    })
 }
 
 fn parse_quoted_value(

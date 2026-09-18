@@ -506,7 +506,14 @@ pub(crate) enum Ancestor {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PathFrame {
     IfBlock,
-    EachBlock,
+    /// `has_key` records a `(key)` expression; `body_nodes` counts the
+    /// body's children other than comments, `{@const}` tags and
+    /// whitespace-only text — the inputs of the `animate:` placement
+    /// rules.
+    EachBlock {
+        has_key: bool,
+        body_nodes: usize,
+    },
     AwaitBlock,
     KeyBlock,
     SnippetBlock,
@@ -517,16 +524,24 @@ pub(crate) enum PathFrame {
         kind: ComponentKind,
         implicit_children: bool,
     },
-    /// `<svelte:element>`.
-    SvelteElement,
+    /// `<svelte:element>`; `slotted` marks one carrying a `slot`
+    /// attribute.
+    SvelteElement {
+        slotted: bool,
+    },
     /// A regular DOM element; `custom` marks a custom element (a
-    /// hyphenated name or an `is` attribute).
+    /// hyphenated name or an `is` attribute), `slotted` one carrying a
+    /// `slot` attribute.
     RegularElement {
         name: SmolStr,
         custom: bool,
+        slotted: bool,
     },
-    /// Any other element-like node (`<slot>`, `<svelte:head>`,
-    /// `<svelte:fragment>`, `<svelte:boundary>`, …).
+    /// `<svelte:fragment>`.
+    SvelteFragment,
+    /// `<svelte:boundary>`.
+    SvelteBoundary,
+    /// Any other element-like node (`<slot>`, `<svelte:head>`, …).
     Other,
 }
 
@@ -541,8 +556,30 @@ impl PathFrame {
     pub(crate) fn is_block(&self) -> bool {
         matches!(
             self,
-            Self::IfBlock | Self::EachBlock | Self::AwaitBlock | Self::KeyBlock
+            Self::IfBlock | Self::EachBlock { .. } | Self::AwaitBlock | Self::KeyBlock
         )
+    }
+
+    fn each(b: &svn_parser::ast::EachBlock, source: &str) -> Self {
+        let body_nodes = b
+            .body
+            .nodes
+            .iter()
+            .filter(|n| match n {
+                Node::Comment(_) => false,
+                Node::Interpolation(i) => i.kind != svn_parser::InterpolationKind::AtConst,
+                Node::Text(t) => !t
+                    .range
+                    .slice(source)
+                    .chars()
+                    .all(crate::rules::block_rules::is_js_trim_ws),
+                _ => true,
+            })
+            .count();
+        Self::EachBlock {
+            has_key: b.as_clause.as_ref().is_some_and(|c| c.key_range.is_some()),
+            body_nodes,
+        }
     }
 
     fn component(kind: ComponentKind, children: &Fragment, source: &str) -> Self {
@@ -560,6 +597,16 @@ impl PathFrame {
             implicit_children,
         }
     }
+}
+
+/// Whether the element carries a `slot` attribute (of any value form).
+pub(crate) fn has_slot_attribute(attributes: &[Attribute]) -> bool {
+    attributes.iter().any(|a| match a {
+        Attribute::Plain(p) => p.name == "slot",
+        Attribute::Expression(e) => e.name == "slot",
+        Attribute::Shorthand(s) => s.name == "slot",
+        _ => false,
+    })
 }
 
 /// The compiler's `is_custom_element_node`: a regular element whose
@@ -645,6 +692,7 @@ fn walk_fragment_impl(
                     PathFrame::RegularElement {
                         name: el.name.clone(),
                         custom: is_custom_element_node(&el.name, &el.attributes),
+                        slotted: has_slot_attribute(&el.attributes),
                     }
                 });
                 walk_fragment_impl(
@@ -698,16 +746,21 @@ fn walk_fragment_impl(
                         PathFrame::component(ComponentKind::SvelteSelf, &se.children, source),
                         None,
                     ),
-                    SvelteElementKind::Element => (PathFrame::SvelteElement, None),
-                    SvelteElementKind::Fragment => (PathFrame::Other, None),
+                    SvelteElementKind::Element => (
+                        PathFrame::SvelteElement {
+                            slotted: has_slot_attribute(&se.attributes),
+                        },
+                        None,
+                    ),
+                    SvelteElementKind::Fragment => (PathFrame::SvelteFragment, None),
+                    SvelteElementKind::Boundary => (PathFrame::SvelteBoundary, parent_tag),
                     // The remaining special elements have no visitor of
                     // their own: their children keep the parent element.
                     SvelteElementKind::Window
                     | SvelteElementKind::Document
                     | SvelteElementKind::Body
                     | SvelteElementKind::Head
-                    | SvelteElementKind::Options
-                    | SvelteElementKind::Boundary => (PathFrame::Other, parent_tag),
+                    | SvelteElementKind::Options => (PathFrame::Other, parent_tag),
                 };
                 ctx.template_path.push(frame);
                 walk_fragment_impl(&se.children, ctx, child_parent_tag, ancestors);
@@ -731,7 +784,7 @@ fn walk_fragment_impl(
             Node::EachBlock(b) => {
                 crate::rules::block_rules::visit_each(b, ctx);
                 flush_expr_events_before(b.body.range.start, ctx);
-                ctx.template_path.push(PathFrame::EachBlock);
+                ctx.template_path.push(PathFrame::each(b, source));
                 walk_fragment_impl(&b.body, ctx, parent_tag, ancestors);
                 if let Some(empty) = &b.alternate {
                     walk_fragment_impl(empty, ctx, parent_tag, ancestors);

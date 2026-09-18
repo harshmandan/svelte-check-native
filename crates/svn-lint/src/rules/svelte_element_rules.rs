@@ -8,6 +8,9 @@ use crate::messages;
 use crate::rules::element_rules::{AttrParent, visit_attribute};
 
 pub fn visit(se: &SvelteElement, ctx: &mut LintContext<'_>, ancestors: &[crate::walk::Ancestor]) {
+    if se.kind == SvelteElementKind::Element {
+        crate::rules::element_rules::validate_element_errors(&se.attributes, true, ctx);
+    }
     // svelte_self_invalid_placement (`SvelteSelf.js`): `<svelte:self>`
     // needs an `{#if}`, `{#each}`, `{#snippet}` or component ancestor.
     if se.kind == SvelteElementKind::SelfRef
@@ -15,7 +18,7 @@ pub fn visit(se: &SvelteElement, ctx: &mut LintContext<'_>, ancestors: &[crate::
             matches!(
                 f,
                 crate::walk::PathFrame::IfBlock
-                    | crate::walk::PathFrame::EachBlock
+                    | crate::walk::PathFrame::EachBlock { .. }
                     | crate::walk::PathFrame::SnippetBlock
                     | crate::walk::PathFrame::Component {
                         kind: crate::walk::ComponentKind::Component,
@@ -68,7 +71,7 @@ pub fn visit(se: &SvelteElement, ctx: &mut LintContext<'_>, ancestors: &[crate::
         crate::rules::component_rules::check_component_attributes(&se.attributes, ctx);
     }
     for attr in &se.attributes {
-        visit_attribute(attr, ctx, parent);
+        visit_attribute(attr, &se.attributes, ctx, parent);
     }
 
     // Only route `<svelte:element>` through the a11y check — the

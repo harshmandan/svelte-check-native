@@ -10,7 +10,7 @@ use crate::rules::element_rules::{AttrParent, validate_component_slot_attribute,
 pub fn visit(comp: &Component, ctx: &mut LintContext<'_>) {
     check_component_attributes(&comp.attributes, ctx);
     for attr in &comp.attributes {
-        visit_attribute(attr, ctx, AttrParent::Component);
+        visit_attribute(attr, &comp.attributes, ctx, AttrParent::Component);
     }
 }
 

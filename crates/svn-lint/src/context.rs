@@ -128,6 +128,8 @@ pub struct LintContext<'src> {
 
     /// See [`crate::LintOptions::ts_scripts_transpiled`].
     pub(crate) ts_scripts_transpiled: bool,
+    /// See [`crate::LintOptions::preprocess_configured`].
+    pub(crate) preprocess_configured: bool,
     pub(crate) first_slot: Option<(SmolStr, Range)>,
 }
 
@@ -160,6 +162,7 @@ impl<'src> LintContext<'src> {
             uses_event_attributes: false,
             uses_render_tags: false,
             ts_scripts_transpiled: false,
+            preprocess_configured: false,
             first_slot: None,
         }
     }

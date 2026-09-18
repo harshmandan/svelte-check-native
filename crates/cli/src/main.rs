@@ -461,6 +461,7 @@ fn main() -> ExitCode {
             runes: svelte_config_summary.runes,
             experimental_async: svelte_config_summary.experimental_async,
             ts_scripts_transpiled: svelte_config_summary.ts_scripts_transpiled,
+            preprocess_configured: svelte_config_summary.preprocess_configured,
         },
         cli.config.is_some(),
         analysed_config.is_some(),
@@ -933,6 +934,7 @@ fn native_diagnostics_for_parsed(
         runes: config.runes,
         experimental_async: config.experimental_async,
         ts_scripts_transpiled: config.ts_scripts_transpiled,
+        preprocess_configured: config.preprocess_configured,
     };
     let warnings = svn_lint::lint_parsed(doc, fragment, source, pm, path, options, compat);
 

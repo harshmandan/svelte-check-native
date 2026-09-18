@@ -214,6 +214,11 @@ pub struct SvelteConfigSummary {
     /// server's fallback preprocessor does the same, so callers set this
     /// for the no-config case themselves.
     pub ts_scripts_transpiled: bool,
+    /// The config sets a `preprocess` of its own. Without one, the
+    /// language server compiles with its fallback preprocessor and
+    /// svelte-check drops parse errors it blames on missing
+    /// preprocessing (see `svn_lint::LintOptions::preprocess_configured`).
+    pub preprocess_configured: bool,
 }
 
 /// The per-file subset of a config — the settings upstream applies PER
@@ -228,6 +233,8 @@ pub struct ResolvedConfig {
     pub experimental_async: bool,
     /// See [`SvelteConfigSummary::ts_scripts_transpiled`].
     pub ts_scripts_transpiled: bool,
+    /// See [`SvelteConfigSummary::preprocess_configured`].
+    pub preprocess_configured: bool,
 }
 
 impl ResolvedConfig {
@@ -330,6 +337,7 @@ impl ConfigResolver {
                     runes: summary.runes,
                     experimental_async: summary.experimental_async,
                     ts_scripts_transpiled: summary.ts_scripts_transpiled,
+                    preprocess_configured: summary.preprocess_configured,
                 });
                 self.nested.push((cfg_path, rc.clone()));
                 rc
@@ -440,6 +448,8 @@ pub fn analyse(config_path: &Path) -> SvelteConfigSummary {
         .is_some_and(|obj| experimental_async_in_object(obj));
     summary.ts_scripts_transpiled = default_export_config_object(&parsed.program)
         .is_some_and(|obj| preprocess_transpiles_ts(obj, &parsed.program));
+    summary.preprocess_configured =
+        default_export_config_object(&parsed.program).is_some_and(sets_preprocess);
 
     summary
 }
@@ -516,6 +526,7 @@ pub fn analyse_vite_config(config_path: &Path) -> Option<SvelteConfigSummary> {
     summary.runes = runes_in_object(plugin_obj);
     summary.experimental_async = experimental_async_in_object(plugin_obj);
     summary.ts_scripts_transpiled = preprocess_transpiles_ts(plugin_obj, &parsed.program);
+    summary.preprocess_configured = sets_preprocess(plugin_obj);
 
     Some(summary)
 }
@@ -723,6 +734,18 @@ fn experimental_async_in_object(obj: &ObjectExpression<'_>) -> bool {
 ///
 /// Anything else (no `preprocess`, an unrecognised call) is taken to
 /// leave scripts alone.
+/// Whether the config object's `preprocess` is set to anything but a
+/// falsy literal.
+fn sets_preprocess(obj: &ObjectExpression<'_>) -> bool {
+    match lookup_object_property(obj, "preprocess") {
+        None => false,
+        Some(Expression::NullLiteral(_)) => false,
+        Some(Expression::BooleanLiteral(b)) => b.value,
+        Some(Expression::Identifier(id)) => id.name != "undefined",
+        Some(_) => true,
+    }
+}
+
 fn preprocess_transpiles_ts(
     obj: &ObjectExpression<'_>,
     program: &oxc_ast::ast::Program<'_>,

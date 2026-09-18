@@ -1,0 +1,60 @@
+{
+    "errors": [
+        {
+            "file": "src/OverloadThenAwait.svelte",
+            "line": 6,
+            "column": 14,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/ParameterModifier.svelte",
+            "line": 1,
+            "column": 15,
+            "code": 2369
+        },
+        {
+            "file": "src/ParameterModifier.svelte",
+            "line": 1,
+            "column": 15,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/StaticAccessor.svelte",
+            "line": 0,
+            "column": 9,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/TypeTwice.svelte",
+            "line": 1,
+            "column": 6,
+            "code": 2300
+        },
+        {
+            "file": "src/TypeTwice.svelte",
+            "line": 2,
+            "column": 6,
+            "code": 2300
+        },
+        {
+            "file": "src/TypeTwice.svelte",
+            "line": 2,
+            "column": 6,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/Using.svelte",
+            "line": 1,
+            "column": 7,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/Valid.svelte",
+            "line": 12,
+            "column": 14,
+            "code": "typescript_invalid_feature"
+        }
+    ],
+    "warnings": [],
+    "_note": "With `vitePreprocess()` and no `script: true`, a `<script lang=\"ts\">` reaches the compiler as written and acorn-typescript parses it. It rejects a parameter modifier outside a method (`private` is a reserved word there), `using` declarations and a repeated type alias, reports an incompatible `static accessor` at the file offset equal to the modifier's column, and after an overload signature reads the rest of the script as if inside a plain function, so a top-level `await` fails. Interface merging, overloads and constructor parameter properties parse (the latter then fails TypeScript stripping). Verified against upstream svelte-check."
+}

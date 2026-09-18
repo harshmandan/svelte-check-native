@@ -82,6 +82,7 @@ pub enum Code {
     experimental_async,
     export_let_unused,
     global_reference_invalid,
+    js_parse_error,
     legacy_await_invalid,
     legacy_code,
     legacy_component_creation,
@@ -225,6 +226,7 @@ impl Code {
             Self::experimental_async => "experimental_async",
             Self::export_let_unused => "export_let_unused",
             Self::global_reference_invalid => "global_reference_invalid",
+            Self::js_parse_error => "js_parse_error",
             Self::legacy_await_invalid => "legacy_await_invalid",
             Self::legacy_code => "legacy_code",
             Self::legacy_component_creation => "legacy_component_creation",
@@ -376,6 +378,7 @@ impl Code {
             "experimental_async" => Some(Self::experimental_async),
             "export_let_unused" => Some(Self::export_let_unused),
             "global_reference_invalid" => Some(Self::global_reference_invalid),
+            "js_parse_error" => Some(Self::js_parse_error),
             "legacy_await_invalid" => Some(Self::legacy_await_invalid),
             "legacy_code" => Some(Self::legacy_code),
             "legacy_component_creation" => Some(Self::legacy_component_creation),
@@ -428,7 +431,7 @@ impl Code {
 }
 
 /// All known codes, alphabetically sorted.
-pub const CODES: &[&str; 114] = &[
+pub const CODES: &[&str; 115] = &[
     "a11y_accesskey",
     "a11y_aria_activedescendant_has_tabindex",
     "a11y_aria_attributes",
@@ -501,6 +504,7 @@ pub const CODES: &[&str; 114] = &[
     "experimental_async",
     "export_let_unused",
     "global_reference_invalid",
+    "js_parse_error",
     "legacy_await_invalid",
     "legacy_code",
     "legacy_component_creation",
@@ -565,6 +569,7 @@ pub const COMPILER_ERROR_CODES: &[&str] = &[
     "event_handler_invalid_component_modifier",
     "experimental_async",
     "global_reference_invalid",
+    "js_parse_error",
     "legacy_await_invalid",
     "legacy_export_invalid",
     "legacy_reactive_statement_invalid",

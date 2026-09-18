@@ -195,6 +195,35 @@ pub fn walk_parsed(
     let declaration_error = tree.declaration_error.take();
     ctx.scope_tree = Some(tree);
 
+    // The compiler parses each script while it reads the component, so
+    // a syntax error in one precedes everything the analysis reports.
+    {
+        use crate::rules::js_parse_error::{Script, Settings, script_parse_error};
+        let scripts: Vec<Script<'_, '_, '_>> = [
+            (doc.module_script.as_ref(), parsed_module.as_ref()),
+            (doc.instance_script.as_ref(), parsed_instance.as_ref()),
+        ]
+        .into_iter()
+        .filter_map(|(section, parsed)| {
+            let (section, parsed) = (section?, parsed?);
+            Some(Script {
+                section,
+                program: &parsed.program,
+                errors: &parsed.errors,
+                panicked: parsed.panicked,
+            })
+        })
+        .collect();
+        let settings = Settings {
+            ts: compiler_ts,
+            preprocess_ts: ctx.ts_scripts_transpiled,
+            preprocess_configured: ctx.preprocess_configured,
+        };
+        if let Some((message, range)) = script_parse_error(doc, source, &scripts, &settings) {
+            ctx.emit_error(Code::js_parse_error, message, range);
+        }
+    }
+
     // Stripping TypeScript happens before analysis, so its failure
     // precedes everything else.
     if compiler_ts {

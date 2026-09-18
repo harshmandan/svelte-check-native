@@ -74,6 +74,9 @@ pub struct LintOptions {
     /// The project's preprocessors transpile `<script lang="ts">`
     /// bodies to JavaScript before the compiler runs.
     pub ts_scripts_transpiled: bool,
+    /// The project's Svelte config supplies its own `preprocess` (the
+    /// language server's fallback preprocessor does not count).
+    pub preprocess_configured: bool,
 }
 
 /// Run the compile-warning pass on one source file.
@@ -109,6 +112,7 @@ pub fn lint_file_with_options(
     ctx.compat = compat;
     ctx.experimental_async = options.experimental_async;
     ctx.ts_scripts_transpiled = options.ts_scripts_transpiled;
+    ctx.preprocess_configured = options.preprocess_configured;
     // `walk` resolves runes mode from the document it parses (reusing
     // that parse) — pass the caller's hint through rather than running
     // a separate `infer_runes_mode` parse here.
@@ -137,6 +141,7 @@ pub fn lint_parsed<'src>(
     ctx.compat = compat;
     ctx.experimental_async = options.experimental_async;
     ctx.ts_scripts_transpiled = options.ts_scripts_transpiled;
+    ctx.preprocess_configured = options.preprocess_configured;
     crate::walk::walk_parsed(doc, fragment, source, path, options.runes, &mut ctx);
     ctx.take_warnings()
 }

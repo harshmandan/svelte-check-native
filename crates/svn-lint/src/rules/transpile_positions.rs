@@ -17,13 +17,13 @@
 
 use oxc_allocator::Vec as ArenaVec;
 use oxc_ast::ast::{
-    BindingIdentifier, BlockStatement, ClassBody, ClassElement, Declaration, ExportSpecifier,
-    FunctionBody, FunctionType, IdentifierName, IdentifierReference, ImportOrExportKind,
-    ImportSpecifier, MethodDefinitionType, Program, PropertyDefinitionType, RegExpLiteral,
-    Statement, StaticBlock, StringLiteral, SwitchCase, TSAsExpression, TSClassImplements,
-    TSIndexSignature, TSModuleBlock, TSNamespaceDeclarationBody, TSSatisfiesExpression,
-    TSThisParameter, TSTypeAnnotation, TSTypeParameterDeclaration, TSTypeParameterInstantiation,
-    TemplateElement,
+    BigIntLiteral, BindingIdentifier, BlockStatement, ClassBody, ClassElement, Declaration,
+    ExportSpecifier, FunctionBody, FunctionType, IdentifierName, IdentifierReference,
+    ImportOrExportKind, ImportSpecifier, MethodDefinitionType, NumericLiteral, Program,
+    PropertyDefinitionType, RegExpLiteral, Statement, StaticBlock, StringLiteral, SwitchCase,
+    TSAsExpression, TSClassImplements, TSIndexSignature, TSModuleBlock, TSNamespaceDeclarationBody,
+    TSSatisfiesExpression, TSThisParameter, TSTypeAnnotation, TSTypeParameterDeclaration,
+    TSTypeParameterInstantiation, TemplateElement,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_span::{GetSpan, Span};
@@ -65,6 +65,17 @@ pub(crate) fn first_dollar_slot(
     }
     // A `$$slots` reference always leaves one occurrence in code.
     0
+}
+
+/// Where svelte-check reports a compiler position `at` (absolute) inside
+/// a transpiled script starting at `base`: the start of the token it
+/// falls in. `None` when the transpile deletes the text there.
+pub(crate) fn transpiled_position(base: u32, program: &Program<'_>, at: u32) -> Option<u32> {
+    let map = TranspiledScript::new(base, program);
+    if !map.contains(at) {
+        return Some(at);
+    }
+    map.reported_position(at)
 }
 
 /// What TypeScript's transpile keeps of one script, in script-relative
@@ -306,6 +317,14 @@ impl<'a> Visit<'a> for Collector<'_> {
         self.tokens.push((it.span, it.span.start));
     }
 
+    fn visit_numeric_literal(&mut self, it: &NumericLiteral<'a>) {
+        self.tokens.push((it.span, it.span.start));
+    }
+
+    fn visit_big_int_literal(&mut self, it: &BigIntLiteral<'a>) {
+        self.tokens.push((it.span, it.span.start));
+    }
+
     fn visit_reg_exp_literal(&mut self, it: &RegExpLiteral<'a>) {
         self.tokens.push((it.span, it.span.start));
     }
@@ -388,7 +407,7 @@ fn declaration_removed(decl: &Declaration<'_>) -> bool {
 
 /// A namespace is deleted when it is declared or holds nothing but
 /// deleted statements.
-fn namespace_removed(n: &oxc_ast::ast::TSNamespaceDeclaration<'_>) -> bool {
+pub(crate) fn namespace_removed(n: &oxc_ast::ast::TSNamespaceDeclaration<'_>) -> bool {
     n.declare
         || match &n.body {
             TSNamespaceDeclarationBody::TSModuleBlock(block) => {

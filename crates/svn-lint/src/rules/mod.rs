@@ -13,6 +13,7 @@
 //! `walk::walk`.
 
 pub mod a11y_rules;
+pub(crate) mod acorn_early_errors;
 pub(crate) mod bidi_state;
 pub mod bind_properties;
 pub mod binding_rules;
@@ -20,6 +21,7 @@ pub mod block_rules;
 pub mod component_rules;
 pub mod element_rules;
 pub mod implicit_close;
+pub(crate) mod js_parse_error;
 pub mod script_ast_rules;
 pub mod script_rules;
 pub mod svelte_element_rules;

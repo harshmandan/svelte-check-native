@@ -134,8 +134,14 @@
             ]
         },
         "store-destructuring": {
-            "reason": "User code references `fromSomewhere()` without import. Verbatim emit preserves the unresolved name.",
+            "reason": "User code references `fromSomewhere()` without import. Verbatim emit preserves the unresolved name. `noStore` is declared twice, which the compiler's parser rejects (js_parse_error at the second declaration) beside TypeScript's TS2451 pair.",
             "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 3,
+                    "column": 28,
+                    "code": "js_parse_error"
+                },
                 {
                     "file": "src/input.svelte",
                     "line": 1,

@@ -104,6 +104,7 @@ oxc_ast = "0.148"
 oxc_ast_visit = "0.148"
 oxc_diagnostics = "0.148"
 oxc_parser = "0.148"
+oxc_regular_expression = "0.148"
 oxc_span = "0.148"
 # Unicode identifier tables (is_identifier_start/part) — already in the
 # dependency tree via oxc_parser, exposed directly for the template

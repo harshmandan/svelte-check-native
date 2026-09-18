@@ -19,8 +19,14 @@
             ]
         },
         "ts-runes-best-effort-types.v5": {
-            "reason": "Same as runes-best-effort-types but with extra TS-typed defaults (h = null as Bar, i = null as any as Baz). All three undefined references preserved verbatim.",
+            "reason": "Same as runes-best-effort-types but with extra TS-typed defaults (h = null as Bar, i = null as any as Baz). All three undefined references preserved verbatim. The script has no lang=\"ts\", so the compiler's JavaScript parser stops at the first `as` (js_parse_error), as upstream svelte-check reports.",
             "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 74,
+                    "code": "js_parse_error"
+                },
                 {
                     "file": "src/input.svelte",
                     "line": 1,

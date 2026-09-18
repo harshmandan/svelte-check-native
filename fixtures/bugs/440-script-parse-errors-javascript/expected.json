@@ -1,0 +1,54 @@
+{
+    "errors": [
+        {
+            "file": "src/DuplicateGroup.svelte",
+            "line": 1,
+            "column": 18,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/MissingExpression.svelte",
+            "line": 1,
+            "column": 13,
+            "code": 1109
+        },
+        {
+            "file": "src/MissingExpression.svelte",
+            "line": 1,
+            "column": 13,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/ParameterClash.svelte",
+            "line": 1,
+            "column": 17,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/Redeclared.svelte",
+            "line": 2,
+            "column": 5,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/TypeScriptInJs.svelte",
+            "line": 1,
+            "column": 26,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/TypeScriptInJs.svelte",
+            "line": 1,
+            "column": 29,
+            "code": 8016
+        },
+        {
+            "file": "src/UndefinedLabel.svelte",
+            "line": 2,
+            "column": 9,
+            "code": "js_parse_error"
+        }
+    ],
+    "warnings": [],
+    "_note": "A component without `lang=\"ts\"` is parsed by the compiler with plain acorn as a strict-mode module. A syntax error there, TypeScript syntax included, is a `js_parse_error` reported beside TypeScript's own diagnostics, and so are the checks acorn runs while parsing that oxc's parser leaves to later: a redeclared `let`, a repeated parameter name, an undefined label, an invalid regular expression. Valid.svelte holds what acorn accepts (var redeclaration, shadowing in a block, a var in a catch body, a labelled continue, a private getter/setter pair). Verified against upstream svelte-check."
+}

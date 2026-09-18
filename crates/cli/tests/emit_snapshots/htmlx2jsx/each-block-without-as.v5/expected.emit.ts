@@ -9,7 +9,7 @@ function $$render_e40e2c10() {
         for (let __svn_each_unused of __svn_each_items({ length: 5 })) {
             __svn_each_unused;
             let index = 1;
-            (index);
+            index;
         }
     });
     return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

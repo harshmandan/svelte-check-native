@@ -7,8 +7,8 @@ function $$render_e40e2c10() {
     /*svn:ignore_start*/;let $store1 = __svn_store_get(store1);/*svn:ignore_end*/
     ;(async () => {
         // template type-check body (incremental)
-        ($store1);
-        ($store2);
+        $store1;
+        $store2;
     });
     return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }

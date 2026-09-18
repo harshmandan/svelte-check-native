@@ -6,7 +6,7 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         { const __svn_each_arr = __svn_each_items(items); for (let items of __svn_each_arr) {
-            { svelteHTML.createElement("p", {});                 (items);
+            { svelteHTML.createElement("p", {});                 items;
             }
         }
         }

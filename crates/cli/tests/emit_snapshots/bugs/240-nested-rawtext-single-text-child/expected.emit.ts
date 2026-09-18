@@ -14,7 +14,7 @@ function $$render_e40e2c10() {
         { svelteHTML.createElement("svg", {});             { svelteHTML.createElement("style", {});             }
             { svelteHTML.createElement("style", {});             }
         }
-        { svelteHTML.createElement("p", {});             (name);
+        { svelteHTML.createElement("p", {});             name;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

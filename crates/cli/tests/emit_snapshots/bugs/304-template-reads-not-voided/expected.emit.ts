@@ -7,7 +7,7 @@ function $$render_0a59fd6a() {
   function fn(o: Record<string, unknown>) { return JSON.stringify(o); }
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (fn({ count: 1, from: 2 }));
+        { svelteHTML.createElement("p", {});             fn({ count: 1, from: 2 });
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
@@ -29,7 +29,7 @@ function $$render_d6648a59() {
   let count = 0;
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             ((new (class { #count = 1; get v() { return this.#count; } })()).v);
+        { svelteHTML.createElement("p", {});             (new (class { #count = 1; get v() { return this.#count; } })()).v;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
@@ -52,7 +52,7 @@ function $$render_a1fa1ca4() {
   let s = 'a';
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (s.replace(/count/g, ''));
+        { svelteHTML.createElement("p", {});             s.replace(/count/g, '');
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
@@ -78,7 +78,7 @@ function $$render_03a8371a() {
   let tail = 'b';
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (s.replace(/"/g, '') + tail + $count);
+        { svelteHTML.createElement("p", {});             s.replace(/"/g, '') + tail + $count;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
@@ -102,8 +102,8 @@ function $$render_67b95d21() {
   function fn(o: Record<string, unknown>) { return JSON.stringify(o); }
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (fn({ $count: 1 }));
-            (s.replace(/\$count/, ''));
+        { svelteHTML.createElement("p", {});             fn({ $count: 1 });
+            s.replace(/\$count/, '');
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
@@ -127,7 +127,7 @@ function $$render_8a8626ca() {
   function fn(o: Record<string, unknown>) { return JSON.stringify(o); }
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (fn({ AppVideo: 1 }));
+        { svelteHTML.createElement("p", {});             fn({ AppVideo: 1 });
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

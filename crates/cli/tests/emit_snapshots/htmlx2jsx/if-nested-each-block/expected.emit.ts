@@ -7,26 +7,26 @@ function $$render_e40e2c10() {
             for (let item of __svn_each_items(items)) {
                 let i = 1;
                 (item.id);
-                { svelteHTML.createElement("div", {});                     (item);
-                    (i);
+                { svelteHTML.createElement("div", {});                     item;
+                    i;
                 }
             }
             if ((hi && bye)) {
                 for (let item of __svn_each_items(items)) {
-                    { svelteHTML.createElement("div", {});                         (item);
+                    { svelteHTML.createElement("div", {});                         item;
                     }
                 }
                 { svelteHTML.createElement("p", {});                 }
             } else if ((cool)) {
                 for (let item of __svn_each_items(items)) {
                     let i = 1;
-                    { svelteHTML.createElement("div", {});                         (item);
-                        (i);
+                    { svelteHTML.createElement("div", {});                         item;
+                        i;
                     }
                 }
             } else {
                 for (let item of __svn_each_items(items)) {
-                    { svelteHTML.createElement("div", {});                         (item);
+                    { svelteHTML.createElement("div", {});                         item;
                     }
                 }
             }

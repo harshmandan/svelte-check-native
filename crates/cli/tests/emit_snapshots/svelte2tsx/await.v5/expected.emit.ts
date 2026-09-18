@@ -3,7 +3,7 @@
 /** @typedef {{prop?: boolean}} $$ComponentProps */
 async function $$render_e40e2c10() {
     const x = /** @returns {ReturnType<import('svelte').Snippet>} */ () => { async () => {
-        (await promise);
+        await promise;
         };
         return __svn_any(0);
     };
@@ -13,21 +13,21 @@ async function $$render_e40e2c10() {
     const promise = fetch('/bar');
     ;(async () => {
         // template type-check body (incremental)
-        (foo);
-        (await promise);
+        foo;
+        await promise;
         for (let item of __svn_each_items(await promise)) {
-            (item);
+            item;
         }
         for (let item of __svn_each_items(await promise)) {
             let i = 1;
-            (item);
-            (i);
+            item;
+            i;
         }
         for (let item of __svn_each_items(await promise)) {
             let i = 1;
             (item.x);
-            (item);
-            (i);
+            item;
+            i;
         }
         for (let __svn_each_unused of __svn_each_items(await promise)) {
             __svn_each_unused;
@@ -46,7 +46,7 @@ async function $$render_e40e2c10() {
         __svn_ensure_snippet(x(await promise));
         if ((true)) {
             const x = await promise;
-            (x);
+            x;
         }
     });
     return { props: /** @type {$$ComponentProps} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

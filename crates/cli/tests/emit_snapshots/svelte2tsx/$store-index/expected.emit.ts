@@ -3,9 +3,9 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
-        (someRecordOrArr[$store]);
-        (someObject['$store']);
-        (someObject.$store);
+        someRecordOrArr[$store];
+        someObject['$store'];
+        someObject.$store;
     });
     return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }

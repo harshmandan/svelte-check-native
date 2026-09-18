@@ -14,16 +14,16 @@ function $$render_e40e2c10() {
             {
                 const foo = (): ReturnType<import('svelte').Snippet> => { async () => {
                     const area = await 'snippet';
-                    (area);
+                    area;
                     };
                     return __svn_any(0);
                 };
                 const area = box.width * box.height;
                 let label = $state(await `${area} square pixels`);
-                { svelteHTML.createElement("p", {});                     (label);
+                { svelteHTML.createElement("p", {});                     label;
                 }
                 { svelteHTML.createElement("div", {});                     const area = await 'nested';
-                    (area);
+                    area;
                 }
             }
         }

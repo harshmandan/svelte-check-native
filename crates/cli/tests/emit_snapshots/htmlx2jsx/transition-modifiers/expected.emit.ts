@@ -4,7 +4,7 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("div", {});             __svn_ensure_transition(slide(__svn_map_element_tag('div')));
-            (item);
+            item;
         }
     });
     return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

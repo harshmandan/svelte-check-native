@@ -96,8 +96,8 @@ function $$render_e40e2c10() {
             { svelteHTML.createElement("div", {
                 "class": `adjuster`,
             });
-                { svelteHTML.createElement("p", {});                     (selected.cx);
-                    (selected.cy);
+                { svelteHTML.createElement("p", {});                     selected.cx;
+                    selected.cy;
                 }
                 { svelteHTML.createElement("input", {
                     "type": `range`,

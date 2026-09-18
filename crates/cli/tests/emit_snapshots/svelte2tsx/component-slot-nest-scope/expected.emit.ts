@@ -19,13 +19,13 @@ function $$render_e40e2c10() {
             const __svn_inst_89 = new __svn_C_89({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, c } = __svn_inst_89.$$slot_def.default; $$_$$;
-                (c);
+                c;
             }
         }
         {
             const $$_value = await (promise);
             { const d = $$_value;
-            (d);
+            d;
             }
         }
         {

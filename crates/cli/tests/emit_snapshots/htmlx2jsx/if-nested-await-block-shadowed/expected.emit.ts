@@ -7,52 +7,52 @@ function $$render_e40e2c10() {
             {
                 try { const $$_value = await (aPromise);
                 { const hello = $$_value;
-                (hello);
+                hello;
                 }
                 } catch ($$_e) {
-                (hello);
+                hello;
                 }
             }
             {
                 try { const $$_value = await (aPromise);
                 { const foo = $$_value;
                 const hello = foo;
-                (hello);
+                hello;
                 }
                 } catch ($$_e) {
-                (hello);
+                hello;
                 }
             }
             {
                 try { const $$_value = await (aPromise);
                 { const hi = $$_value;
-                (hello);
+                hello;
                 }
                 } catch ($$_e) { const hello = __svn_any();
-                (hello);
+                hello;
                 }
             }
             {
                 const $$_value = await (hello);
                 { const hello = $$_value;
-                (hello);
+                hello;
                 if ((hello)) {
                     {
-                        (hello);
+                        hello;
                         await (aPromise);
                     }
                     {
-                        (hello);
+                        hello;
                         try { await (aPromise);
                         } catch ($$_e) { const hello = __svn_any();
-                        (hello);
+                        hello;
                         }
                     }
                     {
                         const $$_value = await (x);
                         { const hello = $$_value;
                         if ((hello)) {
-                            (hello);
+                            hello;
                         }
                         }
                     }
@@ -61,7 +61,7 @@ function $$render_e40e2c10() {
                         { const foo = $$_value;
                         const hello = foo;
                         if ((hello)) {
-                            (hello);
+                            hello;
                         }
                         }
                     }
@@ -72,11 +72,11 @@ function $$render_e40e2c10() {
                 {
                     try { const $$_value = await (x);
                     { const bye = $$_value;
-                    (bye);
+                    bye;
                     }
                     } catch ($$_e) { const hello = __svn_any();
                     if ((hello)) {
-                        (hello);
+                        hello;
                     }
                     }
                 }
@@ -85,7 +85,7 @@ function $$render_e40e2c10() {
                     try { const $$_value = await (cool);
                     { const cool = $$_value;
                     if ((cool)) {
-                        (cool);
+                        cool;
                     }
                     }
                     } catch ($$_e) { const cool = __svn_any();
@@ -94,7 +94,7 @@ function $$render_e40e2c10() {
                 {
                     const $$_value = await (aPromise);
                     { const cool = $$_value;
-                    (cool);
+                    cool;
                     }
                 }
             } else {
@@ -102,7 +102,7 @@ function $$render_e40e2c10() {
                     const $$_value = await (x);
                     { const hello = $$_value;
                     if ((hello)) {
-                        (hello);
+                        hello;
                     }
                     }
                 }
@@ -110,23 +110,23 @@ function $$render_e40e2c10() {
         }
         {
             if ((cool)) {
-                (cool);
+                cool;
             } else if ((hello)) {
-                (hello);
+                hello;
             }
             try { const $$_value = await (cool);
             { const cool = $$_value;
             if ((cool)) {
-                (cool);
+                cool;
             } else if ((hello)) {
-                (hello);
+                hello;
             }
             }
             } catch ($$_e) { const cool = __svn_any();
             if ((cool)) {
-                (cool);
+                cool;
             } else if ((hello)) {
-                (hello);
+                hello;
             }
             }
         }

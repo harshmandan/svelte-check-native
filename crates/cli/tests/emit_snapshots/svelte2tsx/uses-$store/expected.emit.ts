@@ -7,7 +7,7 @@ $b=$b.concat(5)
         { svelteHTML.createElement("h1", {
             "on:click": (() => $b=$b.concat(5)),
         });
-            ($b);
+            $b;
         }
     });
     return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

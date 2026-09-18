@@ -8,7 +8,7 @@ function $$render_e40e2c10() {
            let world = "name"
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("h1", {});             (world);
+        { svelteHTML.createElement("h1", {});             world;
         }
     });
     void world;

@@ -8,16 +8,16 @@ function $$render_e40e2c10() {
     let [store9, store10] = __svn_invalidate(() => (''))/*svn:ignore_start*/;let $store9 = __svn_store_get(store9);;let $store10 = __svn_store_get(store10);/*svn:ignore_end*/;
     ;(async () => {
         // template type-check body (incremental)
-        ($store1);
-        ($store2);
-        ($store3);
-        ($store4);
-        ($store5);
-        ($store6);
-        ($store7);
-        ($store8);
-        ($store9);
-        ($store10);
+        $store1;
+        $store2;
+        $store3;
+        $store4;
+        $store5;
+        $store6;
+        $store7;
+        $store8;
+        $store9;
+        $store10;
     });
     return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }

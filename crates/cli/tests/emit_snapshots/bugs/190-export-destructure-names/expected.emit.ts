@@ -11,11 +11,11 @@ function $$render_e40e2c10() {
            let [x, , z] = arr;
     ;(async () => {
         // template type-check body (incremental)
-        (a);
-        (b);
-        (c);
-        (x);
-        (z);
+        a;
+        b;
+        c;
+        x;
+        z;
     });
     void a;
     void b;

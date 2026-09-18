@@ -11,7 +11,7 @@ function $$render_e40e2c10() {
             { svelteHTML.createElement("p", {});             }
             const $$_value = await ($store);
             { const data = $$_value;
-            (data);
+            data;
             }
         }
     });

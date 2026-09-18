@@ -15,14 +15,14 @@ function $$render_e40e2c10() {
         {
             const $$_value = await (p);
             { const v = $$_value;
-            { svelteHTML.createElement("span", {});                 (v.toFixed(2));
+            { svelteHTML.createElement("span", {});                 v.toFixed(2);
             }
             }
         }
         {
             try { await (q);
             } catch ($$_e) { const e = __svn_any();
-            { svelteHTML.createElement("span", {});                 (String(e));
+            { svelteHTML.createElement("span", {});                 String(e);
             }
             }
         }
@@ -32,7 +32,7 @@ function $$render_e40e2c10() {
     3
 ));
             { const ok = $$_value;
-            { svelteHTML.createElement("span", {});                 (ok ? 'yes' : 'no');
+            { svelteHTML.createElement("span", {});                 ok ? 'yes' : 'no';
             }
             }
         }

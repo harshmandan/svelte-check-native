@@ -8,7 +8,7 @@ function $$render_e40e2c10() {
         for (let __svn_each_unused of __svn_each_items(Array.from({ length: 3 }))) {
             __svn_each_unused;
             let i = 1;
-            { svelteHTML.createElement("p", {});                 (label(i));
+            { svelteHTML.createElement("p", {});                 label(i);
             }
         }
     });

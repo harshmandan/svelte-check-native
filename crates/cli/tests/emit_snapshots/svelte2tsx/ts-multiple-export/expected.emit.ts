@@ -6,9 +6,9 @@ function $$render_e40e2c10() {
            let number2: number/*svn:ignore_start*/;number2 = __svn_any(number2);/*svn:ignore_end*/
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("h1", {});             (number1);
-            (number2);
-            (number1 + number2);
+        { svelteHTML.createElement("h1", {});             number1;
+            number2;
+            number1 + number2;
         }
     });
     void number1;

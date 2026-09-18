@@ -6,8 +6,8 @@ function $$render_e40e2c10() {
         for (let item of __svn_each_items(items)) {
             let i = 1;
             (item.id);
-            { svelteHTML.createElement("div", {});                 (item);
-                (i);
+            { svelteHTML.createElement("div", {});                 item;
+                i;
             }
         }
     });

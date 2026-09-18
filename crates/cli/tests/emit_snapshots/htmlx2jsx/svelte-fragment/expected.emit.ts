@@ -19,15 +19,15 @@ function $$render_e40e2c10() {
             const __svn_inst_a6 = new __svn_C_a6({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo, bar: baz } = __svn_inst_a6.$$slot_def.default; $$_$$;
-                { svelteHTML.createElement("svelte:fragment", {});                     { svelteHTML.createElement("p", {});                         (foo);
-                        (baz);
+                { svelteHTML.createElement("svelte:fragment", {});                     { svelteHTML.createElement("p", {});                         foo;
+                        baz;
                     }
                 }
             }
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo, bar: baz } = __svn_inst_a6.$$slot_def["named"]; $$_$$;
-                { svelteHTML.createElement("svelte:fragment", {});                     { svelteHTML.createElement("p", {});                         (foo);
-                        (baz);
+                { svelteHTML.createElement("svelte:fragment", {});                     { svelteHTML.createElement("p", {});                         foo;
+                        baz;
                     }
                 }
             }

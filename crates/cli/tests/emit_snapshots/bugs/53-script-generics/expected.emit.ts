@@ -12,8 +12,8 @@ function $$render_e40e2c10<T extends { id: string }>() {
     let { item, label }: Props = $props();
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (label);
-            (item.id);
+        { svelteHTML.createElement("p", {});             label;
+            item.id;
         }
     });
     return { props: undefined as any as (Props), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };

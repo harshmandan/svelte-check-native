@@ -10,10 +10,10 @@ function $$render_e40e2c10() {
     const w: number = $count;
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (quote);
-            (tick);
-            (v);
-            (w);
+        { svelteHTML.createElement("p", {});             quote;
+            tick;
+            v;
+            w;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

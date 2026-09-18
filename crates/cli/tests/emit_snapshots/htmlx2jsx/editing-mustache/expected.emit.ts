@@ -3,10 +3,10 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
-        (abc.);
-        (abc?.);
-        (abc ?);
-        (a+);
+        abc.;
+        abc?.;
+        abc ?;
+        a+;
         {
             const __svn_C_20 = __svn_ensure_component(Component);
             new __svn_C_20({ target: __svn_any(), props: {"regex": (/.*/)} });

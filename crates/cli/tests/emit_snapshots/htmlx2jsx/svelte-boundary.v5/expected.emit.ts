@@ -6,7 +6,7 @@ function $$render_e40e2c10() {
         { svelteHTML.createElement("svelte:boundary", {
             "onerror": (e => e),
             failed: (e) => { async () => {
-                { svelteHTML.createElement("p", {});                     (e);
+                { svelteHTML.createElement("p", {});                     e;
                 }
                 };
                 return __svn_snippet_return();

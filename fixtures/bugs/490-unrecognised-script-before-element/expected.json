@@ -1,0 +1,47 @@
+{
+    "errors": [
+        {
+            "file": "src/After.svelte",
+            "line": 1,
+            "column": 8,
+            "code": 1005
+        },
+        {
+            "file": "src/After.svelte",
+            "line": 1,
+            "column": 12,
+            "code": 1005
+        },
+        {
+            "file": "src/After.svelte",
+            "line": 2,
+            "column": 4,
+            "code": 1005
+        },
+        {
+            "file": "src/After.svelte",
+            "line": 3,
+            "column": 1,
+            "code": 1110
+        },
+        {
+            "file": "src/After.svelte",
+            "line": 5,
+            "column": 0,
+            "code": 1005
+        },
+        {
+            "file": "src/After.svelte",
+            "line": 5,
+            "column": 1,
+            "code": 1005
+        },
+        {
+            "file": "src/After.svelte",
+            "line": 5,
+            "column": 5,
+            "code": 1005
+        }
+    ],
+    "_note": "A script block closed by `</script` + newline + `>` is not one svelte2tsx's script expression recognises, so its text is copied verbatim into the template body and the TypeScript parser recovers through the element after it. The recovery errors depend on the element and mustache text being svelte2tsx's (`{ svelteHTML.createElement(\"i\", {});a; }`), and they map through the element head to the `<`, the tag name, and the `}` the mustache's `;` replaces."
+}

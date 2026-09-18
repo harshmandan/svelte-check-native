@@ -13,7 +13,7 @@ function $$render_e40e2c10() {
             { svelteHTML.createElement("p", {});             }
             const $$_value = await (flag ? then : fallback);
             { const value = $$_value;
-            { svelteHTML.createElement("p", {});                 (value.toUpperCase());
+            { svelteHTML.createElement("p", {});                 value.toUpperCase();
             }
             }
         }

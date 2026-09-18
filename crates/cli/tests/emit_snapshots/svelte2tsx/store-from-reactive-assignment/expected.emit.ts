@@ -7,11 +7,11 @@ function $$render_e40e2c10() {
     let [ store2, noStore ] = __svn_invalidate(() => (fromSomewhere()))/*svn:ignore_start*/;let $store2 = __svn_store_get(store2);/*svn:ignore_end*/;
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             ($store);
+        { svelteHTML.createElement("p", {});             $store;
         }
-        { svelteHTML.createElement("p", {});             ($store1);
+        { svelteHTML.createElement("p", {});             $store1;
         }
-        { svelteHTML.createElement("p", {});             ($store2);
+        { svelteHTML.createElement("p", {});             $store2;
         }
     });
     return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

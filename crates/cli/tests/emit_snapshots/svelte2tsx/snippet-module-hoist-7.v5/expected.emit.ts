@@ -6,12 +6,12 @@
 function $$render_e40e2c10() {
     /*svn:ignore_start*/;let $store = __svn_store_get(store);;let $store2 = __svn_store_get(store2);/*svn:ignore_end*/
     const _foo = /** @returns {ReturnType<import('svelte').Snippet>} */ () => { async () => {
-        ($store);
+        $store;
         };
         return __svn_any(0);
     };
     const _foo2 = /** @returns {ReturnType<import('svelte').Snippet>} */ () => { async () => {
-        ($store2);
+        $store2;
         };
         return __svn_any(0);
     };

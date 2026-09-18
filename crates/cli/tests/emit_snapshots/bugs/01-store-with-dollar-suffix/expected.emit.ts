@@ -7,7 +7,7 @@ function $$render_e40e2c10() {
     const parent$ = writable(0)/*svn:ignore_start*/;let $parent$ = __svn_store_get(parent$);/*svn:ignore_end*/;
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             ($parent$);
+        { svelteHTML.createElement("p", {});             $parent$;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

@@ -8,12 +8,12 @@ function $$render_e40e2c10() {
             const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, var: new_var } = __svn_inst_0.$$slot_def.default; $$_$$;
-                { svelteHTML.createElement("h1", {});                     (new_var);
+                { svelteHTML.createElement("h1", {});                     new_var;
                 }
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, slotvar: newvar } = __svn_inst_0.$$slot_def["someslot"]; $$_$$;
                     { svelteHTML.createElement("div", {});                         (newvar);
-                        { svelteHTML.createElement("h2", {});                             (newvar);
+                        { svelteHTML.createElement("h2", {});                             newvar;
                         }
                     }
                 }

@@ -12,7 +12,7 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         ;(item.id);
         {
-            { svelteHTML.createElement("p", {});                 (item.id);
+            { svelteHTML.createElement("p", {});                 item.id;
             }
         }
         ;(undefinedFoo);

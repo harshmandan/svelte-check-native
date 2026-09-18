@@ -5,7 +5,7 @@ function $$render_e40e2c10() {
         { svelteHTML.createElement("button", {
             "onclick": (() => icon?.play()),
         });
-            (count);
+            count;
         }
         };
         return __svn_any(0);

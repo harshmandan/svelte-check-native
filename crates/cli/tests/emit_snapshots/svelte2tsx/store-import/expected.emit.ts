@@ -11,11 +11,11 @@ function $$render_e40e2c10() {
                                                
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             ($storeA);
+        { svelteHTML.createElement("p", {});             $storeA;
         }
-        { svelteHTML.createElement("p", {});             ($storeB);
+        { svelteHTML.createElement("p", {});             $storeB;
         }
-        { svelteHTML.createElement("p", {});             ($storeC);
+        { svelteHTML.createElement("p", {});             $storeC;
         }
     });
     return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

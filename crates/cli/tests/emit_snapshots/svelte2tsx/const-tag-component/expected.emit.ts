@@ -20,12 +20,12 @@ function $$render_e40e2c10() {
                 { svelteHTML.createElement("svelte:fragment", {});                     const {area, volume} = calculate(box.width, box.height, constant);
                     const perimeter = (box.width + box.height) * constant;
                     const [width, height, sum] = [box.width * constant, box.height, box.width * constant + box.height];
-                    { svelteHTML.createElement("div", {});                         (area);
-                        (volume);
-                        (perimeter);
-                        (width);
-                        (height);
-                        (sum);
+                    { svelteHTML.createElement("div", {});                         area;
+                        volume;
+                        perimeter;
+                        width;
+                        height;
+                        sum;
                     }
                 }
             }
@@ -34,12 +34,12 @@ function $$render_e40e2c10() {
                 { svelteHTML.createElement("svelte:fragment", {});                     const {area, volume} = calculate(width, height, constant);
                     const perimeter = (width + height) * constant;
                     const [_width, _height, sum] = [width * constant, height, width * constant + height];
-                    { svelteHTML.createElement("div", {});                         (area);
-                        (volume);
-                        (perimeter);
-                        (_width);
-                        (_height);
-                        (sum);
+                    { svelteHTML.createElement("div", {});                         area;
+                        volume;
+                        perimeter;
+                        _width;
+                        _height;
+                        sum;
                     }
                 }
             }
@@ -48,12 +48,12 @@ function $$render_e40e2c10() {
                 { svelteHTML.createElement("svelte:fragment", {});                     const {area, volume} = calculate(width, height, constant);
                     const perimeter = (width + height) * constant;
                     const [_width, _height, sum] = [width * constant, height, width * constant + height];
-                    { svelteHTML.createElement("div", {});                         (area);
-                        (volume);
-                        (perimeter);
-                        (_width);
-                        (_height);
-                        (sum);
+                    { svelteHTML.createElement("div", {});                         area;
+                        volume;
+                        perimeter;
+                        _width;
+                        _height;
+                        sum;
                     }
                 }
             }
@@ -68,12 +68,12 @@ function $$render_e40e2c10() {
                     { svelteHTML.createElement("div", {});                         const {area, volume} = calculate(box.width, box.height, constant);
                         const perimeter = (box.width + box.height) * constant;
                         const [width, height, sum] = [box.width * constant, box.height, box.width * constant + box.height];
-                        { svelteHTML.createElement("div", {});                             (area);
-                            (volume);
-                            (perimeter);
-                            (width);
-                            (height);
-                            (sum);
+                        { svelteHTML.createElement("div", {});                             area;
+                            volume;
+                            perimeter;
+                            width;
+                            height;
+                            sum;
                         }
                     }
                 }
@@ -82,24 +82,24 @@ function $$render_e40e2c10() {
                     { svelteHTML.createElement("div", {});                         const {area, volume} = calculate(width, height, constant);
                         const perimeter = (width + height) * constant;
                         const [_width, _height, sum] = [width * constant, height, width * constant + height];
-                        { svelteHTML.createElement("div", {});                             (area);
-                            (volume);
-                            (perimeter);
-                            (_width);
-                            (_height);
-                            (sum);
+                        { svelteHTML.createElement("div", {});                             area;
+                            volume;
+                            perimeter;
+                            _width;
+                            _height;
+                            sum;
                         }
                     }
                 }
                 const {area, volume} = calculate(box.width, box.height, constant);
                 const perimeter = (box.width + box.height) * constant;
                 const [width, height, sum] = [box.width * constant, box.height, box.width * constant + box.height];
-                { svelteHTML.createElement("div", {});                     (area);
-                    (volume);
-                    (perimeter);
-                    (width);
-                    (height);
-                    (sum);
+                { svelteHTML.createElement("div", {});                     area;
+                    volume;
+                    perimeter;
+                    width;
+                    height;
+                    sum;
                 }
             }
         }
@@ -111,12 +111,12 @@ function $$render_e40e2c10() {
                 const {area, volume} = calculate(width, height, constant);
                 const perimeter = (width + height) * constant;
                 const [_width, _height, sum] = [width * constant, height, width * constant + height];
-                { svelteHTML.createElement("div", {});                     (area);
-                    (volume);
-                    (perimeter);
-                    (_width);
-                    (_height);
-                    (sum);
+                { svelteHTML.createElement("div", {});                     area;
+                    volume;
+                    perimeter;
+                    _width;
+                    _height;
+                    sum;
                 }
             }
         }

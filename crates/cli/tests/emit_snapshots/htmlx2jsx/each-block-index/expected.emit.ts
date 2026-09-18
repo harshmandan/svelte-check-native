@@ -5,8 +5,8 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         for (let item of __svn_each_items(items)) {
             let i = 1;
-            { svelteHTML.createElement("div", {});                 (item);
-                (i);
+            { svelteHTML.createElement("div", {});                 item;
+                i;
             }
         }
     });

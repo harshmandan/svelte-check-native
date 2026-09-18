@@ -7,11 +7,11 @@ function $$render_e40e2c10() {
             { svelteHTML.createElement("h1", {});             }
             try { const $$_value = await (somePromise);
             { const value = $$_value;
-            { svelteHTML.createElement("h1", {});                 (value);
+            { svelteHTML.createElement("h1", {});                 value;
             }
             }
             } catch ($$_e) { const error = __svn_any();
-            { svelteHTML.createElement("h1", {});                 (error);
+            { svelteHTML.createElement("h1", {});                 error;
             }
             }
         }

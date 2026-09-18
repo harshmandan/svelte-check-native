@@ -9,7 +9,7 @@ function $$render_ebbf9128() {
         { svelteHTML.createElement("button", {
             "onclick": (onToggle),
         });
-            (open ? 'close' : 'open');
+            open ? 'close' : 'open';
         }
     });
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };

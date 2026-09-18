@@ -7,7 +7,7 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         for (let item of __svn_each_items(items)) {
             const doubled = nonexistentRef + item;
-            { svelteHTML.createElement("p", {});                 (doubled);
+            { svelteHTML.createElement("p", {});                 doubled;
             }
         }
     });

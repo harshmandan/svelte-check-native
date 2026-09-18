@@ -4,10 +4,10 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         if ((name == "world")) {
-            { svelteHTML.createElement("h1", {});                 (name);
+            { svelteHTML.createElement("h1", {});                 name;
             }
         } else {
-            { svelteHTML.createElement("h2", {});                 (name);
+            { svelteHTML.createElement("h2", {});                 name;
             }
         }
     });

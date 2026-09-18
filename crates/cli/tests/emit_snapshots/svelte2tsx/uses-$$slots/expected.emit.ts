@@ -6,9 +6,9 @@ function $$render_e40e2c10() {
     const __svn_create_slot = __svn_create_create_slot();
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("h1", {});             ($$slots.foo);
+        { svelteHTML.createElement("h1", {});             $$slots.foo;
         }
-        { svelteHTML.createElement("h1", {});             ($$slots['dashed-name']);
+        { svelteHTML.createElement("h1", {});             $$slots['dashed-name'];
         }
         {
             __svn_create_slot("foo", {  });

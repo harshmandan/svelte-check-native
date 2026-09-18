@@ -13,9 +13,9 @@ function $$render_e40e2c10() {
   const t: string = d;
     ;(async () => {
         // template type-check body (incremental)
-        (d);
-        (e);
-        (t);
+        d;
+        e;
+        t;
     });
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }

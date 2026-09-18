@@ -10,8 +10,8 @@ function $$render_e40e2c10() {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, name: n, shadowed1, shadowed2, subthing } = __svn_inst_0.$$slot_def.default; $$_$$;
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, subthing } = __svn_inst_0.$$slot_def["sub1"]; $$_$$;
-                    { svelteHTML.createElement("p", {});                         (thing);
-                        (subthing);
+                    { svelteHTML.createElement("p", {});                         thing;
+                        subthing;
                     }
                 }
                 {
@@ -19,8 +19,8 @@ function $$render_e40e2c10() {
                     {
                         const __svn_C_169 = __svn_ensure_component(Sub);
                         new __svn_C_169({ target: __svn_any(), props: {children: () => __svn_snippet_return(), subthing} });
-                        (thing);
-                        (subthing);
+                        thing;
+                        subthing;
                     }
                 }
                 {
@@ -28,8 +28,8 @@ function $$render_e40e2c10() {
                     const __svn_inst_205 = new __svn_C_205({ target: __svn_any(), props: {children: () => __svn_snippet_return(), subthing} });
                     {
                         const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, subthing, othersubthing } = __svn_inst_205.$$slot_def.default; $$_$$;
-                        (thing);
-                        (subthing);
+                        thing;
+                        subthing;
                     }
                 }
             }

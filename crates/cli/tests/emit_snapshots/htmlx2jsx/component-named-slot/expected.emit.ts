@@ -13,9 +13,9 @@ function $$render_e40e2c10() {
                     {
                         const __svn_C_23 = __svn_ensure_component(Component);
                         new __svn_C_23({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
-                        (foo);
-                        (baz);
-                        (bla);
+                        foo;
+                        baz;
+                        bla;
                     }
                 }
                 {
@@ -23,7 +23,7 @@ function $$render_e40e2c10() {
                     const __svn_inst_73 = new __svn_C_73({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                     {
                         const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, blubb } = __svn_inst_73.$$slot_def.default; $$_$$;
-                        (blubb);
+                        blubb;
                     }
                 }
             }

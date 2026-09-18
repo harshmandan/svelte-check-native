@@ -9,8 +9,8 @@ function $$render_e40e2c10() {
   ;() => { $: { void (a, b); console.log('x'); } };
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (a);
-            (b);
+        { svelteHTML.createElement("p", {});             a;
+            b;
         }
     });
     void a;

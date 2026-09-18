@@ -9,7 +9,7 @@ function $$render_e40e2c10() {
                 const __svn_inst_10 = new __svn_C_10({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo } = __svn_inst_10.$$slot_def.default; $$_$$;
-                    (foo);
+                    foo;
                 }
             }
             if ((hi && bye)) {
@@ -18,7 +18,7 @@ function $$render_e40e2c10() {
                     const __svn_inst_55 = new __svn_C_55({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                     {
                         const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo: bar } = __svn_inst_55.$$slot_def.default; $$_$$;
-                        (bar);
+                        bar;
                     }
                 }
             } else if ((cool)) {
@@ -27,7 +27,7 @@ function $$render_e40e2c10() {
                     const __svn_inst_a8 = new __svn_C_a8({ target: __svn_any(), props: {} });
                     {
                         const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo, foo1 } = __svn_inst_a8.$$slot_def["named"]; $$_$$;
-                        { svelteHTML.createElement("div", {});                             (foo);
+                        { svelteHTML.createElement("div", {});                             foo;
                         }
                     }
                 }
@@ -37,7 +37,7 @@ function $$render_e40e2c10() {
                     const __svn_inst_12c = new __svn_C_12c({ target: __svn_any(), props: {} });
                     {
                         const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo: bar } = __svn_inst_12c.$$slot_def["named"]; $$_$$;
-                        { svelteHTML.createElement("div", {});                             (bar);
+                        { svelteHTML.createElement("div", {});                             bar;
                         }
                     }
                 }

@@ -10,7 +10,7 @@ function $$render_d01ef561() {
     let w = $state(0);
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (w);
+        { svelteHTML.createElement("p", {});             w;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

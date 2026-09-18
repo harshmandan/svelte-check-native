@@ -14,7 +14,7 @@ function $$render_e40e2c10() {
             { svelteHTML.createElement("button", {
                 "on:click": (() => (name = '')),
             });
-                (i);
+                i;
             }
         }
     });

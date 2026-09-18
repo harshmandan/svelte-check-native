@@ -18,12 +18,12 @@ function $$render_e40e2c10() {
             const {area, volume} = calculate(width, height, constant);
             const perimeter = (width + height) * constant;
             const [_width, _height, sum] = [width * constant, height, width * constant + height];
-            { svelteHTML.createElement("div", {});                 (area);
-                (volume);
-                (perimeter);
-                (_width);
-                (_height);
-                (sum);
+            { svelteHTML.createElement("div", {});                 area;
+                volume;
+                perimeter;
+                _width;
+                _height;
+                sum;
             }
         }
     });

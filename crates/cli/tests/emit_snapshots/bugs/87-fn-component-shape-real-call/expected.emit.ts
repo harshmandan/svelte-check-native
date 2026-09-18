@@ -27,7 +27,7 @@ function handle() {
         { svelteHTML.createElement("button", {
             "onclick": (handle),
         });
-            (value);
+            value;
         }
     });
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };

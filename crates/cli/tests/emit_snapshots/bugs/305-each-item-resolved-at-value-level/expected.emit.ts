@@ -11,8 +11,8 @@ function $$render_86f64a55() {
             const __svn_inst_3e = new __svn_C_3e({ target: __svn_any(), props: {children: () => __svn_snippet_return(), "list": ([])} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, item: café } = __svn_inst_3e.$$slot_def.default; $$_$$;
-                (café.name);
-                (café.nope);
+                café.name;
+                café.nope;
             }
         }
     });
@@ -97,7 +97,7 @@ function $$render_5b9f5cf4() {
             const __svn_inst_3f = new __svn_C_3f({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, item } = __svn_inst_3f.$$slot_def.default; $$_$$;
-                (item.nope);
+                item.nope;
             }
         }
     });
@@ -126,7 +126,7 @@ function $$render_e40e2c10() {
             const __svn_inst_3e = new __svn_C_3e({ target: __svn_any(), props: {children: () => __svn_snippet_return(), "list": ([])} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, item } = __svn_inst_3e.$$slot_def.default; $$_$$;
-                (item.name);
+                item.name;
             }
         }
     });

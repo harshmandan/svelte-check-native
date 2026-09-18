@@ -26,9 +26,9 @@ async function $$render_e40e2c10() {
     const total: number = count + 1;
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (greeting);
+        { svelteHTML.createElement("p", {});             greeting;
         }
-        { svelteHTML.createElement("p", {});             (total);
+        { svelteHTML.createElement("p", {});             total;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

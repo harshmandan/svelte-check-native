@@ -6,7 +6,7 @@ function $$render_18ae338e/*svn:ignore_start*/<T extends { a: string, b: number 
            let x: T/*svn:ignore_start*/;x = __svn_any(x);/*svn:ignore_end*/;
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (x.a);
+        { svelteHTML.createElement("p", {});             x.a;
         }
     });
     void x;

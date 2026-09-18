@@ -14,23 +14,23 @@ function $$render_e40e2c10() {
     $store?.prop?.anotherProp;
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             ($store);
+        { svelteHTML.createElement("p", {});             $store;
         }
-        { svelteHTML.createElement("p", {});             ($store.prop);
+        { svelteHTML.createElement("p", {});             $store.prop;
         }
-        { svelteHTML.createElement("p", {});             ($store['prop']);
+        { svelteHTML.createElement("p", {});             $store['prop'];
         }
-        { svelteHTML.createElement("p", {});             ($store.prop.anotherProp);
+        { svelteHTML.createElement("p", {});             $store.prop.anotherProp;
         }
-        { svelteHTML.createElement("p", {});             ($store['prop'].anotherProp);
+        { svelteHTML.createElement("p", {});             $store['prop'].anotherProp;
         }
-        { svelteHTML.createElement("p", {});             ($store.prop['anotherProp']);
+        { svelteHTML.createElement("p", {});             $store.prop['anotherProp'];
         }
-        { svelteHTML.createElement("p", {});             ($store['prop']['anotherProp']);
+        { svelteHTML.createElement("p", {});             $store['prop']['anotherProp'];
         }
-        { svelteHTML.createElement("p", {});             ($store?.prop.anotherProp);
+        { svelteHTML.createElement("p", {});             $store?.prop.anotherProp;
         }
-        { svelteHTML.createElement("p", {});             ($store?.prop?.anotherProp);
+        { svelteHTML.createElement("p", {});             $store?.prop?.anotherProp;
         }
     });
     return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

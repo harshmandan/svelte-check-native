@@ -5,7 +5,7 @@ function $$render_e40e2c10() {
     const n: number = 'oops';
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("ul", {});             { svelteHTML.createElement("li", {});                 (n);
+        { svelteHTML.createElement("ul", {});             { svelteHTML.createElement("li", {});                 n;
             }
             { svelteHTML.createElement("li", {});             }
         }

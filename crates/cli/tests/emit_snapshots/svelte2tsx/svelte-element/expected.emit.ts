@@ -8,7 +8,7 @@ function $$render_e40e2c10() {
         { svelteHTML.createElement((tag), {});         }
         { svelteHTML.createElement("tag", {});         }
         { svelteHTML.createElement((tag ? 'a' : 'b'), {});         }
-        { svelteHTML.createElement((tag), {});             (tag);
+        { svelteHTML.createElement((tag), {});             tag;
         }
         { svelteHTML.createElement((tag), {
             "on:click": (() => tag),

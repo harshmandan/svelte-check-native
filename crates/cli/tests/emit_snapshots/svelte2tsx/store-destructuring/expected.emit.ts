@@ -7,15 +7,15 @@ function $$render_e40e2c10() {
     const [ store3, store4, noStore ] = fromSomewhere()/*svn:ignore_start*/;let $store3 = __svn_store_get(store3);;let $store4 = __svn_store_get(store4);/*svn:ignore_end*/;
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             ($store);
+        { svelteHTML.createElement("p", {});             $store;
         }
-        { svelteHTML.createElement("p", {});             ($store1);
+        { svelteHTML.createElement("p", {});             $store1;
         }
-        { svelteHTML.createElement("p", {});             ($store2);
+        { svelteHTML.createElement("p", {});             $store2;
         }
-        { svelteHTML.createElement("p", {});             ($store3);
+        { svelteHTML.createElement("p", {});             $store3;
         }
-        { svelteHTML.createElement("p", {});             ($store4);
+        { svelteHTML.createElement("p", {});             $store4;
         }
     });
     return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

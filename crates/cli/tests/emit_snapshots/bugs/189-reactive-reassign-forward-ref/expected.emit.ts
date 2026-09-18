@@ -7,7 +7,7 @@ function $$render_e40e2c10() {
     const normalize = (v: string): string => v.trim();
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (value);
+        { svelteHTML.createElement("p", {});             value;
         }
     });
     void value;

@@ -7,8 +7,8 @@ function $$render_e40e2c10<T extends 'a,b', U>() {
     let { a, b }: Props = $props();
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (a);
-            (typeof b);
+        { svelteHTML.createElement("p", {});             a;
+            typeof b;
         }
     });
     return { props: undefined as any as (Props), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };

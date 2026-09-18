@@ -3,7 +3,7 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
-        (console.log(''.));
+        console.log(''.);
         {
             const $$_value = await (Promise.resolve(''.));
             { const value = $$_value;

@@ -26,7 +26,7 @@ function $$render_e40e2c10() {
     void title;
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (title);
+        { svelteHTML.createElement("p", {});             title;
         }
     });
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };

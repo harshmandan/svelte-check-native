@@ -23,7 +23,7 @@ function $$render_e40e2c10() {
             },
         })));
             { svelteHTML.createElement("div", __svn_union(__svn_action_0), {});                 void __svn_action_0;
-                (item);
+                item;
             }
         }
     });

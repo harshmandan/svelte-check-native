@@ -6,7 +6,7 @@ function $$render_e40e2c10() {
   let x = 1; x.foo();
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (x);
+        { svelteHTML.createElement("p", {});             x;
         }
     });
     return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

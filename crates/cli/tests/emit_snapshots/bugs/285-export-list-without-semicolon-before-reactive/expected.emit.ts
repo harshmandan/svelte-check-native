@@ -19,8 +19,8 @@ function $$render_e40e2c10() {
         { svelteHTML.createElement("div", {
             "class": (_class),
         });
-            (label);
-            ($selected);
+            label;
+            $selected;
         }
     });
     void label;

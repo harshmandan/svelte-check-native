@@ -6,8 +6,8 @@ function $$render_ebbf9128() {
     let { label, index }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("span", {});             (label);
-            (index);
+        { svelteHTML.createElement("span", {});             label;
+            index;
         }
     });
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };

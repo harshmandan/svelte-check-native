@@ -14,11 +14,11 @@ function $$render_e40e2c10() {
             const area = box.width * box.height;
             let label: number = $state(`${area} square pixels`);
             const doubled: string = area * 2;
-            { svelteHTML.createElement("p", {});                 (doubled === 1);
-                (label === 'large');
+            { svelteHTML.createElement("p", {});                 doubled === 1;
+                label === 'large';
             }
             { svelteHTML.createElement("div", {});                 const area = 'nested';
-                (area);
+                area;
             }
         }
     });

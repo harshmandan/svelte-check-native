@@ -6,8 +6,8 @@ function $$render_e40e2c10() {
     function shout(s: string): string { return s.toUpperCase(); }
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("textarea", {});             (shout(note));
-            (shout(42));
+        { svelteHTML.createElement("textarea", {});             shout(note);
+            shout(42);
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

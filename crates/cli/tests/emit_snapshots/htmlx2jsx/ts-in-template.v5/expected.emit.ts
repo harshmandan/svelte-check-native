@@ -38,7 +38,7 @@ function $$render_e40e2c10() {
         for (let item: string of __svn_each_items(items as [''])) {
             let i = 1;
             (item);
-            (item as string);
+            item as string;
         }
         {
             try { const $$_value = await (foo as Promise<void>);

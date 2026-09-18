@@ -4,7 +4,7 @@ async function $$render_e40e2c10<T>() {
     type $$ComponentProps = { prop?: T };
     type $$Events = {};
     const x = (): ReturnType<import('svelte').Snippet> => { async () => {
-        (await promise);
+        await promise;
         };
         return __svn_any(0);
     };
@@ -14,21 +14,21 @@ async function $$render_e40e2c10<T>() {
     const promise = fetch('/bar');
     ;(async () => {
         // template type-check body (incremental)
-        (foo);
-        (await promise);
+        foo;
+        await promise;
         for (let item of __svn_each_items(await promise)) {
-            (item);
+            item;
         }
         for (let item of __svn_each_items(await promise)) {
             let i = 1;
-            (item);
-            (i);
+            item;
+            i;
         }
         for (let item of __svn_each_items(await promise)) {
             let i = 1;
             (item.x);
-            (item);
-            (i);
+            item;
+            i;
         }
         for (let __svn_each_unused of __svn_each_items(await promise)) {
             __svn_each_unused;
@@ -47,7 +47,7 @@ async function $$render_e40e2c10<T>() {
         __svn_ensure_snippet(x(await promise));
         if ((true)) {
             const x = await promise;
-            (x);
+            x;
         }
     });
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };

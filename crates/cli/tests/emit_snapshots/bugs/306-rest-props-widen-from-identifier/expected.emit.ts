@@ -6,7 +6,7 @@ function $$render_d01ef561() {
   // TODO: forward $$restProps to the root element later
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             (a);
+        { svelteHTML.createElement("p", {});             a;
         }
     });
     void a;

@@ -17,12 +17,12 @@ function $$render_e40e2c10() {
             const {area, volume} = calculate(box.width, box.height, constant);
             const perimeter = (box.width + box.height) * constant;
             const [width, height, sum] = [box.width * constant, box.height, box.width * constant + box.height];
-            { svelteHTML.createElement("div", {});                 (area);
-                (volume);
-                (perimeter);
-                (width);
-                (height);
-                (sum);
+            { svelteHTML.createElement("div", {});                 area;
+                volume;
+                perimeter;
+                width;
+                height;
+                sum;
             }
             }
         }
@@ -32,12 +32,12 @@ function $$render_e40e2c10() {
             const {area, volume} = calculate(box.width, box.height, constant);
             const perimeter = (box.width + box.height) * constant;
             const [width, height, sum] = [box.width * constant, box.height, box.width * constant + box.height];
-            { svelteHTML.createElement("div", {});                 (area);
-                (volume);
-                (perimeter);
-                (width);
-                (height);
-                (sum);
+            { svelteHTML.createElement("div", {});                 area;
+                volume;
+                perimeter;
+                width;
+                height;
+                sum;
             }
             }
         }

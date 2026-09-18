@@ -65,11 +65,11 @@ function $$render_e40e2c10() {
                         {
                             try { const $$_value = await (page);
                             { const text = $$_value;
-                            { svelteHTML.createElement("p", {});                                 (text.length);
+                            { svelteHTML.createElement("p", {});                                 text.length;
                             }
                             }
                             } catch ($$_e) { const err = __svn_any();
-                            { svelteHTML.createElement("p", {});                                 (err);
+                            { svelteHTML.createElement("p", {});                                 err;
                             }
                             }
                         }
@@ -90,8 +90,8 @@ function $$render_e40e2c10() {
                         {
                             const $$_value = await (page);
                             { const text = $$_value;
-                            { svelteHTML.createElement("p", {});                                 (label.toUpperCase());
-                                (text);
+                            { svelteHTML.createElement("p", {});                                 label.toUpperCase();
+                                text;
                             }
                             }
                         }

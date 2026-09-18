@@ -6,8 +6,8 @@ function $$render_e40e2c10() {
 	let id = $props.id();
     ;(async () => {
         // template type-check body (incremental)
-        (id);
-        (props);
+        id;
+        props;
     });
     return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }

@@ -19,7 +19,7 @@ function $$render_e40e2c10() {
     let { foo }: Props = $props()
     ;(async () => {
         // template type-check body (incremental)
-        ($store);
+        $store;
     });
     return { props: undefined as any as (Props), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }

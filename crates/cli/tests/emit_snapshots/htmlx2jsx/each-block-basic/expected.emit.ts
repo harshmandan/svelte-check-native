@@ -4,7 +4,7 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         for (let item of __svn_each_items(items)) {
-            { svelteHTML.createElement("div", {});                 (item);
+            { svelteHTML.createElement("div", {});                 item;
             }
         }
     });

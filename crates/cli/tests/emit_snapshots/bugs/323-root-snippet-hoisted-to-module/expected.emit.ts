@@ -3,7 +3,7 @@
 
   export { row };
 const row = (n: number): ReturnType<import('svelte').Snippet> => { async () => {
-    { svelteHTML.createElement("b", {});         (n);
+    { svelteHTML.createElement("b", {});         n;
     }
     };
     return __svn_any(0);

@@ -10,8 +10,8 @@ function $$render_e40e2c10() {
     $derived;
     ;(async () => {
         // template type-check body (incremental)
-        (state);
-        (derived);
+        state;
+        derived;
     });
     return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }

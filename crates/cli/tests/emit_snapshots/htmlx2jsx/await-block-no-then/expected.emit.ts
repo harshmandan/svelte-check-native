@@ -11,7 +11,7 @@ function $$render_e40e2c10() {
             { svelteHTML.createElement("div", {});             }
             try { await (aPromise);
             } catch ($$_e) { const error = __svn_any();
-            { svelteHTML.createElement("div", {});                 (error);
+            { svelteHTML.createElement("div", {});                 error;
             }
             }
         }

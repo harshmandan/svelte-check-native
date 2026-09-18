@@ -32,11 +32,11 @@ async function $$render_e40e2c10() {
     const upper = $derived(await Promise.resolve(title.toUpperCase()));
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("h1", {});             (title);
+        { svelteHTML.createElement("h1", {});             title;
         }
-        { svelteHTML.createElement("p", {});             (upper);
+        { svelteHTML.createElement("p", {});             upper;
         }
-        { svelteHTML.createElement("p", {});             (await fetchCount());
+        { svelteHTML.createElement("p", {});             await fetchCount();
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

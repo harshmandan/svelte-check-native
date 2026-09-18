@@ -3,7 +3,7 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
-        (someRecord[anotherRecord.]);
+        someRecord[anotherRecord.];
     });
     return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }

@@ -7,24 +7,24 @@ function $$render_e40e2c10() {
             {
                 const $$_value = await (hello.foo);
                 { const y = $$_value;
-                (y);
+                y;
                 }
             }
             {
                 const $$_value = await (x);
                 { const y = $$_value;
-                (y);
+                y;
                 }
             }
             {
-                (hello);
+                hello;
                 await (aPromise);
             }
             if ((hi && bye)) {
                 {
                     try { const $$_value = await (x);
                     { const y = $$_value;
-                    (y);
+                    y;
                     }
                     } catch ($$_e) {
                     }
@@ -33,7 +33,7 @@ function $$render_e40e2c10() {
                 {
                     try { const $$_value = await (x);
                     { const y = $$_value;
-                    (y);
+                    y;
                     }
                     } catch ($$_e) {
                     }
@@ -42,7 +42,7 @@ function $$render_e40e2c10() {
                 {
                     const $$_value = await (x);
                     { const y = $$_value;
-                    (y);
+                    y;
                     }
                 }
             }

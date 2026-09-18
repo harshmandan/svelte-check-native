@@ -118,6 +118,7 @@ pub(crate) fn emit_element_node(
         emit_dom_element_open(
             buf,
             source,
+            e.range.start,
             e.name.as_str(),
             true,
             &e.attributes,
@@ -342,6 +343,7 @@ pub(crate) fn emit_svelte_element_node(
             emit_dom_element_open_with_snippet_props(
                 buf,
                 source,
+                s.range.start,
                 &tag,
                 true,
                 &s.attributes,
@@ -435,9 +437,11 @@ pub(crate) fn emit_svelte_element_node(
 /// the first arg is a quoted string literal (`"div"`) — set false for
 /// `svelte:element this={tag}` where the caller passes the expression
 /// verbatim as `tag_name`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_dom_element_open(
     buf: &mut EmitBuffer,
     source: &str,
+    tag_start: u32,
     tag_name: &str,
     tag_literal: bool,
     attributes: &[svn_parser::Attribute],
@@ -447,6 +451,7 @@ pub(crate) fn emit_dom_element_open(
     emit_dom_element_open_with_snippet_props(
         buf,
         source,
+        tag_start,
         tag_name,
         tag_literal,
         attributes,
@@ -475,6 +480,7 @@ pub(crate) fn emit_dom_element_open(
 pub(crate) fn emit_dom_element_open_with_snippet_props(
     buf: &mut EmitBuffer,
     source: &str,
+    tag_start: u32,
     tag_name: &str,
     tag_literal: bool,
     attributes: &[svn_parser::Attribute],
@@ -502,16 +508,28 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
         }
         format!("__svn_union({args}), ")
     };
+    // The call head stands in for the tag's `<` and a literal tag name
+    // is the source name, the way svelte2tsx's `Element.ts` writes them
+    // over the start tag. A diagnostic anywhere on the head maps to the
+    // `<`, and one on the punctuation after the name to the name.
+    let lt = svn_core::Range::new(tag_start, tag_start + 1);
+    buf.append_synthetic(&indent);
     if tag_literal {
-        let _ = write!(
-            buf,
-            "{indent}{{ svelteHTML.createElement(\"{tag_name}\", {union_prefix}{{"
-        );
+        buf.append_with_source("{ svelteHTML.createElement(\"", lt);
+        let name_start = tag_start as usize + 1;
+        let name_end = name_start + tag_name.len();
+        if source.get(name_start..name_end) == Some(tag_name) {
+            buf.append_with_source(
+                tag_name,
+                svn_core::Range::new(name_start as u32, name_end as u32),
+            );
+        } else {
+            buf.append_synthetic(tag_name);
+        }
+        let _ = write!(buf, "\", {union_prefix}{{");
     } else {
-        let _ = write!(
-            buf,
-            "{indent}{{ svelteHTML.createElement({tag_name}, {union_prefix}{{"
-        );
+        buf.append_with_source("{ svelteHTML.createElement(", lt);
+        let _ = write!(buf, "{tag_name}, {union_prefix}{{");
     }
     let mut any = false;
     // Attribute-name case-folding (upstream `transformAttributeCase`)
@@ -988,6 +1006,7 @@ pub(crate) fn emit_svelte_element_open(
             emit_dom_element_open(
                 buf,
                 source,
+                s.range.start,
                 &tag,
                 true,
                 &s.attributes,
@@ -1030,6 +1049,7 @@ pub(crate) fn emit_svelte_element_open(
             emit_dom_element_open(
                 buf,
                 source,
+                s.range.start,
                 tag.as_deref().unwrap_or("\"\""),
                 false,
                 &s.attributes,

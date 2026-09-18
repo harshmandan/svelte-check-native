@@ -14,7 +14,7 @@ function $$render_e40e2c10() {
         {
             const $$_value = await (Promise.resolve(0));
             { const n = $$_value;
-            (n);
+            n;
             }
         }
     });

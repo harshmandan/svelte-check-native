@@ -9,7 +9,7 @@ const hoistable = (): ReturnType<import('svelte').Snippet> => { async () => {
 };
 function $$render_e40e2c10() {
     const chain = (): ReturnType<import('svelte').Snippet> => { async () => {
-        { svelteHTML.createElement("div", {});             (foo);
+        { svelteHTML.createElement("div", {});             foo;
         }
         };
         return __svn_any(0);

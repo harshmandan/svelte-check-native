@@ -12,8 +12,8 @@ function $$render_e40e2c10() {
         });
             /*svn:ignore_start*/void (() => { x = __svn_any(null); });/*svn:ignore_end*/
         }
-        { svelteHTML.createElement("p", {});             (x);
-            (y);
+        { svelteHTML.createElement("p", {});             x;
+            y;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

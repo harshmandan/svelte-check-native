@@ -8,8 +8,8 @@ function $$render_e40e2c10() {
             const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, name: n, thing } = __svn_inst_0.$$slot_def.default; $$_$$;
-                { svelteHTML.createElement("h1", {});                     (thing);
-                    (n);
+                { svelteHTML.createElement("h1", {});                     thing;
+                    n;
                 }
             }
         }

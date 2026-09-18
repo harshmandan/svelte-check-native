@@ -13,12 +13,12 @@ function $$render_e40e2c10() {
             { svelteHTML.createElement("p", {});             }
         }
         for (let item of __svn_each_items(items)) {
-            { svelteHTML.createElement("li", {});                 (item);
+            { svelteHTML.createElement("li", {});                 item;
             }
         }
         (markup);
         const doubled = items.length * 2;
-        (doubled);
+        doubled;
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }

@@ -5,7 +5,7 @@ function $$render_e40e2c10() {
     void $$restProps;
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("h1", {});             ($$restProps['name']);
+        { svelteHTML.createElement("h1", {});             $$restProps['name'];
         }
     });
     return { props: {}, events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

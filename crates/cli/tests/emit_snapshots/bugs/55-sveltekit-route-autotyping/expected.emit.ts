@@ -13,9 +13,9 @@ function $$render_aad4163e() {
     let { data, form }: $$ComponentProps = $props();
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("h1", {});             (data.title);
+        { svelteHTML.createElement("h1", {});             data.title;
         }
-        { svelteHTML.createElement("p", {});             (data.count);
+        { svelteHTML.createElement("p", {});             data.count;
         }
         if ((form)) {
             { svelteHTML.createElement("span", {});             }

@@ -13,7 +13,7 @@ function $$render_e40e2c10() {
             "bind:value": (__svn_get_set_binding(() => pick<string, number>(plain),  (v) => sink(v))),
         });
         }
-        { svelteHTML.createElement("p", {});             (plain);
+        { svelteHTML.createElement("p", {});             plain;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

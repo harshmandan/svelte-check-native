@@ -8,8 +8,8 @@ function $$render_e40e2c10() {
     let derived = $derived(state * 2);
     ;(async () => {
         // template type-check body (incremental)
-        (state);
-        (derived);
+        state;
+        derived;
     });
     return { props: /** @type {$$ComponentProps} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }

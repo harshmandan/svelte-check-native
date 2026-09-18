@@ -11,9 +11,9 @@ function $$render_e40e2c10() {
     $store3;
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});             ($store2);
+        { svelteHTML.createElement("p", {});             $store2;
         }
-        { svelteHTML.createElement("p", {});             ($store4);
+        { svelteHTML.createElement("p", {});             $store4;
         }
     });
     return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

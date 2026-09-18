@@ -7,44 +7,44 @@ function $$render_e40e2c10() {
             for (let hello of __svn_each_items(items)) {
                 let i = 1;
                 (hello.id);
-                { svelteHTML.createElement("div", {});                     (hello);
-                    (i);
+                { svelteHTML.createElement("div", {});                     hello;
+                    i;
                 }
                 if ((hello)) {
                     for (let hello of __svn_each_items(items)) {
                         if ((hello)) {
-                            (hello);
+                            hello;
                         }
                     }
                     for (let foo of __svn_each_items(items)) {
                         const hello = foo;
                         if ((hello)) {
-                            (hello);
+                            hello;
                         }
                     }
                 }
             }
             if ((hello)) {
-                (hello);
+                hello;
             }
             if ((hi && bye)) {
                 for (let bye of __svn_each_items(items)) {
-                    { svelteHTML.createElement("div", {});                         (bye);
+                    { svelteHTML.createElement("div", {});                         bye;
                     }
                 }
                 if ((bye)) {
-                    (bye);
+                    bye;
                 }
             } else if ((cool)) {
                 for (let item of __svn_each_items(items)) {
                     let cool = 1;
-                    { svelteHTML.createElement("div", {});                         (item);
-                        (cool);
+                    { svelteHTML.createElement("div", {});                         item;
+                        cool;
                     }
                 }
             } else {
                 for (let hello of __svn_each_items(items)) {
-                    { svelteHTML.createElement("div", {});                         (hello);
+                    { svelteHTML.createElement("div", {});                         hello;
                     }
                 }
             }
@@ -52,31 +52,31 @@ function $$render_e40e2c10() {
         for (let hello of __svn_each_items(items)) {
             let i = 1;
             if ((hello && i && bye)) {
-                (hello);
-                (i);
-                (bye);
+                hello;
+                i;
+                bye;
             } else if ((hello && i && bye)) {
-                (hello);
-                (i);
-                (bye);
+                hello;
+                i;
+                bye;
             } else {
-                (hello);
-                (i);
-                (bye);
+                hello;
+                i;
+                bye;
             }
         }
         if ((hello && i && bye)) {
-            (hello);
-            (i);
-            (bye);
+            hello;
+            i;
+            bye;
         } else if ((hello && i && bye)) {
-            (hello);
-            (i);
-            (bye);
+            hello;
+            i;
+            bye;
         } else {
-            (hello);
-            (i);
-            (bye);
+            hello;
+            i;
+            bye;
         }
     });
     return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

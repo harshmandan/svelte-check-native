@@ -49,14 +49,14 @@ function $$render_e40e2c10() {
                 target: __svn_any(),
                 props: {
                     row: ({ id, label }) => { async () => {
-                        { svelteHTML.createElement("p", {});                             (formatId(id));
-                            (label.toUpperCase());
+                        { svelteHTML.createElement("p", {});                             formatId(id);
+                            label.toUpperCase();
                         }
                         };
                         return __svn_snippet_return();
                     },
                     header: (columns) => { async () => {
-                        { svelteHTML.createElement("h1", {});                             (joinLabels(columns));
+                        { svelteHTML.createElement("h1", {});                             joinLabels(columns);
                         }
                         };
                         return __svn_snippet_return();

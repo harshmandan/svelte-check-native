@@ -4,7 +4,7 @@
 function $$render_e40e2c10() {
     type $$ComponentProps = { header?: Snippet<[string]> };
     const defaultHeader = (n: number): ReturnType<import('svelte').Snippet> => { async () => {
-        { svelteHTML.createElement("h1", {});             (n);
+        { svelteHTML.createElement("h1", {});             n;
         }
         };
         return __svn_any(0);

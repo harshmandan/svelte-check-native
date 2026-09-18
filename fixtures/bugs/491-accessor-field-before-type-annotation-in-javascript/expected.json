@@ -1,0 +1,18 @@
+{
+    "errors": [
+        {
+            "file": "src/AccessorTyped.svelte",
+            "line": 1,
+            "column": 19,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/AccessorTyped.svelte",
+            "line": 1,
+            "column": 22,
+            "code": 8010
+        }
+    ],
+    "warnings": [],
+    "_note": "The compiler's acorn has no `accessor` fields: in a plain script it reads `accessor` as a field name and stops at the next token on the line (`x`), before the type annotation. Our JavaScript parse gives up at the annotation, so the early error on that line comes from the script's TypeScript reading."
+}

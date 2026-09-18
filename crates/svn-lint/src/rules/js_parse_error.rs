@@ -134,7 +134,12 @@ fn first_error(script: &Script<'_, '_, '_>, mode: Mode) -> Option<Candidate> {
             .first()
             .and_then(|d| d.labels.first())
             .map_or(0, |l| l.span().start);
-        early_error_before(text, stop, mode)
+        let before = early_error_before(text, stop, mode);
+        let same_line = early_error_in_typescript_reading(text, stop, mode);
+        match (before, same_line) {
+            (Some(a), Some(b)) => Some(if b.detect < a.detect { b } else { a }),
+            (a, b) => a.or(b),
+        }
     } else {
         first_early_error(script.program, text, mode)
     };
@@ -177,6 +182,31 @@ fn early_error_before(text: &str, stop: u32, mode: Mode) -> Option<Candidate> {
         return first_early_error(&parsed.program, prefix, mode);
     }
     None
+}
+
+/// The early errors before `stop` in a JavaScript script oxc gave up on
+/// at TypeScript syntax, read from the script's TypeScript parse.
+///
+/// [`early_error_before`] only sees whole lines before the syntax
+/// error, but acorn raises an early error wherever it meets one: in
+/// `class K { accessor x: number = 1 }` it takes `accessor` for the
+/// field's name and stops at `x`, before the type annotation oxc gave
+/// up on. TypeScript is a superset of the JavaScript acorn read up to
+/// that point, so when the TypeScript parse succeeds, the JavaScript
+/// checks run on its tree find what acorn found before `stop`.
+fn early_error_in_typescript_reading(text: &str, stop: u32, mode: Mode) -> Option<Candidate> {
+    if mode.ts {
+        return None;
+    }
+    let allocator = oxc_allocator::Allocator::default();
+    let source_type = oxc_span::SourceType::default()
+        .with_module(true)
+        .with_typescript(true);
+    let parsed = oxc_parser::Parser::new(&allocator, text, source_type).parse();
+    if parsed.panicked || !parsed.diagnostics.is_empty() {
+        return None;
+    }
+    first_early_error(&parsed.program, text, mode).filter(|c| c.detect < stop)
 }
 
 /// acorn's version of the first error oxc's parser reported. `None`
@@ -752,6 +782,16 @@ mod tests {
             Some(
                 "1:15 Logical expressions and coalesce expressions cannot be mixed. Wrap either by parentheses"
             )
+        );
+    }
+
+    #[test]
+    fn early_error_on_the_line_of_a_typescript_syntax_error() {
+        // acorn reads `accessor` as the field name and stops at `x`,
+        // before the annotation oxc's JavaScript parse gives up on.
+        assert_eq!(
+            as_written("<script>\nclass K { accessor x: number = 1 }\n</script>").as_deref(),
+            Some("1:19 Unexpected token +hint")
         );
     }
 

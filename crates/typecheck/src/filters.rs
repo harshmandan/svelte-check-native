@@ -333,23 +333,15 @@ pub(crate) fn adjust_message_if_necessary(code: u32, message: &mut String, svelt
 /// manifest) reports `false`, mirroring upstream's
 /// `isSvelte5Plus = Number(undefined) >= 5` fallthrough.
 pub fn workspace_svelte_is_5_plus(workspace: &Path) -> bool {
-    workspace_svelte_major(workspace).is_some_and(|major| major >= 5)
-}
-
-/// Major version of the `svelte` package the workspace resolves (the
-/// nearest `node_modules/svelte` walking up from `workspace`), or
-/// `None` when there is no install or its manifest has no readable
-/// version.
-pub fn workspace_svelte_major(workspace: &Path) -> Option<u32> {
     let mut dir = Some(workspace);
     while let Some(d) = dir {
         let manifest = d.join("node_modules").join("svelte").join("package.json");
         if let Ok(text) = std::fs::read_to_string(&manifest) {
-            return svelte_manifest_major(&text);
+            return svelte_manifest_major(&text).is_some_and(|major| major >= 5);
         }
         dir = d.parent();
     }
-    None
+    false
 }
 
 /// Extract the major version from a package.json's `"version"` field.

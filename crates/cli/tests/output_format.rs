@@ -208,36 +208,3 @@ fn unsupported_flags_rejected_cleanly() {
         );
     }
 }
-
-/// A project whose installed `svelte` is older than 5 is refused with an
-/// invocation error that points at upstream svelte-check.
-#[test]
-fn svelte_before_5_is_rejected() {
-    let bin = env!("CARGO_BIN_EXE_svelte-check-native");
-    for version in ["4.2.19", "3.59.2"] {
-        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("svelte-{version}"));
-        let pkg = dir.join("node_modules").join("svelte");
-        std::fs::create_dir_all(&pkg).expect("create svelte package dir");
-        std::fs::write(
-            pkg.join("package.json"),
-            format!("{{\"version\": \"{version}\"}}"),
-        )
-        .expect("write manifest");
-        std::fs::write(dir.join("tsconfig.json"), "{}").expect("write tsconfig");
-        let out = Command::new(bin)
-            .args(["--workspace"])
-            .arg(&dir)
-            .output()
-            .expect("binary should run");
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert_eq!(
-            out.status.code(),
-            Some(2),
-            "svelte {version}. stderr:\n{stderr}"
-        );
-        assert!(
-            stderr.contains("supports Svelte 5 and later"),
-            "svelte {version}. stderr:\n{stderr}"
-        );
-    }
-}

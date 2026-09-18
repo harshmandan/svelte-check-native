@@ -5,7 +5,10 @@ use svn_parser::ast::{Attribute, Component, DirectiveKind};
 use crate::codes::Code;
 use crate::context::LintContext;
 use crate::messages;
-use crate::rules::element_rules::{AttrParent, validate_component_slot_attribute, visit_attribute};
+use crate::rules::element_rules::{
+    AttrParent, component_attribute_value_errors, sequence_expression_error,
+    validate_component_slot_attribute, visit_attribute,
+};
 
 pub fn visit(comp: &Component, ctx: &mut LintContext<'_>) {
     check_component_attributes(&comp.attributes, ctx);
@@ -51,6 +54,16 @@ pub(crate) fn check_component_attributes(attributes: &[Attribute], ctx: &mut Lin
                 ),
             }
         }
+        if ctx.runes {
+            component_attribute_value_errors(attr, ctx);
+        }
         validate_component_slot_attribute(attr, ctx);
+        // An attachment's expression is never an unparenthesized
+        // comma sequence, whatever the mode.
+        if let Attribute::Spread(s) = attr
+            && s.is_attach
+        {
+            sequence_expression_error(s.expression_range, ctx);
+        }
     }
 }

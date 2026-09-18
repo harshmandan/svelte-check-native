@@ -522,7 +522,13 @@ pub(crate) enum PathFrame {
     /// other than snippets, comments and whitespace.
     Component {
         kind: ComponentKind,
+        /// The tag name (`svelte:component` / `svelte:self` for those).
+        name: SmolStr,
         implicit_children: bool,
+        /// The first child that counts as default-slot content.
+        default_slot_content: Option<svn_core::Range>,
+        /// The slot names its direct children have filled so far.
+        filled_slots: Vec<SmolStr>,
     },
     /// `<svelte:element>`; `slotted` marks one carrying a `slot`
     /// attribute.
@@ -584,7 +590,7 @@ impl PathFrame {
         }
     }
 
-    fn component(kind: ComponentKind, children: &Fragment, source: &str) -> Self {
+    fn component(kind: ComponentKind, name: &str, children: &Fragment, source: &str) -> Self {
         let implicit_children = children.nodes.iter().any(|n| match n {
             Node::SnippetBlock(_) | Node::Comment(_) => false,
             Node::Text(t) => !t
@@ -594,9 +600,34 @@ impl PathFrame {
                 .all(crate::rules::block_rules::is_js_trim_ws),
             _ => true,
         });
+        // The first child that would be default-slot content next to an
+        // explicit `slot="default"`: anything but whitespace text and
+        // elements / `<svelte:fragment>`s carrying a `slot` attribute.
+        let default_slot_content = children
+            .nodes
+            .iter()
+            .find(|n| match n {
+                Node::Text(t) => {
+                    let text = t.range.slice(source);
+                    text.is_empty()
+                        || !text
+                            .chars()
+                            .all(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{c}'))
+                }
+                Node::Element(el) => el.name == "slot" || !has_slot_attribute(&el.attributes),
+                Node::SvelteElement(se) => {
+                    !matches!(se.kind, SvelteElementKind::Fragment)
+                        || !has_slot_attribute(&se.attributes)
+                }
+                _ => true,
+            })
+            .map(Node::range);
         Self::Component {
             kind,
+            name: SmolStr::new(name),
             implicit_children,
+            default_slot_content,
+            filled_slots: Vec::new(),
         }
     }
 }
@@ -635,8 +666,84 @@ fn walk_fragment_impl(
     parent_tag: Option<&str>,
     ancestors: &mut Vec<Ancestor>,
 ) {
+    let nodes: Vec<&Node> = fragment.nodes.iter().collect();
+    walk_fragment_nodes(&nodes, ctx, parent_tag, ancestors);
+}
+
+/// A component's children, visited the way the compiler's
+/// `visit_component` does: as one fragment per slot they fill — the
+/// default slot's first, then each named slot in order of first
+/// appearance. The comments before a child go into its fragment just
+/// before it; before a default-slot child they are also kept for the
+/// next child, so a `svelte-ignore` there reaches every later
+/// default-slot child. Trailing comments belong to no fragment.
+fn walk_component_children(
+    children: &Fragment,
+    ctx: &mut LintContext<'_>,
+    ancestors: &mut Vec<Ancestor>,
+) {
     let source = ctx.source;
-    for (idx, node) in fragment.nodes.iter().enumerate() {
+    let mut groups: Vec<(&str, Vec<&Node>)> = vec![("default", Vec::new())];
+    let mut comments: Vec<&Node> = Vec::new();
+    for node in &children.nodes {
+        if matches!(node, Node::Comment(_)) {
+            comments.push(node);
+            continue;
+        }
+        let slot = filled_slot(node, source).unwrap_or("default");
+        let group = match groups.iter().position(|(name, _)| *name == slot) {
+            Some(i) => i,
+            None => {
+                groups.push((slot, Vec::new()));
+                groups.len() - 1
+            }
+        };
+        groups[group].1.extend(comments.iter().copied());
+        groups[group].1.push(node);
+        if slot != "default" {
+            comments.clear();
+        }
+    }
+    for (_, nodes) in groups {
+        walk_fragment_nodes(&nodes, ctx, None, ancestors);
+    }
+}
+
+/// The compiler's `determine_slot`: the static `slot` attribute value
+/// of an element-like node.
+fn filled_slot<'s>(node: &Node, source: &'s str) -> Option<&'s str> {
+    let attributes = match node {
+        Node::Element(el) => &el.attributes,
+        Node::Component(c) => &c.attributes,
+        Node::SvelteElement(se) => &se.attributes,
+        _ => return None,
+    };
+    attributes.iter().find_map(|a| match a {
+        Attribute::Plain(p) if p.name == "slot" => {
+            let value = p.value.as_ref()?;
+            match value.parts.as_slice() {
+                [] if value.quoted => Some(""),
+                [svn_parser::ast::AttrValuePart::Text { range }] => {
+                    source.get(range.start as usize..range.end as usize)
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    })
+}
+
+/// Visit the nodes of one fragment in order; `nodes` is the fragment
+/// as the compiler's visitors see it, whose earlier entries are each
+/// node's preceding siblings.
+fn walk_fragment_nodes(
+    nodes: &[&Node],
+    ctx: &mut LintContext<'_>,
+    parent_tag: Option<&str>,
+    ancestors: &mut Vec<Ancestor>,
+) {
+    let source = ctx.source;
+    for (idx, &node) in nodes.iter().enumerate() {
         crate::rules::binding_rules::flush_template_write_violations(
             ctx,
             node.range().start,
@@ -669,7 +776,7 @@ fn walk_fragment_impl(
             Node::Text(_) | Node::Comment(_) => false,
         };
         let ignores = if is_target {
-            crate::ignore::collect_preceding_comment_ignores(&fragment.nodes, idx, ctx)
+            crate::ignore::collect_preceding_comment_ignores(nodes, idx, ctx)
         } else {
             Vec::new()
         };
@@ -721,10 +828,11 @@ fn walk_fragment_impl(
                 ancestors.push(Ancestor::Boundary);
                 ctx.template_path.push(PathFrame::component(
                     ComponentKind::Component,
+                    &comp.name,
                     &comp.children,
                     source,
                 ));
-                walk_fragment_impl(&comp.children, ctx, None, ancestors);
+                walk_component_children(&comp.children, ctx, ancestors);
                 ctx.template_path.pop();
                 ancestors.pop();
             }
@@ -741,11 +849,21 @@ fn walk_fragment_impl(
                 ancestors.push(Ancestor::SvelteElement);
                 let (frame, child_parent_tag) = match se.kind {
                     SvelteElementKind::Component => (
-                        PathFrame::component(ComponentKind::SvelteComponent, &se.children, source),
+                        PathFrame::component(
+                            ComponentKind::SvelteComponent,
+                            "svelte:component",
+                            &se.children,
+                            source,
+                        ),
                         None,
                     ),
                     SvelteElementKind::SelfRef => (
-                        PathFrame::component(ComponentKind::SvelteSelf, &se.children, source),
+                        PathFrame::component(
+                            ComponentKind::SvelteSelf,
+                            "svelte:self",
+                            &se.children,
+                            source,
+                        ),
                         None,
                     ),
                     SvelteElementKind::Element => (
@@ -764,8 +882,13 @@ fn walk_fragment_impl(
                     | SvelteElementKind::Body
                     | SvelteElementKind::Options => (PathFrame::Other, parent_tag),
                 };
+                let is_component = matches!(frame, PathFrame::Component { .. });
                 ctx.template_path.push(frame);
-                walk_fragment_impl(&se.children, ctx, child_parent_tag, ancestors);
+                if is_component {
+                    walk_component_children(&se.children, ctx, ancestors);
+                } else {
+                    walk_fragment_impl(&se.children, ctx, child_parent_tag, ancestors);
+                }
                 ctx.template_path.pop();
                 ancestors.pop();
             }
@@ -847,7 +970,7 @@ fn walk_fragment_impl(
                 {
                     text_placement_error(parent, t.range, ctx);
                 }
-                crate::rules::text_rules::visit_text(t, &fragment.nodes[..idx], ctx);
+                crate::rules::text_rules::visit_text(t, &nodes[..idx], ctx);
             }
             Node::Interpolation(i) => {
                 if i.kind == svn_parser::InterpolationKind::AtRender {

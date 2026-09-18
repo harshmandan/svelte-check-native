@@ -294,7 +294,7 @@ fn validate_slot_attribute(
     range: svn_core::Range,
     is_component: bool,
 ) {
-    let path = &ctx.template_path;
+    let path = &mut ctx.template_path;
     // The node that owns the fragment the element sits in.
     let direct_child_of = path.last();
     // The nearest component-like or custom-element ancestor.
@@ -314,9 +314,31 @@ fn validate_slot_attribute(
             Some((i, PathFrame::Component { .. })) if i + 1 != path.len() => {
                 (!is_component).then_some(SlotError::InvalidPlacement)
             }
-            Some((_, PathFrame::Component { .. })) => {
-                invalid_value.then_some(SlotError::InvalidValue)
-            }
+            Some((i, PathFrame::Component { .. })) => match (text, &mut path[i]) {
+                (None, _) => Some(SlotError::InvalidValue),
+                (
+                    Some(name),
+                    PathFrame::Component {
+                        name: owner,
+                        default_slot_content,
+                        filled_slots,
+                        ..
+                    },
+                ) => {
+                    if filled_slots.iter().any(|s| s == name) {
+                        Some(SlotError::Duplicate(SmolStr::new(name), owner.clone()))
+                    } else {
+                        filled_slots.push(SmolStr::new(name));
+                        match default_slot_content {
+                            Some(content) if name == "default" => {
+                                Some(SlotError::DefaultDuplicate(*content))
+                            }
+                            _ => None,
+                        }
+                    }
+                }
+                (Some(_), _) => None,
+            },
             Some(_) => None,
             None => (!is_component).then_some(SlotError::InvalidPlacement),
         }
@@ -332,6 +354,16 @@ fn validate_slot_attribute(
             messages::slot_attribute_invalid_placement(),
             range,
         ),
+        Some(SlotError::Duplicate(name, owner)) => ctx.emit_error(
+            Code::slot_attribute_duplicate,
+            messages::slot_attribute_duplicate(&name, &owner),
+            range,
+        ),
+        Some(SlotError::DefaultDuplicate(content)) => ctx.emit_error(
+            Code::slot_default_duplicate,
+            messages::slot_default_duplicate(),
+            content,
+        ),
         None => {}
     }
 }
@@ -339,6 +371,10 @@ fn validate_slot_attribute(
 enum SlotError {
     InvalidValue,
     InvalidPlacement,
+    /// A second child filling the same slot of the component.
+    Duplicate(SmolStr, SmolStr),
+    /// `slot="default"` next to other default-slot content (its range).
+    DefaultDuplicate(svn_core::Range),
 }
 
 /// Parent kinds understood by the shared attribute visitor. Drives
@@ -1033,26 +1069,7 @@ fn validate_attribute_errors(attr: &Attribute, ctx: &mut LintContext<'_>) {
         _ => None,
     };
     if ctx.runes {
-        if let Attribute::Plain(p) = attr
-            && let Some(v) = &p.value
-            && v.parts.len() > 1
-            && !v.quoted
-        {
-            ctx.emit_error(
-                Code::attribute_unquoted_sequence,
-                messages::attribute_unquoted_sequence(),
-                p.range,
-            );
-        }
-        if let Some(expr) = expression
-            && let Some(sequence) = unparenthesized_sequence(expr, ctx.source)
-        {
-            ctx.emit_error(
-                Code::attribute_invalid_sequence_expression,
-                messages::attribute_invalid_sequence_expression(),
-                sequence,
-            );
-        }
+        attribute_value_shape_errors(attr, expression, ctx);
     }
     if is_illegal_attribute_name(name) {
         ctx.emit_error(
@@ -1075,6 +1092,63 @@ fn validate_attribute_errors(attr: &Attribute, ctx: &mut LintContext<'_>) {
         };
         validate_slot_attribute(ctx, text, range, false);
     }
+}
+
+/// The runes-mode value checks of an element's or component's
+/// attribute: a value of several chunks must be quoted
+/// (`validate_attribute`), and a single expression may not be an
+/// unparenthesized comma sequence.
+fn attribute_value_shape_errors(
+    attr: &Attribute,
+    expression: Option<svn_core::Range>,
+    ctx: &mut LintContext<'_>,
+) {
+    if let Attribute::Plain(p) = attr
+        && let Some(v) = &p.value
+        && v.parts.len() > 1
+        && !v.quoted
+    {
+        ctx.emit_error(
+            Code::attribute_unquoted_sequence,
+            messages::attribute_unquoted_sequence(),
+            p.range,
+        );
+    }
+    if let Some(expr) = expression {
+        sequence_expression_error(expr, ctx);
+    }
+}
+
+/// `attribute_invalid_sequence_expression` for the expression in `range`.
+pub(crate) fn sequence_expression_error(range: svn_core::Range, ctx: &mut LintContext<'_>) {
+    if let Some(sequence) = unparenthesized_sequence(range, ctx.source) {
+        ctx.emit_error(
+            Code::attribute_invalid_sequence_expression,
+            messages::attribute_invalid_sequence_expression(),
+            sequence,
+        );
+    }
+}
+
+/// The runes-mode value checks of a component attribute (see
+/// [`attribute_value_shape_errors`]).
+pub(crate) fn component_attribute_value_errors(attr: &Attribute, ctx: &mut LintContext<'_>) {
+    let expression = match attr {
+        Attribute::Plain(p) => match p.value.as_ref().map(|v| v.parts.as_slice()) {
+            Some(
+                [
+                    AttrValuePart::Expression {
+                        expression_range, ..
+                    },
+                ],
+            ) => Some(*expression_range),
+            _ => None,
+        },
+        Attribute::Expression(e) => Some(e.expression_range),
+        Attribute::Shorthand(_) => None,
+        _ => return,
+    };
+    attribute_value_shape_errors(attr, expression, ctx);
 }
 
 /// The range of the expression in `range` when it is a comma sequence

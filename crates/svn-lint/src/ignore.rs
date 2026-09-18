@@ -59,7 +59,7 @@ const LEGACY_RENAMES: &[(&str, &str)] = &[
 /// Returns the deduplicated list of ignore codes as SmolStr suitable
 /// for pushing into `LintContext::ignore_stack`.
 pub fn collect_preceding_comment_ignores(
-    nodes: &[Node],
+    nodes: &[&Node],
     idx: usize,
     ctx: &mut LintContext<'_>,
 ) -> Vec<SmolStr> {
@@ -71,7 +71,7 @@ pub fn collect_preceding_comment_ignores(
     // Walk backwards collecting codes until we see a non-Comment
     // non-Text sibling.
     for i in (0..idx).rev() {
-        match &nodes[i] {
+        match nodes[i] {
             Node::Comment(c) => {
                 for code in extract_from_comment(c, ctx) {
                     if !result.contains(&code) {

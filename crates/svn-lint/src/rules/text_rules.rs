@@ -19,7 +19,7 @@ fn is_bidi_control(c: char) -> bool {
 }
 
 /// `preceding` holds the siblings before `t` in its fragment.
-pub fn visit_text(t: &Text, preceding: &[Node], ctx: &mut LintContext<'_>) {
+pub fn visit_text(t: &Text, preceding: &[&Node], ctx: &mut LintContext<'_>) {
     // The `#text` `node_invalid_placement` ERROR (e.g. raw text where
     // the HTML5 tree model forbids it) is intentionally not emitted in
     // native mode — same stance as the element placement path. Native
@@ -42,7 +42,7 @@ pub fn visit_text(t: &Text, preceding: &[Node], ctx: &mut LintContext<'_>) {
             if is_ignored {
                 break;
             }
-            if let Node::Comment(c) = sibling {
+            if let Node::Comment(c) = *sibling {
                 is_ignored = crate::ignore::comment_ignores_code(
                     c,
                     Code::bidirectional_control_characters,

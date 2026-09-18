@@ -1308,7 +1308,7 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
                 it.span.start,
                 "Cannot use await in class static initialization block",
             );
-        } else if ctx.field_init || (ctx.function && !ctx.is_async) {
+        } else if (ctx.function && !ctx.is_async) || (!ctx.function && ctx.field_init) {
             self.error(
                 it.span.start,
                 "Cannot use keyword 'await' outside an async function",

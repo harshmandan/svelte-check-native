@@ -27,7 +27,7 @@
 
 use oxc_ast::ast::{
     ArrowFunctionExpression, Expression, LogicalExpression, LogicalOperator, Program,
-    VariableDeclarator,
+    VariableDeclaration, VariableDeclarationKind,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_diagnostics::OxcDiagnostic;
@@ -328,8 +328,30 @@ fn translate(
             return unexpected(next_token_start(text, identifier_end(text, s)));
         }
         "Missing initializer in const declaration" => {
-            let end = declarator_end(program, s).unwrap_or(e);
+            let end = declarator_at(program, s).map_or(e, |(end, _)| end);
             return unexpected(next_token_start(text, end));
+        }
+        "Missing initializer in destructuring declaration" => {
+            // `const` fails at the token after the binding; `let` / `var`
+            // once the binding has been read.
+            return match declarator_at(program, s) {
+                Some((end, VariableDeclarationKind::Const)) => {
+                    unexpected(next_token_start(text, end))
+                }
+                Some((end, _)) => Some(Candidate::at(
+                    end,
+                    "Complex binding patterns require an initialization value",
+                )),
+                None => Some(Candidate::at(
+                    e,
+                    "Complex binding patterns require an initialization value",
+                )),
+            };
+        }
+        "Expected function body" => {
+            // The label runs to the end of the parameter list; acorn
+            // wants the body's `{` right there.
+            return unexpected(next_token_start(text, e));
         }
         "Empty parenthesized expression" => {
             return unexpected(next_token_start(text, s + 1));
@@ -534,18 +556,21 @@ fn in_async_arrow_params(program: &Program<'_>, at: u32) -> bool {
     finder.found
 }
 
-/// The end of the variable declarator whose binding starts at `at`.
-fn declarator_end(program: &Program<'_>, at: u32) -> Option<u32> {
+/// The end of the variable declarator whose binding starts at `at`,
+/// and the kind of its declaration.
+fn declarator_at(program: &Program<'_>, at: u32) -> Option<(u32, VariableDeclarationKind)> {
     struct Finder {
         at: u32,
-        found: Option<u32>,
+        found: Option<(u32, VariableDeclarationKind)>,
     }
     impl<'a> Visit<'a> for Finder {
-        fn visit_variable_declarator(&mut self, it: &VariableDeclarator<'a>) {
-            if it.id.span().start == self.at {
-                self.found = Some(it.span.end);
+        fn visit_variable_declaration(&mut self, it: &VariableDeclaration<'a>) {
+            for declarator in &it.declarations {
+                if declarator.id.span().start == self.at {
+                    self.found = Some((declarator.span.end, it.kind));
+                }
             }
-            walk::walk_variable_declarator(self, it);
+            walk::walk_variable_declaration(self, it);
         }
     }
     let mut finder = Finder { at, found: None };
@@ -649,4 +674,132 @@ fn in_script_tag(doc: &Document<'_>, at: u32) -> bool {
         .as_ref()
         .or(doc.module_script.as_ref())
         .is_some_and(|s| s.content_range.start <= at && at <= s.content_range.end)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxc_allocator::Allocator;
+    use svn_parser::ScriptLang;
+
+    /// The reported error as `line:column` (0-based) plus the message's
+    /// first line, and whether the preprocessing hint was appended.
+    fn report(source: &str, preprocess_ts: bool, preprocess_configured: bool) -> Option<String> {
+        let (doc, _) = svn_parser::parse_sections(source);
+        let ts = crate::rules::typescript_features::compiler_parses_as_ts(source);
+        let lang = if ts { ScriptLang::Ts } else { ScriptLang::Js };
+        let allocator = Allocator::default();
+        let parsed: Vec<_> = [doc.module_script.as_ref(), doc.instance_script.as_ref()]
+            .into_iter()
+            .flatten()
+            .map(|s| {
+                (
+                    s,
+                    svn_parser::parse_script_body(&allocator, s.content, lang),
+                )
+            })
+            .collect();
+        let scripts: Vec<Script<'_, '_, '_>> = parsed
+            .iter()
+            .map(|(section, p)| Script {
+                section,
+                program: &p.program,
+                errors: &p.errors,
+                panicked: p.panicked,
+            })
+            .collect();
+        let settings = Settings {
+            ts,
+            preprocess_ts,
+            preprocess_configured,
+        };
+        let (message, range) = script_parse_error(&doc, source, &scripts, &settings)?;
+        let positions = svn_core::PositionMap::new(source);
+        let at = positions.position_of(range.start);
+        let hint = if message.contains("If you expect") {
+            " +hint"
+        } else {
+            ""
+        };
+        let first = message.lines().next().unwrap_or_default();
+        Some(format!("{}:{} {first}{hint}", at.line, at.character))
+    }
+
+    fn as_written(source: &str) -> Option<String> {
+        report(source, false, true)
+    }
+
+    #[test]
+    fn syntax_errors_take_acorn_positions() {
+        assert_eq!(
+            as_written("<script>\nlet a = 1 2;\n</script>").as_deref(),
+            Some("1:10 Unexpected token +hint")
+        );
+        assert_eq!(
+            as_written("<script>\ninterface A {}\n</script>").as_deref(),
+            Some("1:0 The keyword 'interface' is reserved")
+        );
+        assert_eq!(
+            as_written("<script>\nenum E { A }\n</script>").as_deref(),
+            Some("1:0 The keyword 'enum' is reserved")
+        );
+        assert_eq!(
+            as_written("<script>\nlet s = `abc;\n</script>").as_deref(),
+            Some("1:9 Unterminated template")
+        );
+        assert_eq!(
+            as_written("<script>\nlet x = a ?? b || c;\n</script>").as_deref(),
+            Some(
+                "1:15 Logical expressions and coalesce expressions cannot be mixed. Wrap either by parentheses"
+            )
+        );
+    }
+
+    #[test]
+    fn early_error_before_a_later_syntax_error() {
+        assert_eq!(
+            as_written("<script>\nlet x = 1;\nlet x = 2;\nlet y = ;\n</script>").as_deref(),
+            Some("2:4 Identifier 'x' has already been declared")
+        );
+    }
+
+    #[test]
+    fn modifier_errors_slip_to_the_column_offset() {
+        assert_eq!(
+            as_written("<script lang=\"ts\">\nclass K {\n  static accessor x = 1\n}\n</script>")
+                .as_deref(),
+            Some("0:9 'accessor' modifier cannot be used with 'static' modifier.")
+        );
+    }
+
+    #[test]
+    fn missing_preprocess_hides_expected_messages() {
+        let broken = "<script lang=\"ts\">\nlet v: number = ;\n</script>";
+        assert_eq!(report(broken, true, false), None);
+        assert_eq!(
+            report(broken, false, true).as_deref(),
+            Some("1:16 Unexpected token +hint")
+        );
+        // Other messages are kept, at the start of the token in the
+        // transpiled script.
+        assert_eq!(
+            report(
+                "<script lang=\"ts\">\nlet s = /abc;\n</script>",
+                true,
+                false
+            )
+            .as_deref(),
+            Some("1:8 Unterminated regular expression")
+        );
+    }
+
+    #[test]
+    fn hint_only_inside_the_script_svelte_check_looks_at() {
+        // With an instance script, only positions inside it get the hint.
+        assert_eq!(
+            as_written("<script module>\nlet a = 1 2;\n</script>\n<script>\nlet b = 1;\n</script>")
+                .as_deref(),
+            Some("1:10 Unexpected token")
+        );
+    }
 }

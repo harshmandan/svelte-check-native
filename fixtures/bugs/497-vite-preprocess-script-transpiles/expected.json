@@ -1,0 +1,102 @@
+{
+    "errors": [
+        {
+            "file": "src/IAccessor.svelte",
+            "line": 1,
+            "column": 6,
+            "code": 6196
+        },
+        {
+            "file": "src/IAccessor.svelte",
+            "line": 1,
+            "column": 10,
+            "code": "typescript_invalid_feature"
+        },
+        {
+            "file": "src/IDecorator.svelte",
+            "line": 1,
+            "column": 13,
+            "code": 6133
+        },
+        {
+            "file": "src/IDecorator.svelte",
+            "line": 1,
+            "column": 21,
+            "code": 6133
+        },
+        {
+            "file": "src/IDecorator.svelte",
+            "line": 2,
+            "column": 0,
+            "code": "typescript_invalid_feature"
+        },
+        {
+            "file": "src/IDecorator.svelte",
+            "line": 2,
+            "column": 11,
+            "code": 6196
+        },
+        {
+            "file": "src/IEnum.svelte",
+            "line": 1,
+            "column": 5,
+            "code": 6196
+        },
+        {
+            "file": "src/IParamProp.svelte",
+            "line": 1,
+            "column": 6,
+            "code": 6196
+        },
+        {
+            "file": "src/IParamProp.svelte",
+            "line": 1,
+            "column": 30,
+            "code": 6138
+        },
+        {
+            "file": "src/MEnum.svelte",
+            "line": 1,
+            "column": 0,
+            "code": "typescript_invalid_feature"
+        },
+        {
+            "file": "src/MEnum.svelte",
+            "line": 1,
+            "column": 5,
+            "code": 6196
+        },
+        {
+            "file": "src/MNsValue.svelte",
+            "line": 1,
+            "column": 0,
+            "code": "typescript_invalid_feature"
+        },
+        {
+            "file": "src/MNsValue.svelte",
+            "line": 1,
+            "column": 10,
+            "code": 6133
+        },
+        {
+            "file": "src/MParamProp.svelte",
+            "line": 1,
+            "column": 6,
+            "code": 6196
+        },
+        {
+            "file": "src/MParamProp.svelte",
+            "line": 1,
+            "column": 22,
+            "code": "typescript_invalid_feature"
+        },
+        {
+            "file": "src/MParamProp.svelte",
+            "line": 1,
+            "column": 30,
+            "code": 6138
+        }
+    ],
+    "warnings": [],
+    "_note": "vitePreprocess({ script: true }) transpiles <script lang=\"ts\"> before the compiler sees it (read statically from the config; the preprocessor itself is not installed here). Enums, namespaces and parameter properties in a transpiled script are plain code by then, while decorators and accessor fields survive and are rejected; the same constructs in an untranspiled module script (no lang) are rejected by the compiler's TypeScript stripping. Verified against upstream svelte-check with vite 8's vitePreprocess."
+}

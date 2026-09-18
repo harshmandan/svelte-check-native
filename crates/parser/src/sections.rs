@@ -48,17 +48,19 @@ pub fn parse_sections(source: &str) -> (Document<'_>, Vec<ParseError>) {
 
 /// If the scanner sits on a `<script` / `<style` tag start, the section
 /// tag name — else `None`. The identifier-boundary check distinguishes
-/// `<script>` from e.g. `<scripted>`. Whether the position actually IS a
+/// `<script>` from e.g. `<scripted>`, and the match is case-sensitive as
+/// the compiler's (`tag.name === 'script'`), so `<Script>` is a
+/// component. Whether the position actually IS a
 /// section is the template parser's call (root frame only); this only
 /// answers "is this one of the two section tag names?".
 pub(crate) fn section_tag_at(scanner: &Scanner<'_>) -> Option<&'static str> {
     if scanner.peek_byte() != Some(b'<') {
         return None;
     }
-    if scanner.starts_with_ignore_case("<script") && !is_ident_char(scanner.peek_byte_at(7)) {
+    if scanner.starts_with("<script") && !is_ident_char(scanner.peek_byte_at(7)) {
         return Some("script");
     }
-    if scanner.starts_with_ignore_case("<style") && !is_ident_char(scanner.peek_byte_at(6)) {
+    if scanner.starts_with("<style") && !is_ident_char(scanner.peek_byte_at(6)) {
         return Some("style");
     }
     None
@@ -295,11 +297,7 @@ fn find_close_tag(scanner: &Scanner<'_>, close_literal: &str) -> Option<u32> {
     let mut i = start;
     while i + needle.len() <= bytes.len() {
         let window = &bytes[i..i + needle.len()];
-        if window
-            .iter()
-            .zip(needle)
-            .all(|(a, b)| a.eq_ignore_ascii_case(b))
-        {
+        if window == needle {
             let mut j = i + needle.len();
             while j < bytes.len() && bytes[j].is_ascii_whitespace() {
                 j += 1;
@@ -732,10 +730,13 @@ let x: number = 1;
     }
 
     #[test]
-    fn case_insensitive_tag_matching() {
-        let src = "<SCRIPT>let a = 1;</SCRIPT>";
-        let doc = parse_ok(src);
-        assert!(doc.instance_script.is_some());
+    fn section_tag_names_are_case_sensitive() {
+        // The compiler compares tag names exactly: `<Script>` is a
+        // component and `<SCRIPT>` an element, neither a script section.
+        for src in ["<SCRIPT>let a = 1;</SCRIPT>", "<Script><p></p></Script>"] {
+            let (doc, _) = crate::parse_sections(src);
+            assert!(doc.instance_script.is_none(), "{src}");
+        }
     }
 
     #[test]

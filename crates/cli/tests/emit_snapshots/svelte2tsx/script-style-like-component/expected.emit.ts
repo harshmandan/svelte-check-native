@@ -7,7 +7,12 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         {
             const __svn_C_2b = __svn_ensure_component(Script);
-            new __svn_C_2b({ target: __svn_any(), props: {} });
+            new __svn_C_2b({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+            { svelteHTML.createElement("p", {});             }
+        }
+        {
+            const __svn_C_4a = __svn_ensure_component(Style);
+            new __svn_C_4a({ target: __svn_any(), props: {} });
         }
     });
     return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

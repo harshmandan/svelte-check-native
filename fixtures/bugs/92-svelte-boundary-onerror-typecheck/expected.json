@@ -1,11 +1,4 @@
 {
-    "errors": [
-        {
-            "file": "input.svelte",
-            "line": 17,
-            "column": 17,
-            "code": 2322
-        }
-    ],
-    "_note": "Reviewer item #6: `<svelte:boundary onerror={…} />` now goes through `svelteHTML.createElement(\"svelte:boundary\", {…})`, type-checking the callback against svelte/elements' boundary shape (`(error: unknown, reset: () => void) => void`). The wrong-shape handler `(error: number) => void` fires TS2322 at the directive's value position. Pre-fix `Boundary` fell through with `Component`/`SelfRef` to a bare `{` scope, losing every prop check on the boundary."
+    "errors": [],
+    "_note": "svelte-check types <svelte:boundary> through the svelteHTML catch-all ({ [name: string]: any }), since svelte2tsx's JSX typings have no svelte:boundary entry: its attributes and snippet props are not checked against svelte/elements, and snippet parameters are implicitly any. Verified against svelte-check --tsgo."
 }

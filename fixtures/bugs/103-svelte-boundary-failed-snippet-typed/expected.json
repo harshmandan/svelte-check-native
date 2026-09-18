@@ -2,10 +2,16 @@
     "errors": [
         {
             "file": "Child.svelte",
-            "line": 26,
-            "column": 24,
-            "code": 2345
+            "line": 20,
+            "column": 27,
+            "code": 7006
+        },
+        {
+            "file": "Child.svelte",
+            "line": 22,
+            "column": 21,
+            "code": 7006
         }
     ],
-    "_note": "Reviewer follow-up #8: pre-fix `<svelte:boundary>`'s `{#snippet failed(err)}` body emitted via the regular snippet path produced `void ((err: any) => {…})` — disconnected from the boundary's declared prop signature in `svelte/elements.d.ts` (`failed?: Snippet<[error: unknown, reset: () => void]>`). Result: `err` typed as `any` and any handling of it passed silently. Post-fix the snippet emits as `failed: (err) => { body; return __svn_snippet_return(); }` INSIDE the createElement attrs object, so contextual typing flows the Snippet's tuple shape into the arrow params: `err` types as `unknown`. The wrong-shape `takesString(err)` call (declared `(s: string)`) then fails TS2345 (`Argument of type 'unknown' is not assignable to parameter of type 'string'`) at the source `err` argument position. Mirrors upstream svelte2tsx's `svelte-boundary.v5/expectedv2.js` shape."
+    "_note": "svelte-check types <svelte:boundary> through the svelteHTML catch-all ({ [name: string]: any }): svelte2tsx's JSX typings have no svelte:boundary entry. Its snippets become props of the createElement attrs object with no contextual type, so their parameters are implicitly any (TS7006 at each parameter under noImplicitAny) rather than typed from svelte/elements."
 }

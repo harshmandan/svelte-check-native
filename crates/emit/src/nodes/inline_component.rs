@@ -985,7 +985,18 @@ pub(crate) fn write_snippet_arrow_prop(
         let _ = write!(buf, "{indent}}}");
         return;
     }
-    let _ = writeln!(buf, ": ({params_text}) => {{ async () => {{");
+    // The parameter list is the user's text; map it so a diagnostic on
+    // a parameter (an implicit `any`) lands on it.
+    let raw = source
+        .get(s.parameters_range.start as usize..s.parameters_range.end as usize)
+        .unwrap_or("");
+    let params_start = s.parameters_range.start + (raw.len() - raw.trim_start().len()) as u32;
+    buf.push_str(": (");
+    buf.append_with_source(
+        params_text,
+        svn_core::Range::new(params_start, params_start + params_text.len() as u32),
+    );
+    let _ = writeln!(buf, ") => {{ async () => {{");
     emit_template_body(buf, source, &s.body, depth + 1, insts, action_counter);
     let _ = writeln!(buf, "{body_indent}}};");
     let _ = writeln!(buf, "{body_indent}return __svn_snippet_return();");

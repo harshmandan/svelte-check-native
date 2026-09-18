@@ -242,9 +242,22 @@ pub fn split_imports(content: &str, _lang: ScriptLang, hoist: &HoistContext) -> 
                     }
                 }
             }
-            // `export default …` stays in the render function as written,
-            // where it is an error (TS1258), as upstream leaves it.
-            Statement::ExportDefaultDeclaration(_) => {}
+            // `export default <expression>` stays in the render function
+            // as written, where it is an error (TS1258), as upstream
+            // leaves it. For a function or class declaration svelte2tsx
+            // removes just the `export` keyword, as it does for any
+            // exported function or class, and the `default` left behind
+            // is a syntax error (TS1128).
+            Statement::ExportDefaultDeclaration(decl) => {
+                if matches!(
+                    decl.declaration,
+                    oxc_ast::ast::ExportDefaultDeclarationKind::FunctionDeclaration(_)
+                        | oxc_ast::ast::ExportDefaultDeclarationKind::ClassDeclaration(_)
+                ) {
+                    let start = decl.span.start as usize;
+                    strip_keyword_spans.push((start, start + "export".len()));
+                }
+            }
             Statement::ExportAllDeclaration(decl) => {
                 hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
             }

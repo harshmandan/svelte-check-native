@@ -1,0 +1,30 @@
+{
+    "errors": [
+        {
+            "file": "src/DefaultClass.svelte",
+            "line": 1,
+            "column": 0,
+            "code": "module_illegal_default_export"
+        },
+        {
+            "file": "src/DefaultClass.svelte",
+            "line": 1,
+            "column": 7,
+            "code": 1128
+        },
+        {
+            "file": "src/DefaultFunction.svelte",
+            "line": 1,
+            "column": 0,
+            "code": "module_illegal_default_export"
+        },
+        {
+            "file": "src/DefaultFunction.svelte",
+            "line": 1,
+            "column": 7,
+            "code": 1128
+        }
+    ],
+    "warnings": [],
+    "_note": "svelte2tsx removes only the export keyword from an exported function or class declaration, so export default function/class leaves a bare default behind: a syntax error (TS1128) that also suppresses semantic diagnostics across the program."
+}

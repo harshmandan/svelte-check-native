@@ -1122,19 +1122,44 @@ fn overlay_syntax_failures(
         1435, // unknown keyword or identifier
         1436, // decorators must precede name and all keywords
     ];
-    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-    raw_diagnostics
+    let overlay_path = |d: &RawDiagnostic| {
+        let abs = if d.file.is_absolute() {
+            d.file.clone()
+        } else {
+            layout.workspace.join(&d.file)
+        };
+        path_utils::lexical_normalise(&abs)
+    };
+    let lands_on_user_text = |abs: &Path, d: &RawDiagnostic| {
+        map_data.get(abs).is_some_and(|data| {
+            position::translate_line(&data.line_map, d.line).is_some()
+                || position::overlay_byte_offset(data, d.line, d.column).is_some_and(|byte| {
+                    position::find_tightest_token(&data.token_map, byte).is_some()
+                })
+        })
+    };
+    let syntax_errors: Vec<&RawDiagnostic> = raw_diagnostics
         .iter()
         .filter(|d| {
             matches!(d.severity, output::Severity::Error) && PARSER_SYNTAX_CODES.contains(&d.code)
         })
+        .collect();
+    // A file with a syntax error on the user's own text (a bare comma
+    // sequence in an attribute value, say) has its parse fail there
+    // first; errors TypeScript's recovery then reports on generated
+    // text are knock-on effects, dropped as svelte-check drops them.
+    let user_text_has_syntax_error: std::collections::HashSet<PathBuf> = syntax_errors
+        .iter()
         .filter_map(|d| {
-            let abs = if d.file.is_absolute() {
-                d.file.clone()
-            } else {
-                layout.workspace.join(&d.file)
-            };
-            let abs = path_utils::lexical_normalise(&abs);
+            let abs = overlay_path(d);
+            lands_on_user_text(&abs, d).then_some(abs)
+        })
+        .collect();
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    syntax_errors
+        .into_iter()
+        .filter_map(|d| {
+            let abs = overlay_path(d);
             // Only component overlays are our own TypeScript. A kit
             // mirror is the user's script with upstream's annotations
             // spliced in, so it fails to parse exactly where upstream's
@@ -1151,19 +1176,8 @@ fn overlay_syntax_failures(
             // script is the user's own (a `<script lang="coffee">` body,
             // say), reported through the normal mapping as upstream
             // reports it — not a fault in what we generated.
-            if map_data
-                .get(&abs)
-                .is_some_and(|data| position::translate_line(&data.line_map, d.line).is_some())
-            {
-                return None;
-            }
             let source = layout.original_from_generated(&abs)?;
-            let on_user_text = map_data.get(&abs).is_some_and(|data| {
-                position::overlay_byte_offset(data, d.line, d.column).is_some_and(|byte| {
-                    position::find_tightest_token(&data.token_map, byte).is_some()
-                })
-            });
-            if on_user_text || user_script_fails_to_parse(&source) {
+            if user_text_has_syntax_error.contains(&abs) || user_script_fails_to_parse(&source) {
                 return None;
             }
             seen.insert(source.clone()).then(|| CheckDiagnostic {

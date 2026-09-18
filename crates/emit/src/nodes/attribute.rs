@@ -397,9 +397,10 @@ pub(crate) fn emit_plain_value(buf: &mut EmitBuffer, source: &str, v: &svn_parse
             let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
             let start = expression_range.start + leading_ws;
             let end = start + trimmed.len() as u32;
-            buf.push_str("(");
+            let (open, close) = value_parens(trimmed);
+            buf.push_str(open);
             buf.append_with_source(trimmed, svn_core::Range::new(start, end));
-            buf.push_str(")");
+            buf.push_str(close);
         }
         parts => {
             // Multi-part (text + interpolations). Template literal
@@ -471,9 +472,38 @@ pub(crate) fn emit_expression(
     let name_range = svn_core::Range::new(e.range.start, e.range.start + name.len() as u32);
     let key_name = transform_attribute_case(name, should_lowercase);
     write_attribute_key(buf, &key_name, name_range, true);
-    buf.push_str(" (");
+    let (open, close) = value_parens(trimmed);
+    buf.push_str(" ");
+    buf.push_str(open);
     buf.append_with_source(trimmed, svn_core::Range::new(start, end));
-    let _ = writeln!(buf, "){line_suffix}");
+    buf.push_str(close);
+    // svelte2tsx writes the separator after a value over the
+    // attribute's closing `}`, so an error the value leaves open (a
+    // bare comma sequence, say) is reported at that brace.
+    let brace = source
+        .get(e.expression_range.end as usize..)
+        .and_then(|rest| rest.find('}'))
+        .map(|at| e.expression_range.end + at as u32);
+    match (brace, line_suffix.strip_prefix('}')) {
+        (Some(at), None) => {
+            buf.append_with_source(line_suffix, svn_core::Range::new(at, at + 1));
+            buf.push_str("\n");
+        }
+        _ => {
+            let _ = writeln!(buf, "{line_suffix}");
+        }
+    }
+}
+
+/// Parentheses around an attribute value: every value is wrapped except
+/// a comma sequence, which svelte2tsx leaves bare (see
+/// [`crate::util::is_sequence_expression`]).
+pub(crate) fn value_parens(expr: &str) -> (&'static str, &'static str) {
+    if crate::util::is_sequence_expression(expr) {
+        ("", "")
+    } else {
+        ("(", ")")
+    }
 }
 
 pub(crate) fn emit_shorthand(

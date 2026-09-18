@@ -85,6 +85,29 @@ pub(crate) fn svelte5_plus() -> bool {
         .is_none_or(|major| major >= 5)
 }
 
+/// Whether an attribute value expression is a top-level comma sequence
+/// (`{a, b}`). svelte2tsx copies attribute values into the attrs or
+/// props object without parentheses, so a sequence there is read as
+/// extra object members — usually a syntax error — rather than one
+/// value; the emit sites leave such a value unwrapped to match.
+pub(crate) fn is_sequence_expression(expr: &str) -> bool {
+    let wrapped = format!("(\n{expr}\n);");
+    let alloc = oxc_allocator::Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+    if !parsed.errors.is_empty() {
+        return false;
+    }
+    matches!(
+        parsed.program.body.as_slice(),
+        [oxc_ast::ast::Statement::ExpressionStatement(stmt)]
+            if matches!(
+                &stmt.expression,
+                oxc_ast::ast::Expression::ParenthesizedExpression(p)
+                    if matches!(p.expression, oxc_ast::ast::Expression::SequenceExpression(_))
+            )
+    )
+}
+
 /// Derive a per-file render function name. Hash of the source path
 /// prevents collisions when multiple components in the same overlay
 /// project would otherwise both produce `function $$render()`

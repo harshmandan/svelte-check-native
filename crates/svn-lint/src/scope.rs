@@ -1978,7 +1978,13 @@ fn synthesize_store_subs(
             // Upstream guards: a rune-initialised declaration is not a
             // store, except that a `$props()` value named anything but
             // `props` still is (`const foo = $props(); $foo()`).
-            if let Some(rune) = init_rune {
+            // The rune-initialiser guard only applies to rune-named
+            // subscriptions: every other `$name` is a subscription to
+            // `name` whatever initialises it (`let { a } = $derived(x)`
+            // still makes `$a` a store read).
+            if is_rune_name(n)
+                && let Some(rune) = init_rune
+            {
                 let props_exception = store_name != "props" && rune == RuneCall::Props;
                 if !props_exception {
                     continue;

@@ -284,7 +284,9 @@ pub(crate) fn emit_component_call(
     // snippet prop, and adds it even when the user also passes
     // `children` — an explicit `children` attribute or `{#snippet
     // children}` is then a duplicate key (TS1117) at the user's name.
-    let emit_implicit_children = inst.has_implicit_children;
+    // Only a Svelte 5 install gets it (`handleImplicitChildren` runs
+    // under `svelte5Plus`): Svelte 4 components have no `children` prop.
+    let emit_implicit_children = inst.has_implicit_children && crate::util::svelte5_plus();
 
     if snippet_children.is_empty() && inst.props.is_empty() && !emit_implicit_children {
         let _ = write!(buf, "{inner}{ctor_lhs}");

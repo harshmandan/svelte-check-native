@@ -43,7 +43,7 @@ use rayon::prelude::*;
 
 pub use cache::{CacheLayout, write_if_changed};
 pub use discovery::{DiscoveryError, TsgoBinary, discover};
-pub use filters::workspace_svelte_is_5_plus;
+pub use filters::{workspace_svelte_is_5_plus, workspace_svelte_major};
 pub use output::{RawDiagnostic, Severity, parse as parse_output};
 pub use runner::{RunError, run as run_tsgo};
 pub use types::{

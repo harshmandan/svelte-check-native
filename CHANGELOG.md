@@ -6,6 +6,15 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **No bogus `children` error on a Svelte 4 install** (#63). Slot
+  content passed to a component became an implicit `children` prop
+  regardless of the installed Svelte version, so a library typed with
+  `SvelteComponentTyped` and no default slot reported "'children' does
+  not exist". svelte-check adds that prop only when Svelte 5 or later is
+  installed, and so do we now.
+
 ## [1.6.0]
 
 A parity release built from an audit of every place the emit, analyze

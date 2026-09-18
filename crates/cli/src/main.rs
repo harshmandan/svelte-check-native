@@ -474,6 +474,7 @@ fn main() -> ExitCode {
     // emitted overlay (and the committed emit snapshots) don't depend
     // on where the checkout lives on disk.
     svn_emit::set_render_hash_root(&workspace);
+    svn_emit::set_svelte_major(svn_typecheck::workspace_svelte_major(&workspace));
     svn_typecheck::set_incremental(cli.incremental);
 
     let svelte_warnings_mode = match cli.svelte_warnings.as_str() {
@@ -2180,6 +2181,7 @@ fn run_emit_ts(workspace: &Path) -> ExitCode {
     // Same relative keying as the check path — `--emit-ts` output is what
     // the emit snapshots lock, so it must be checkout-location-independent.
     svn_emit::set_render_hash_root(workspace);
+    svn_emit::set_svelte_major(svn_typecheck::workspace_svelte_major(workspace));
     let mut files = discover_svelte_files(workspace);
     // Directory traversal order is filesystem-dependent (APFS yields
     // sorted entries, ext4 hash order), so multi-file emits would print

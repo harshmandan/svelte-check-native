@@ -66,6 +66,25 @@ pub fn set_render_hash_root(root: &Path) {
     let _ = RENDER_HASH_ROOT.set(root.to_path_buf());
 }
 
+/// Major version of the project's installed `svelte`, when known.
+static SVELTE_MAJOR: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+
+/// Record the installed `svelte` major version (`None` when there is no
+/// install). Call once before emit; later calls are ignored.
+pub fn set_svelte_major(major: Option<u32>) {
+    let _ = SVELTE_MAJOR.set(major);
+}
+
+/// svelte2tsx's `svelte5Plus`, which gates the conversions only a
+/// Svelte 5 install gets. Without a known install we assume Svelte 5.
+pub(crate) fn svelte5_plus() -> bool {
+    SVELTE_MAJOR
+        .get()
+        .copied()
+        .flatten()
+        .is_none_or(|major| major >= 5)
+}
+
 /// Derive a per-file render function name. Hash of the source path
 /// prevents collisions when multiple components in the same overlay
 /// project would otherwise both produce `function $$render()`

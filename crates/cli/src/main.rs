@@ -378,6 +378,19 @@ fn main() -> ExitCode {
     if cli.debug_paths {
         return run_debug_paths(&workspace, Some(&tsconfig));
     }
+    // Only Svelte 5 installs are supported. A Svelte 4 install changes
+    // how svelte2tsx converts components and which compiler produces
+    // the warnings, neither of which we reproduce. Components written
+    // in Svelte 4 syntax on a Svelte 5 install are fully supported.
+    if let Some(major) = svn_typecheck::workspace_svelte_major(&workspace)
+        && major < 5
+    {
+        eprintln!(
+            "svelte-check-native: this project uses Svelte {major}; svelte-check-native supports \
+             Svelte 5 and later. Use svelte-check for Svelte {major} projects."
+        );
+        return ExitCode::from(2);
+    }
 
     let diagnostic_sources = match parse_diagnostic_sources(cli.diagnostic_sources.as_deref()) {
         Ok(s) => s,

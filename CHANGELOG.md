@@ -6,6 +6,17 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- **Projects with Svelte 4 or older installed are no longer supported.**
+  svelte-check converts components differently for a Svelte 4 install
+  (no implicit `children` prop, among others) and takes its warnings
+  from the Svelte 4 compiler; neither was reproduced, so such projects
+  got Svelte-5-shaped results — a bogus `children` error on components
+  given slot content, for one (#63). The CLI now exits with code 2 and
+  points at `svelte-check` when the installed `svelte` is older than 5.
+  Svelte 4 *syntax* on a Svelte 5 install is unaffected.
+
 ## [1.6.0]
 
 A parity release built from an audit of every place the emit, analyze

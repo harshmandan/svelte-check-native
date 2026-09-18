@@ -44,6 +44,11 @@ isn't installed — so you can keep `typescript@6` for your own
 toolchain and check with tsgo. TypeScript 6 and below is never used
 as the check engine.
 
+Requires Svelte 5 or later installed in the project. Components written
+in Svelte 4 syntax (`export let`, `$:`, slots, `on:`) are fully checked
+on a Svelte 5 install; projects that still install Svelte 4 or older
+are refused with exit code 2 — use `svelte-check` for those.
+
 ## Use
 
 ```sh

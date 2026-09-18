@@ -16,8 +16,11 @@ for the current scoreboard (`notes/ROADMAP.md`), open work
   Rust, powered by tsgo. Drop-in replacement for upstream `svelte-check`
   on the CLI surface (same flags, same output formats, same exit codes,
   same `<N> FILES` denominator).
-- **Svelte 4 and Svelte 5 are both supported.** Svelte-4 surface
-  features (`export let`, `$:`, `on:event`, `<slot>` / named slots,
+- **Svelte 5 installs only; Svelte 4 syntax is supported.** A
+  project whose installed `svelte` is older than 5 is refused (exit
+  2) — svelte-check converts and lints those with Svelte-4-specific
+  rules we don't reproduce. Svelte-4 surface features on a Svelte 5
+  install (`export let`, `$:`, `on:event`, `<slot>` / named slots,
   `createEventDispatcher`, `bind:` on components, renamed exports)
   all shipped in the v0.2 parity push. Parity gate: a 1000-file
   mid-migration SvelteKit workspace type-checks clean, tying upstream

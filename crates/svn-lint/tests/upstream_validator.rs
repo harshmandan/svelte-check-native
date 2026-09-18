@@ -416,7 +416,7 @@ enum ErrorSampleStatus {
     Spurious,
     /// Expected `[]`; we produced no error.
     Clean,
-    /// `input.svelte.js` sample — module-only sources aren't linted.
+    /// A sample with neither an `input.svelte` nor an `input.svelte.js`.
     SkippedModuleOnly,
     /// `_config.js` uses compile options the linter doesn't model.
     SkippedCompileOptions,
@@ -520,9 +520,13 @@ fn upstream_validator_error_fixtures() {
         };
 
         let source_path = sample_path.join("input.svelte");
-        if !source_path.is_file() {
-            // Same gate as the warnings test: module-only sources
-            // (`input.svelte.js`) aren't linted.
+        let module_path = sample_path.join("input.svelte.js");
+        // svelte-check compiles components only, but a rune module's
+        // rules are the same inside a component's `<script module>`:
+        // lint the module there, in runes mode, on a line of its own so
+        // positions shift by exactly one line.
+        let module_only = !source_path.is_file() && module_path.is_file();
+        if !source_path.is_file() && !module_only {
             samples.push(skipped(ErrorSampleStatus::SkippedModuleOnly));
             continue;
         }
@@ -539,8 +543,14 @@ fn upstream_validator_error_fixtures() {
             continue;
         }
 
-        let raw_source = fs::read_to_string(&source_path).unwrap();
+        let raw_source = if module_only {
+            let module = fs::read_to_string(&module_path).unwrap();
+            format!("<svelte:options runes /><script module>\n{module}\n</script>")
+        } else {
+            fs::read_to_string(&source_path).unwrap()
+        };
         let source = raw_source.trim_end().replace('\r', "");
+        let line_shift = u32::from(module_only);
 
         let ours: Vec<EmittedDiagnostic> = svn_lint::lint_file(
             &source,
@@ -554,11 +564,11 @@ fn upstream_validator_error_fixtures() {
             is_error: w.is_error,
             message: strip_link(&w.message).to_string(),
             start: LineCol {
-                line: w.start_line,
+                line: w.start_line.saturating_sub(line_shift),
                 column: w.start_column,
             },
             end: LineCol {
-                line: w.end_line,
+                line: w.end_line.saturating_sub(line_shift),
                 column: w.end_column,
             },
         })

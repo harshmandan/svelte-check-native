@@ -147,3 +147,37 @@ pub(crate) fn is_primitive_expr(e: &Expression<'_>) -> bool {
             | Expression::BinaryExpression(_)
     ) || matches!(e, Expression::Identifier(id) if id.name.as_str() == "undefined")
 }
+
+/// The rune a call's callee names — the compiler's
+/// `get_global_keypath`: a chain of non-computed member accesses on an
+/// identifier, where a call on the identifier reads as `()`
+/// (`$inspect(x).with` → `$inspect().with`). Returns the keypath when
+/// it is a rune, with the root identifier's name. Whether the root
+/// resolves to a binding (which makes it no rune) is the caller's
+/// question.
+pub(crate) fn rune_keypath(callee: &Expression<'_>) -> Option<(String, String)> {
+    let mut suffix = String::new();
+    let mut n = unwrap_ts_wrappers(callee);
+    while let Expression::StaticMemberExpression(m) = n {
+        suffix.insert_str(0, m.property.name.as_str());
+        suffix.insert(0, '.');
+        n = unwrap_ts_wrappers(&m.object);
+    }
+    if matches!(
+        n,
+        Expression::ComputedMemberExpression(_) | Expression::PrivateFieldExpression(_)
+    ) {
+        return None;
+    }
+    if let Expression::CallExpression(c) = n
+        && let Expression::Identifier(_) = unwrap_ts_wrappers(&c.callee)
+    {
+        suffix.insert_str(0, "()");
+        n = unwrap_ts_wrappers(&c.callee);
+    }
+    let Expression::Identifier(id) = n else {
+        return None;
+    };
+    let keypath = format!("{}{suffix}", id.name);
+    is_rune_name(&keypath).then(|| (keypath, id.name.to_string()))
+}

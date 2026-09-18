@@ -719,6 +719,129 @@ pub fn props_duplicate(rune: &str) -> String {
     format!("Cannot use `{rune}()` more than once\nhttps://svelte.dev/e/props_duplicate")
 }
 
+/// Cannot declare a variable with the same name as an import from `<script module>`
+pub fn declaration_duplicate_module_import() -> String {
+    "Cannot declare a variable with the same name as an import from `<script module>`\nhttps://svelte.dev/e/declaration_duplicate_module_import".to_string()
+}
+
+/// `$effect()` can only be used as an expression statement
+pub fn effect_invalid_placement() -> String {
+    "`$effect()` can only be used as an expression statement\nhttps://svelte.dev/e/effect_invalid_placement".to_string()
+}
+
+/// `$host()` can only be used inside custom element component instances
+pub fn host_invalid_placement() -> String {
+    "`$host()` can only be used inside custom element component instances\nhttps://svelte.dev/e/host_invalid_placement".to_string()
+}
+
+/// `$inspect.trace(...)` cannot be used inside a generator function
+pub fn inspect_trace_generator() -> String {
+    "`$inspect.trace(...)` cannot be used inside a generator function\nhttps://svelte.dev/e/inspect_trace_generator".to_string()
+}
+
+/// `$inspect.trace(...)` must be the first statement of a function body
+pub fn inspect_trace_invalid_placement() -> String {
+    "`$inspect.trace(...)` must be the first statement of a function body\nhttps://svelte.dev/e/inspect_trace_invalid_placement".to_string()
+}
+
+/// The arguments keyword cannot be used within the template or at the top level of a component
+pub fn invalid_arguments_usage() -> String {
+    "The arguments keyword cannot be used within the template or at the top level of a component\nhttps://svelte.dev/e/invalid_arguments_usage".to_string()
+}
+
+/// `$props.id()` can only be used at the top level of components as a variable declaration initializer
+pub fn props_id_invalid_placement() -> String {
+    "`$props.id()` can only be used at the top level of components as a variable declaration initializer\nhttps://svelte.dev/e/props_id_invalid_placement".to_string()
+}
+
+/// Declaring or accessing a prop starting with `$$` is illegal (they are reserved for Svelte internals)
+pub fn props_illegal_name() -> String {
+    "Declaring or accessing a prop starting with `$$` is illegal (they are reserved for Svelte internals)\nhttps://svelte.dev/e/props_illegal_name".to_string()
+}
+
+/// `$props()` can only be used with an object destructuring pattern
+pub fn props_invalid_identifier() -> String {
+    "`$props()` can only be used with an object destructuring pattern\nhttps://svelte.dev/e/props_invalid_identifier".to_string()
+}
+
+/// `$props()` assignment must not contain nested properties or computed keys
+pub fn props_invalid_pattern() -> String {
+    "`$props()` assignment must not contain nested properties or computed keys\nhttps://svelte.dev/e/props_invalid_pattern".to_string()
+}
+
+/// `%rune%` cannot be called with arguments
+pub fn rune_invalid_arguments(rune: &str) -> String {
+    format!("`{rune}` cannot be called with arguments\nhttps://svelte.dev/e/rune_invalid_arguments")
+}
+
+/// `%rune%` must be called with %args%
+pub fn rune_invalid_arguments_length(rune: &str, args: &str) -> String {
+    format!(
+        "`{rune}` must be called with {args}\nhttps://svelte.dev/e/rune_invalid_arguments_length"
+    )
+}
+
+/// Cannot access a computed property of a rune
+pub fn rune_invalid_computed_property() -> String {
+    "Cannot access a computed property of a rune\nhttps://svelte.dev/e/rune_invalid_computed_property".to_string()
+}
+
+/// `%name%` is not a valid rune
+pub fn rune_invalid_name(name: &str) -> String {
+    format!("`{name}` is not a valid rune\nhttps://svelte.dev/e/rune_invalid_name")
+}
+
+/// `%rune%` cannot be called with a spread argument
+pub fn rune_invalid_spread(rune: &str) -> String {
+    format!(
+        "`{rune}` cannot be called with a spread argument\nhttps://svelte.dev/e/rune_invalid_spread"
+    )
+}
+
+/// Cannot use `%rune%` rune in non-runes mode
+pub fn rune_invalid_usage(rune: &str) -> String {
+    format!("Cannot use `{rune}` rune in non-runes mode\nhttps://svelte.dev/e/rune_invalid_usage")
+}
+
+/// Cannot use rune without parentheses
+pub fn rune_missing_parentheses() -> String {
+    "Cannot use rune without parentheses\nhttps://svelte.dev/e/rune_missing_parentheses".to_string()
+}
+
+/// The `%name%` rune has been removed
+pub fn rune_removed(name: &str) -> String {
+    format!("The `{name}` rune has been removed\nhttps://svelte.dev/e/rune_removed")
+}
+
+/// `%name%` is now `%replacement%`
+pub fn rune_renamed(name: &str, replacement: &str) -> String {
+    format!("`{name}` is now `{replacement}`\nhttps://svelte.dev/e/rune_renamed")
+}
+
+/// `%rune%(...)` can only be used as a variable declaration initializer, a class field declaration, or the first assignment to a class field at the top level of the constructor.
+pub fn state_invalid_placement(rune: &str) -> String {
+    format!(
+        "`{rune}(...)` can only be used as a variable declaration initializer, a class field declaration, or the first assignment to a class field at the top level of the constructor.\nhttps://svelte.dev/e/state_invalid_placement"
+    )
+}
+
+/// `%name%` has already been declared
+pub fn duplicate_class_field(name: &str) -> String {
+    format!("`{name}` has already been declared\nhttps://svelte.dev/e/duplicate_class_field")
+}
+
+/// `%name%` has already been declared on this class
+pub fn state_field_duplicate(name: &str) -> String {
+    format!(
+        "`{name}` has already been declared on this class\nhttps://svelte.dev/e/state_field_duplicate"
+    )
+}
+
+/// Cannot assign to a state field before its declaration
+pub fn state_field_invalid_assignment() -> String {
+    "Cannot assign to a state field before its declaration\nhttps://svelte.dev/e/state_field_invalid_assignment".to_string()
+}
+
 /// `$bindable()` can only be used inside a `$props()` declaration
 pub fn bindable_invalid_location() -> String {
     "`$bindable()` can only be used inside a `$props()` declaration\nhttps://svelte.dev/e/bindable_invalid_location".to_string()

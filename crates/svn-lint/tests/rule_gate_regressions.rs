@@ -1572,8 +1572,9 @@ fn store_named_state_call_stays_non_runes() {
 }
 
 /// A bare rune REFERENCE without backing stays in the unresolved
-/// reference set — the file resolves as runes (upstream then errors
-/// rune_missing_parentheses, proving the flip).
+/// reference set — the file resolves as runes, where the compiler
+/// rejects the reference with rune_missing_parentheses (a runes-only
+/// error, proving the flip).
 #[test]
 fn bare_rune_reference_flips_runes() {
     let src = "\
@@ -1584,10 +1585,10 @@ fn bare_rune_reference_flips_runes() {
 <button on:click={() => {}}>x</button>
 ";
     let warnings = lint_auto(src);
-    assert!(
-        codes(&warnings).contains(&"event_directive_deprecated"),
-        "bare $state ref must flip runes, got: {:?}",
-        codes(&warnings)
+    assert_eq!(
+        codes(&warnings),
+        vec!["rune_missing_parentheses"],
+        "bare $state ref must flip runes"
     );
 }
 

@@ -27,6 +27,7 @@ use svn_core::Range;
 use crate::codes::Code;
 use crate::context::LintContext;
 use crate::messages;
+use crate::scope::{BindingKind, DeclarationKind, ScopeId};
 
 /// One buffered rule outcome from the shared script walk.
 #[derive(Clone)]
@@ -54,6 +55,56 @@ pub(crate) enum ScriptRuleEvent {
     /// is an error unless the `experimental.async` option is on and
     /// the file is in runes mode — both known only at flush time.
     SuspendingAwait { range: Range },
+    /// A compile error whose condition also depends on what a name
+    /// resolves to. The compiler asks its scopes once every binding
+    /// (including the synthesized store subscriptions) exists, so the
+    /// question waits for the finished tree at flush time.
+    GatedError {
+        gate: ErrorGate,
+        code: Code,
+        message: String,
+        range: Range,
+    },
+}
+
+/// The binding-dependent half of a [`ScriptRuleEvent::GatedError`].
+#[derive(Clone)]
+pub(crate) enum ErrorGate {
+    /// A rune call or reference: the compiler only treats `name` as the
+    /// rune when no binding of that name is visible from `scope`.
+    Unshadowed { name: SmolStr, scope: ScopeId },
+    /// `$host()` outside a custom-element instance script: unshadowed,
+    /// and an error in the module script or when the component is not
+    /// compiled as a custom element.
+    Host { scope: ScopeId, module: bool },
+    /// Legacy-mode rune use: an error unless `name` is a store
+    /// subscription.
+    NotStoreSub { name: SmolStr, scope: ScopeId },
+    /// `object.$$name`: an error when `object` is a `$props()` rest
+    /// binding.
+    RestProp { object: SmolStr, scope: ScopeId },
+}
+
+impl ErrorGate {
+    fn fires(&self, ctx: &LintContext<'_>) -> bool {
+        let Some(tree) = &ctx.scope_tree else {
+            return false;
+        };
+        match self {
+            Self::Unshadowed { name, scope } => tree.resolve(*scope, name).is_none(),
+            Self::Host { scope, module } => {
+                tree.resolve(*scope, "$host").is_none()
+                    && (*module || ctx.custom_element_info.is_none())
+            }
+            Self::NotStoreSub { name, scope } => tree
+                .resolve(*scope, name)
+                .is_none_or(|b| tree.binding(b).kind != BindingKind::StoreSub),
+            Self::RestProp { object, scope } => tree.resolve(*scope, object).is_some_and(|b| {
+                let b = tree.binding(b);
+                b.kind == BindingKind::RestProp && b.declaration_kind != DeclarationKind::Synthetic
+            }),
+        }
+    }
 }
 
 impl ScriptRuleEvent {
@@ -63,7 +114,8 @@ impl ScriptRuleEvent {
             Self::Warning { range, .. }
             | Self::LegacyCreationCandidate { range, .. }
             | Self::Error { range, .. }
-            | Self::SuspendingAwait { range } => *range,
+            | Self::SuspendingAwait { range }
+            | Self::GatedError { range, .. } => *range,
         }
     }
 }
@@ -348,6 +400,16 @@ fn emit_event(event: ScriptRuleEvent, ctx: &mut LintContext<'_>) {
             message,
             range,
         } => ctx.emit_error(code, message, range),
+        ScriptRuleEvent::GatedError {
+            gate,
+            code,
+            message,
+            range,
+        } => {
+            if gate.fires(ctx) {
+                ctx.emit_error(code, message, range);
+            }
+        }
         ScriptRuleEvent::SuspendingAwait { range } => {
             if !ctx.experimental_async {
                 ctx.emit_error(

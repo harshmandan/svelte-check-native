@@ -25,7 +25,7 @@
 
 use oxc_ast::ast::{
     ArrayPattern, AssignmentExpression, AssignmentTarget, BindingPattern, CallExpression,
-    ChainElement, Class, ClassBody, ClassElement, Expression, ForStatementInit,
+    ChainElement, Class, ClassBody, ClassElement, Expression, ForStatementInit, FunctionBody,
     IdentifierReference, LabeledStatement, ObjectExpression, ObjectPattern, ObjectPropertyKind,
     Program, PropertyKey, SimpleAssignmentTarget, Statement, UpdateExpression, VariableDeclaration,
     VariableDeclarator,
@@ -38,11 +38,11 @@ use svn_parser::document::{Document, ScriptSection};
 use svn_parser::parse_script_body;
 
 use crate::codes::Code;
-use crate::rules::script_ast_rules::{ScriptRuleEvent, ScriptRuleHooks};
+use crate::rules::script_ast_rules::{ErrorGate, ScriptRuleEvent, ScriptRuleHooks};
 pub use crate::scope_rune_detection::is_rune_name;
 use crate::scope_rune_detection::{
     detect_bindable_default, detect_rune_call_from_call, is_primitive_expr, is_primitive_rune_init,
-    state_rune_primitive_arg,
+    rune_keypath, state_rune_primitive_arg,
 };
 use crate::scope_util::{
     base_identifier, expression_from_default, expression_from_for_init,
@@ -487,6 +487,11 @@ struct TreeBuilder {
     /// this slot per parse, `reset()` (which keeps its largest chunk),
     /// and put back. `None` only while a parse is in flight.
     expr_alloc: Option<oxc_allocator::Allocator>,
+    /// The next template expression walked is the initializer of a
+    /// declaration tag (`{let x = …}` / `{const x = …}`), a variable
+    /// declarator the way `{@const}` is not: a rune call may stand
+    /// there.
+    declaration_tag_init: bool,
     /// See [`ScopeTree::has_await`].
     has_await: bool,
     /// See [`ScopeTree::template_rule_events`].
@@ -618,6 +623,7 @@ impl TreeBuilder {
             nonrunes_export_specs: Vec::new(),
             export_spec_locals: Vec::new(),
             expr_alloc: None,
+            declaration_tag_init: false,
             has_await: false,
             script_rule_events: Vec::new(),
             template_rule_events: Vec::new(),
@@ -910,7 +916,15 @@ impl TreeBuilder {
                     (init_span.start as i32 + offset).max(0) as u32,
                     (init_span.end as i32 + offset).max(0) as u32,
                 );
+                // `{@const` keeps its `@`; a declaration tag has only
+                // the keyword before the pattern.
+                let tag_head = ctx.source[..range.start as usize]
+                    .rsplit('{')
+                    .next()
+                    .unwrap_or_default();
+                self.declaration_tag_init = !tag_head.trim_start().starts_with('@');
                 self.walk_expr_range(abs, ctx, RefFlags::default());
+                self.declaration_tag_init = false;
             }
         }
         drop(parsed);
@@ -932,6 +946,8 @@ impl TreeBuilder {
         // not be recorded as identifier references.
         if let Some((tok_start, token)) = bare_identifier(slice)
             && !is_reserved_word(token)
+            && token != "arguments"
+            && !is_rune_name(token)
         {
             let abs_start = range.start + tok_start as u32;
             let tok_range = Range::new(abs_start, abs_start + token.len() as u32);
@@ -1008,7 +1024,24 @@ impl TreeBuilder {
             props_calls: 0,
             declarator_init_call: None,
             bindable_positions: Vec::new(),
+            props_id_calls: 0,
+            declarator_binds_identifier: false,
+            field_init_call: None,
+            constructor_assignment_call: None,
+            statement_call: None,
+            trace_slot: None,
+            callee_span: None,
+            template_root_pending: true,
+            plain_function_depth: 0,
+            node_spans: Vec::new(),
+            state_fields: Vec::new(),
+            in_constructor_body: false,
         };
+        if std::mem::take(&mut walker.tree.declaration_tag_init)
+            && let Some(Statement::ExpressionStatement(es)) = parsed.program.body.first()
+        {
+            walker.declarator_init_call = direct_call_span(&es.expression);
+        }
         let events_before = walker.tree.script_rule_events.len();
         for stmt in &parsed.program.body {
             walker.visit_stmt(stmt);
@@ -1509,6 +1542,18 @@ impl TreeBuilder {
             props_calls: 0,
             declarator_init_call: None,
             bindable_positions: Vec::new(),
+            props_id_calls: 0,
+            declarator_binds_identifier: false,
+            field_init_call: None,
+            constructor_assignment_call: None,
+            statement_call: None,
+            trace_slot: None,
+            callee_span: None,
+            template_root_pending: false,
+            plain_function_depth: 0,
+            node_spans: Vec::new(),
+            state_fields: Vec::new(),
+            in_constructor_body: false,
         };
         // Push the template-comment ignores so they apply to every
         // reference recorded during this script walk.
@@ -2006,6 +2051,99 @@ fn is_ts_declare_function(f: &oxc_ast::ast::Function<'_>) -> bool {
     f.declare || f.body.is_none()
 }
 
+/// `this.name`, `this.#name` or `this[<literal>]` — an assignment
+/// target that names a class field.
+fn is_this_field_target(t: &AssignmentTarget<'_>) -> bool {
+    match t {
+        AssignmentTarget::StaticMemberExpression(m) => {
+            matches!(m.object, Expression::ThisExpression(_))
+        }
+        AssignmentTarget::PrivateFieldExpression(m) => {
+            matches!(m.object, Expression::ThisExpression(_))
+        }
+        AssignmentTarget::ComputedMemberExpression(m) => {
+            matches!(m.object, Expression::ThisExpression(_))
+                && matches!(
+                    m.expression,
+                    Expression::StringLiteral(_)
+                        | Expression::NumericLiteral(_)
+                        | Expression::BooleanLiteral(_)
+                        | Expression::NullLiteral(_)
+                        | Expression::BigIntLiteral(_)
+                        | Expression::RegExpLiteral(_)
+                )
+        }
+        _ => false,
+    }
+}
+
+/// The compiler's `get_name` for a class member key: an identifier's
+/// name, `#name` for a private name, a literal's string value.
+fn class_key_name(key: &PropertyKey<'_>) -> Option<String> {
+    match key {
+        PropertyKey::StaticIdentifier(id) => Some(id.name.to_string()),
+        PropertyKey::PrivateIdentifier(id) => Some(format!("#{}", id.name)),
+        PropertyKey::StringLiteral(l) => Some(l.value.to_string()),
+        PropertyKey::NumericLiteral(n) => Some(js_number_string(n.value)),
+        _ => None,
+    }
+}
+
+/// `String(value)` of a literal used as a computed member key.
+fn literal_key_name(e: &Expression<'_>) -> Option<String> {
+    match e {
+        Expression::StringLiteral(l) => Some(l.value.to_string()),
+        Expression::NumericLiteral(n) => Some(js_number_string(n.value)),
+        Expression::BooleanLiteral(b) => Some(b.value.to_string()),
+        Expression::NullLiteral(_) => Some("null".to_string()),
+        _ => None,
+    }
+}
+
+/// A number the way JavaScript's `String(n)` prints the common cases.
+fn js_number_string(n: f64) -> String {
+    if n.fract() == 0.0 && n.abs() < 1e21 {
+        format!("{n:.0}")
+    } else {
+        n.to_string()
+    }
+}
+
+/// The field name `this.name` / `this.#name` / `this[<literal>]` writes.
+fn this_field_name(t: &AssignmentTarget<'_>) -> Option<String> {
+    match t {
+        AssignmentTarget::StaticMemberExpression(m) => Some(m.property.name.to_string()),
+        AssignmentTarget::PrivateFieldExpression(m) => Some(format!("#{}", m.field.name)),
+        AssignmentTarget::ComputedMemberExpression(m) => literal_key_name(&m.expression),
+        _ => None,
+    }
+}
+
+/// A member of `this` as an assignment target.
+fn is_this_member_target(t: &AssignmentTarget<'_>) -> bool {
+    match t {
+        AssignmentTarget::StaticMemberExpression(m) => {
+            matches!(m.object, Expression::ThisExpression(_))
+        }
+        AssignmentTarget::PrivateFieldExpression(m) => {
+            matches!(m.object, Expression::ThisExpression(_))
+        }
+        AssignmentTarget::ComputedMemberExpression(m) => {
+            matches!(m.object, Expression::ThisExpression(_))
+        }
+        _ => false,
+    }
+}
+
+/// The span of `e` when it is a call, once parentheses and TypeScript
+/// wrappers (which the compiler's AST does not have) are removed.
+fn direct_call_span(e: &Expression<'_>) -> Option<(u32, u32)> {
+    match unwrap_ts_wrappers(e) {
+        Expression::CallExpression(c) => Some((c.span.start, c.span.end)),
+        _ => None,
+    }
+}
+
 fn resolve_by_name(scopes: &[Scope], from: ScopeId, name: &str) -> Option<BindingId> {
     let mut cur = Some(from);
     while let Some(sid) = cur {
@@ -2095,6 +2233,47 @@ struct ScriptWalker<'b, 'src> {
     /// property default of a `$props()` destructure — the only
     /// position a `$bindable()` may take.
     bindable_positions: Vec<(u32, u32)>,
+    /// `$props.id()` calls seen so far in this walk.
+    props_id_calls: u32,
+    /// Whether the declarator owning `declarator_init_call` binds a
+    /// plain identifier (the only pattern `$props.id()` accepts).
+    declarator_binds_identifier: bool,
+    /// The call that is the value of the non-static, non-computed
+    /// class field being walked.
+    field_init_call: Option<(u32, u32)>,
+    /// The call assigned by a `this.<field> = …` statement directly in
+    /// a constructor body.
+    constructor_assignment_call: Option<(u32, u32)>,
+    /// The call that is the whole expression of the statement being
+    /// walked.
+    statement_call: Option<(u32, u32)>,
+    /// The call forming the first statement of the function body being
+    /// walked, and whether that function is a generator — the one
+    /// place `$inspect.trace()` may sit.
+    trace_slot: Option<(u32, u32, bool)>,
+    /// The callee of the call being walked (parentheses and TypeScript
+    /// wrappers removed), and the call.
+    callee_span: Option<((u32, u32), (u32, u32))>,
+    /// A template expression is parsed as a one-statement program;
+    /// that statement is not an expression statement to the compiler,
+    /// which sees the bare expression. Set until the walk passes it.
+    template_root_pending: bool,
+    /// Function declarations / expressions (not arrows) enclosing the
+    /// node being walked — outside all of them, `arguments` is an
+    /// error.
+    plain_function_depth: u32,
+    /// The state fields of the innermost class body being walked (runes
+    /// mode): name, span start of the declaring node, and whether a
+    /// constructor assignment declares it.
+    state_fields: Vec<(SmolStr, u32, bool)>,
+    /// Walking a constructor body, outside any nested function.
+    in_constructor_body: bool,
+    /// Spans of the statements, declarators and expressions enclosing
+    /// the node being walked, innermost last — the compiler's
+    /// `context.path` as far as its errors report a parent node.
+    /// Parentheses and TypeScript wrappers are skipped, as the
+    /// compiler's AST has neither.
+    node_spans: Vec<(u32, u32)>,
 }
 
 impl<'b, 'src> ScriptWalker<'b, 'src> {
@@ -2176,6 +2355,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         let prev_depth = self.function_depth;
         let prev_closure = self.in_function_closure;
         let prev_reactive = std::mem::replace(&mut self.in_reactive_expression, false);
+        let prev_constructor = std::mem::replace(&mut self.in_constructor_body, false);
         self.function_depth += 1;
         self.in_function_closure = true;
         // Open a fresh non-porous scope for the function body so
@@ -2195,6 +2375,55 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         self.function_depth = prev_depth;
         self.in_function_closure = prev_closure;
         self.in_reactive_expression = prev_reactive;
+        self.in_constructor_body = prev_constructor;
+    }
+
+    /// The statements of a function body. Its first statement is the
+    /// one place a `$inspect.trace()` call may stand; `plain` marks a
+    /// function declaration / expression (not an arrow), inside which
+    /// `arguments` is the function's own.
+    fn visit_function_body(&mut self, body: &FunctionBody<'_>, generator: bool, plain: bool) {
+        // A directive prologue is the body's first statement to the
+        // compiler.
+        let slot = match body.statements.first() {
+            Some(Statement::ExpressionStatement(es)) if body.directives.is_empty() => {
+                direct_call_span(&es.expression).map(|(start, end)| (start, end, generator))
+            }
+            _ => None,
+        };
+        let prev = std::mem::replace(&mut self.trace_slot, slot);
+        self.plain_function_depth += u32::from(plain);
+        for s in &body.statements {
+            self.visit_stmt(s);
+        }
+        self.plain_function_depth -= u32::from(plain);
+        self.trace_slot = prev;
+    }
+
+    /// A constructor body: a statement `this.<field> = <call>` directly
+    /// in it may create a state field with a rune call.
+    fn visit_constructor_body(&mut self, body: &FunctionBody<'_>) {
+        self.plain_function_depth += 1;
+        self.in_constructor_body = true;
+        for s in &body.statements {
+            let call = match s {
+                Statement::ExpressionStatement(es) => match unwrap_ts_wrappers(&es.expression) {
+                    Expression::AssignmentExpression(a)
+                        if a.operator == oxc_syntax::operator::AssignmentOperator::Assign
+                            && is_this_field_target(&a.left) =>
+                    {
+                        direct_call_span(&a.right)
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            let prev = std::mem::replace(&mut self.constructor_assignment_call, call);
+            self.visit_stmt(s);
+            self.constructor_assignment_call = prev;
+        }
+        self.in_constructor_body = false;
+        self.plain_function_depth -= 1;
     }
 
     fn visit_stmt(&mut self, stmt: &Statement<'_>) {
@@ -2202,7 +2431,10 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         // Only the Program-body loop sets the flag; every statement
         // visited from here down is nested.
         let at_program_top = std::mem::replace(&mut self.at_program_top, false);
+        let span = stmt.span();
+        self.node_spans.push((span.start, span.end));
         self.visit_stmt_inner(stmt, at_program_top);
+        self.node_spans.pop();
         if pushed {
             self.ignore_frames.pop();
         }
@@ -2297,9 +2529,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                         w.declare_pattern(&rest.rest.argument, DeclarationKind::RestParam);
                     }
                     if let Some(body) = &f.body {
-                        for s in &body.statements {
-                            w.visit_stmt(s);
-                        }
+                        w.visit_function_body(body, f.generator, true);
                     }
                 });
             }
@@ -2368,9 +2598,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                                     );
                                 }
                                 if let Some(body) = &f.body {
-                                    for s in &body.statements {
-                                        w.visit_stmt(s);
-                                    }
+                                    w.visit_function_body(body, f.generator, true);
                                 }
                             });
                         }
@@ -2520,7 +2748,13 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                         self.base_offset,
                     );
                 }
-                self.visit_expr(&es.expression)
+                let is_statement = !std::mem::replace(&mut self.template_root_pending, false);
+                let call = is_statement
+                    .then(|| direct_call_span(&es.expression))
+                    .flatten();
+                let prev = std::mem::replace(&mut self.statement_call, call);
+                self.visit_expr(&es.expression);
+                self.statement_call = prev;
             }
             Statement::ReturnStatement(r) => {
                 if let Some(arg) = &r.argument {
@@ -2551,9 +2785,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                                 w.declare_pattern(&rest.rest.argument, DeclarationKind::RestParam);
                             }
                             if let Some(body) = &f.body {
-                                for s in &body.statements {
-                                    w.visit_stmt(s);
-                                }
+                                w.visit_function_body(body, f.generator, true);
                             }
                         });
                     }
@@ -2702,6 +2934,180 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     }
 
     fn visit_class_body(&mut self, body: &ClassBody<'_>) {
+        let fields = if self.hooks.is_some_and(|h| h.runes) {
+            self.check_class_fields(body)
+        } else {
+            Vec::new()
+        };
+        let prev_fields = std::mem::replace(&mut self.state_fields, fields);
+        self.visit_class_members(body);
+        self.state_fields = prev_fields;
+    }
+
+    /// `ClassBody.js` (runes mode): collect the class's state fields
+    /// — fields and constructor `this.x = …` assignments initialised
+    /// by `$state` / `$state.raw` / `$derived` / `$derived.by` — and
+    /// reject a name declared twice, as the compiler does before
+    /// walking the members.
+    fn check_class_fields(&mut self, body: &ClassBody<'_>) -> Vec<(SmolStr, u32, bool)> {
+        use crate::messages as m;
+        let mut state_fields: Vec<(SmolStr, u32, bool)> = Vec::new();
+        let mut fields: Vec<(String, Vec<&'static str>)> = Vec::new();
+        let mut errors: Vec<(Code, String, oxc_span::Span)> = Vec::new();
+        let is_state_rune = |value: Option<&Expression<'_>>| {
+            value.is_some_and(|v| match unwrap_ts_wrappers(v) {
+                Expression::CallExpression(c) => rune_keypath(&c.callee).is_some_and(|(r, _)| {
+                    matches!(
+                        r.as_str(),
+                        "$state" | "$state.raw" | "$derived" | "$derived.by"
+                    )
+                }),
+                _ => false,
+            })
+        };
+        // The compiler's `handle(node, key, value)`.
+        let handle = |state_fields: &mut Vec<(SmolStr, u32, bool)>,
+                      fields: &[(String, Vec<&'static str>)],
+                      errors: &mut Vec<(Code, String, oxc_span::Span)>,
+                      span: oxc_span::Span,
+                      name: Option<String>,
+                      value: Option<&Expression<'_>>,
+                      assignment: bool| {
+            let Some(name) = name else { return };
+            if !is_state_rune(value) {
+                return;
+            }
+            if state_fields.iter().any(|(n, _, _)| n == name.as_str()) {
+                errors.push((
+                    Code::state_field_duplicate,
+                    m::state_field_duplicate(&name),
+                    span,
+                ));
+            }
+            if let Some((_, kinds)) = fields.iter().find(|(k, _)| *k == name)
+                && kinds.as_slice() != ["prop"]
+            {
+                errors.push((
+                    Code::duplicate_class_field,
+                    m::duplicate_class_field(&name),
+                    span,
+                ));
+            }
+            state_fields.push((SmolStr::from(name), span.start, assignment));
+        };
+        let mut constructor: Option<&oxc_ast::ast::Function<'_>> = None;
+        for member in &body.body {
+            match member {
+                ClassElement::PropertyDefinition(p) if !p.declare && !p.computed && !p.r#static => {
+                    handle(
+                        &mut state_fields,
+                        &fields,
+                        &mut errors,
+                        p.span,
+                        class_key_name(&p.key),
+                        p.value.as_ref(),
+                        false,
+                    );
+                    let key = class_key_name(&p.key).unwrap_or_default();
+                    if fields.iter().any(|(k, _)| *k == key) {
+                        errors.push((
+                            Code::duplicate_class_field,
+                            m::duplicate_class_field(&key),
+                            p.span,
+                        ));
+                    } else {
+                        let kind = if p.value.is_some() {
+                            "assigned_prop"
+                        } else {
+                            "prop"
+                        };
+                        fields.push((key, vec![kind]));
+                    }
+                }
+                ClassElement::MethodDefinition(md)
+                    if md.value.body.is_some()
+                        && md.r#type
+                            != oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition =>
+                {
+                    use oxc_ast::ast::MethodDefinitionKind as K;
+                    if md.kind == K::Constructor {
+                        constructor = Some(&md.value);
+                        continue;
+                    }
+                    if md.computed {
+                        continue;
+                    }
+                    let kind = match md.kind {
+                        K::Get => "get",
+                        K::Set => "set",
+                        _ => "method",
+                    };
+                    let key = format!(
+                        "{}{}",
+                        if md.r#static { "@" } else { "" },
+                        class_key_name(&md.key).unwrap_or_default()
+                    );
+                    let Some((_, existing)) = fields.iter_mut().find(|(k, _)| *k == key) else {
+                        fields.push((key, vec![kind]));
+                        continue;
+                    };
+                    if existing.contains(&kind)
+                        || existing.contains(&"prop")
+                        || existing.contains(&"assigned_prop")
+                    {
+                        errors.push((
+                            Code::duplicate_class_field,
+                            m::duplicate_class_field(&key),
+                            md.span,
+                        ));
+                    }
+                    let pairs = matches!(
+                        (kind, existing.as_slice()),
+                        ("get", ["set"]) | ("set", ["get"])
+                    );
+                    if pairs || kind == "method" {
+                        existing.push(kind);
+                        continue;
+                    }
+                    errors.push((
+                        Code::duplicate_class_field,
+                        m::duplicate_class_field(&key),
+                        md.span,
+                    ));
+                }
+                _ => {}
+            }
+        }
+        if let Some(body) = constructor.and_then(|f| f.body.as_ref()) {
+            for statement in &body.statements {
+                let Statement::ExpressionStatement(es) = statement else {
+                    continue;
+                };
+                let Expression::AssignmentExpression(a) = unwrap_ts_wrappers(&es.expression) else {
+                    continue;
+                };
+                if !is_this_field_target(&a.left) {
+                    continue;
+                }
+                handle(
+                    &mut state_fields,
+                    &fields,
+                    &mut errors,
+                    a.span,
+                    this_field_name(&a.left),
+                    Some(&a.right),
+                    true,
+                );
+            }
+        }
+        if let Some((code, message, span)) = errors.into_iter().next() {
+            let range = self.abs(span.start, span.end);
+            self.push_error(code, message, range);
+        }
+        state_fields
+    }
+
+    fn visit_class_members(&mut self, body: &ClassBody<'_>) {
         for m in &body.body {
             // `declare` fields and abstract methods are removed before
             // analysis.
@@ -2719,6 +3125,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             match m {
                 ClassElement::MethodDefinition(md) => {
                     self.visit_key(&md.key, md.computed);
+                    let constructor = md.kind == oxc_ast::ast::MethodDefinitionKind::Constructor;
                     self.with_function(|w| {
                         if let Some(body) = &md.value.body {
                             for p in &md.value.params.items {
@@ -2727,16 +3134,44 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                             if let Some(rest) = &md.value.params.rest {
                                 w.declare_pattern(&rest.rest.argument, DeclarationKind::RestParam);
                             }
-                            for s in &body.statements {
-                                w.visit_stmt(s);
+                            if constructor {
+                                w.visit_constructor_body(body);
+                            } else {
+                                w.visit_function_body(body, md.value.generator, true);
                             }
                         }
                     });
                 }
                 ClassElement::PropertyDefinition(p) => {
+                    // `PropertyDefinition.js`: a field with a value may
+                    // not precede the constructor assignment declaring
+                    // a state field of the same name.
+                    if p.value.is_some()
+                        && let Some(name) = class_key_name(&p.key)
+                        && let Some((_, start, _)) = self
+                            .state_fields
+                            .iter()
+                            .find(|(n, _, _)| n.as_str() == name)
+                        && *start != p.span.start
+                        && p.span.start < *start
+                    {
+                        let range = self.abs(p.span.start, p.span.end);
+                        self.push_error(
+                            Code::state_field_invalid_assignment,
+                            crate::messages::state_field_invalid_assignment(),
+                            range,
+                        );
+                    }
                     self.visit_key(&p.key, p.computed);
                     if let Some(v) = &p.value {
+                        // A rune call may initialise an instance field
+                        // with a plain key.
+                        let call = (!p.r#static && !p.computed)
+                            .then(|| direct_call_span(v))
+                            .flatten();
+                        let prev = std::mem::replace(&mut self.field_init_call, call);
                         self.visit_expr(v);
+                        self.field_init_call = prev;
                     }
                 }
                 ClassElement::AccessorProperty(p) => {
@@ -2786,7 +3221,9 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         // (`const /* svelte-ignore … */ x = …`) leads the declarator
         // node, whose span starts at the pattern.
         let pushed = self.push_leading_ignores(Some(d.span.start));
+        self.node_spans.push((d.span.start, d.span.end));
         self.visit_declarator_inner(d, decl_kind);
+        self.node_spans.pop();
         if pushed {
             self.ignore_frames.pop();
         }
@@ -2896,6 +3333,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         self.declare_pattern_with(&d.id, decl_kind, binding_kind, &initial, is_props);
 
         if let Some(h) = self.hooks {
+            self.check_module_import_conflict(&d.id);
             // `VariableDeclarator.js` re-validates every declared name
             // in runes mode, at any depth.
             if h.runes {
@@ -2905,6 +3343,11 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                         self.push_error(code, message, range);
                     }
                 }
+                if is_props {
+                    self.check_props_pattern(d);
+                }
+            } else {
+                self.check_legacy_rune_init(d);
             }
             // A `$bindable()` may only be the default of a property of
             // a `$props()` destructure.
@@ -2951,13 +3394,14 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             // for references inside the argument, mirroring upstream
             // `CallExpression.js:244-262`. Handled inside `visit_call`
             // below so we just continue the normal walk.
-            let direct_call = match unwrap_ts_wrappers(init) {
-                Expression::CallExpression(c) => Some((c.span.start, c.span.end)),
-                _ => None,
-            };
-            let prev = std::mem::replace(&mut self.declarator_init_call, direct_call);
+            let prev = std::mem::replace(&mut self.declarator_init_call, direct_call_span(init));
+            let prev_ident = std::mem::replace(
+                &mut self.declarator_binds_identifier,
+                matches!(&d.id, BindingPattern::BindingIdentifier(_)),
+            );
             self.visit_expr(init);
             self.declarator_init_call = prev;
+            self.declarator_binds_identifier = prev_ident;
         }
     }
 
@@ -3133,13 +3577,37 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     /// comment at all, so the common case adds one boolean check.
     fn visit_expr(&mut self, e: &Expression<'_>) {
         let pushed = self.push_leading_ignores(Some(e.span().start));
+        let is_node = !matches!(
+            e,
+            Expression::ParenthesizedExpression(_)
+                | Expression::TSAsExpression(_)
+                | Expression::TSSatisfiesExpression(_)
+                | Expression::TSNonNullExpression(_)
+                | Expression::TSTypeAssertion(_)
+                | Expression::TSInstantiationExpression(_)
+        );
+        if is_node {
+            let span = e.span();
+            self.node_spans.push((span.start, span.end));
+        }
         self.visit_expr_inner(e);
+        if is_node {
+            self.node_spans.pop();
+        }
         if pushed {
             self.ignore_frames.pop();
         }
     }
 
     fn visit_expr_inner(&mut self, e: &Expression<'_>) {
+        if matches!(
+            e,
+            Expression::Identifier(_)
+                | Expression::StaticMemberExpression(_)
+                | Expression::ComputedMemberExpression(_)
+        ) {
+            self.check_rune_reference(e, self.call_of_callee(e));
+        }
         match e {
             Expression::Identifier(id) => self.record_ref(id, RefParentKind::Read),
             Expression::ArrowFunctionExpression(arr) => {
@@ -3152,9 +3620,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     }
                     match &arr.body {
                         oxc_ast::ast::ArrowFunctionBody::FunctionBody(body) => {
-                            for s in &body.statements {
-                                w.visit_stmt(s);
-                            }
+                            w.visit_function_body(body, false, false);
                         }
                         // A concise body holds an expression, which
                         // still references names the scope tree needs.
@@ -3191,9 +3657,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                         w.declare_pattern(&rest.rest.argument, DeclarationKind::RestParam);
                     }
                     if let Some(body) = &f.body {
-                        for s in &body.statements {
-                            w.visit_stmt(s);
-                        }
+                        w.visit_function_body(body, f.generator, true);
                     }
                 });
             }
@@ -3354,7 +3818,26 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
 
     fn visit_member_expr(&mut self, e: &Expression<'_>) {
         match e {
-            Expression::StaticMemberExpression(m) => self.visit_member_object(&m.object),
+            Expression::StaticMemberExpression(m) => {
+                // `MemberExpression.js`: a `$$` name read off a
+                // `$props()` rest binding.
+                if self.hooks.is_some()
+                    && let Expression::Identifier(object) = &m.object
+                    && m.property.name.starts_with("$$")
+                {
+                    let range = self.abs(m.property.span.start, m.property.span.end);
+                    self.push_gated_error(
+                        ErrorGate::RestProp {
+                            object: SmolStr::from(object.name.as_str()),
+                            scope: self.cur_scope(),
+                        },
+                        Code::props_illegal_name,
+                        crate::messages::props_illegal_name(),
+                        range,
+                    );
+                }
+                self.visit_member_object(&m.object)
+            }
             Expression::ComputedMemberExpression(m) => {
                 self.visit_member_object(&m.object);
                 self.visit_expr(&m.expression);
@@ -3425,12 +3908,17 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         // used by state_referenced_locally's message discriminator.
         let push_state = matches!(rune, Some(RuneCall::State) | Some(RuneCall::StateRaw));
         if self.hooks.is_some() {
-            self.check_rune_call_placement(c, rune);
+            self.check_rune_call(c);
         }
         // Callee — flag the identifier (if any) as a child of the
         // CallExpression for `store_rune_conflict`'s sake; arguments
         // are flagged in `visit_argument`.
+        let callee = unwrap_ts_wrappers(&c.callee).span();
+        let prev_callee = self
+            .callee_span
+            .replace(((callee.start, callee.end), (c.span.start, c.span.end)));
         self.visit_callee(&c.callee);
+        self.callee_span = prev_callee;
         if bump {
             self.rune_bump += 1;
         }
@@ -3447,45 +3935,446 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         }
     }
 
-    /// The placement errors `CallExpression.js` raises for `$props()`
-    /// and `$bindable()`.
-    fn check_rune_call_placement(&mut self, c: &CallExpression<'_>, rune: Option<RuneCall>) {
+    /// The errors `CallExpression.js` raises for a rune call — the
+    /// argument checks and where each rune may stand — in the order the
+    /// compiler raises them. Every one is gated on the rune name not
+    /// resolving to a binding, which is how the compiler recognises a
+    /// rune call.
+    fn check_rune_call(&mut self, c: &CallExpression<'_>) {
+        use crate::messages as m;
+        let Some((rune, root)) = rune_keypath(&c.callee) else {
+            return;
+        };
         let range = self.abs(c.span.start, c.span.end);
-        match rune {
-            Some(RuneCall::Props) => {
-                self.props_calls += 1;
-                if self.props_calls > 1 {
-                    self.push_error(
-                        Code::props_duplicate,
-                        crate::messages::props_duplicate("$props"),
-                        range,
-                    );
-                }
-                let top_level_declarator = self.declarator_init_call
-                    == Some((c.span.start, c.span.end))
-                    && self.is_instance
-                    && self.cur_scope() == self.scope_stack[0];
-                if !top_level_declarator {
-                    self.push_error(
-                        Code::props_invalid_placement,
-                        crate::messages::props_invalid_placement(),
-                        range,
-                    );
-                }
+        let span = Some((c.span.start, c.span.end));
+        let args = c.arguments.len();
+        let at_instance_top = self.is_instance && self.cur_scope() == self.scope_stack[0];
+        let mut errors: Vec<(Code, String)> = Vec::new();
+        if rune != "$inspect"
+            && c.arguments
+                .iter()
+                .any(|a| matches!(a, oxc_ast::ast::Argument::SpreadElement(_)))
+        {
+            errors.push((Code::rune_invalid_spread, m::rune_invalid_spread(&rune)));
+        }
+        let exactly_one = |errors: &mut Vec<(Code, String)>| {
+            if args != 1 {
+                errors.push((
+                    Code::rune_invalid_arguments_length,
+                    m::rune_invalid_arguments_length(&rune, "exactly one argument"),
+                ));
             }
-            Some(RuneCall::Bindable)
+        };
+        match rune.as_str() {
+            "$bindable" => {
+                if args > 1 {
+                    errors.push((
+                        Code::rune_invalid_arguments_length,
+                        m::rune_invalid_arguments_length(&rune, "zero or one arguments"),
+                    ));
+                }
                 if !self
                     .bindable_positions
-                    .contains(&(c.span.start, c.span.end)) =>
-            {
-                self.push_error(
-                    Code::bindable_invalid_location,
-                    crate::messages::bindable_invalid_location(),
-                    range,
-                );
+                    .contains(&(c.span.start, c.span.end))
+                {
+                    errors.push((
+                        Code::bindable_invalid_location,
+                        m::bindable_invalid_location(),
+                    ));
+                }
+            }
+            "$host" => {
+                if args > 0 {
+                    errors.push((
+                        Code::rune_invalid_arguments,
+                        m::rune_invalid_arguments(&rune),
+                    ));
+                } else {
+                    // Whether the component is a custom element is
+                    // known only once the template is read.
+                    self.push_rune_errors(&root, std::mem::take(&mut errors), range);
+                    let host_gate = ErrorGate::Host {
+                        scope: self.cur_scope(),
+                        module: self.write_origin() == WriteOrigin::Module,
+                    };
+                    self.push_gated_error(
+                        host_gate,
+                        Code::host_invalid_placement,
+                        m::host_invalid_placement(),
+                        range,
+                    );
+                    return;
+                }
+            }
+            "$props" => {
+                self.props_calls += 1;
+                if self.props_calls > 1 {
+                    errors.push((Code::props_duplicate, m::props_duplicate(&rune)));
+                }
+                if self.declarator_init_call != span || !at_instance_top {
+                    errors.push((Code::props_invalid_placement, m::props_invalid_placement()));
+                }
+                if args > 0 {
+                    errors.push((
+                        Code::rune_invalid_arguments,
+                        m::rune_invalid_arguments(&rune),
+                    ));
+                }
+            }
+            "$props.id" => {
+                self.props_id_calls += 1;
+                if self.props_id_calls > 1 {
+                    errors.push((Code::props_duplicate, m::props_duplicate(&rune)));
+                }
+                if self.declarator_init_call != span
+                    || !self.declarator_binds_identifier
+                    || !at_instance_top
+                {
+                    errors.push((
+                        Code::props_id_invalid_placement,
+                        m::props_id_invalid_placement(),
+                    ));
+                }
+                if args > 0 {
+                    errors.push((
+                        Code::rune_invalid_arguments,
+                        m::rune_invalid_arguments(&rune),
+                    ));
+                }
+            }
+            "$state" | "$state.raw" | "$derived" | "$derived.by" => {
+                let valid = self.declarator_init_call == span
+                    || self.field_init_call == span
+                    || self.constructor_assignment_call == span;
+                if !valid {
+                    errors.push((
+                        Code::state_invalid_placement,
+                        m::state_invalid_placement(&rune),
+                    ));
+                }
+                if rune.starts_with("$derived") {
+                    exactly_one(&mut errors);
+                } else if args > 1 {
+                    errors.push((
+                        Code::rune_invalid_arguments_length,
+                        m::rune_invalid_arguments_length(&rune, "zero or one arguments"),
+                    ));
+                }
+            }
+            "$effect" | "$effect.pre" => {
+                if self.statement_call != span {
+                    errors.push((
+                        Code::effect_invalid_placement,
+                        m::effect_invalid_placement(),
+                    ));
+                }
+                exactly_one(&mut errors);
+            }
+            "$effect.tracking" => {
+                if args != 0 {
+                    errors.push((
+                        Code::rune_invalid_arguments,
+                        m::rune_invalid_arguments(&rune),
+                    ));
+                }
+            }
+            "$effect.root" | "$inspect().with" | "$state.eager" | "$state.snapshot" => {
+                exactly_one(&mut errors);
+            }
+            "$inspect" => {
+                if args < 1 {
+                    errors.push((
+                        Code::rune_invalid_arguments_length,
+                        m::rune_invalid_arguments_length(&rune, "one or more arguments"),
+                    ));
+                }
+            }
+            "$inspect.trace" => {
+                if args > 1 {
+                    errors.push((
+                        Code::rune_invalid_arguments_length,
+                        m::rune_invalid_arguments_length(&rune, "zero or one arguments"),
+                    ));
+                }
+                match self.trace_slot {
+                    Some((start, end, generator)) if Some((start, end)) == span => {
+                        if generator {
+                            errors.push((
+                                Code::inspect_trace_generator,
+                                m::inspect_trace_generator(),
+                            ));
+                        }
+                    }
+                    _ => errors.push((
+                        Code::inspect_trace_invalid_placement,
+                        m::inspect_trace_invalid_placement(),
+                    )),
+                }
             }
             _ => {}
         }
+        self.push_rune_errors(&root, errors, range);
+    }
+
+    fn push_rune_errors(&mut self, root: &str, errors: Vec<(Code, String)>, range: Range) {
+        let scope = self.cur_scope();
+        for (code, message) in errors {
+            self.push_gated_error(
+                ErrorGate::Unshadowed {
+                    name: SmolStr::from(root),
+                    scope,
+                },
+                code,
+                message,
+                range,
+            );
+        }
+    }
+
+    /// The call whose callee `e` is, if any.
+    fn call_of_callee(&self, e: &Expression<'_>) -> Option<(u32, u32)> {
+        let span = e.span();
+        self.callee_span
+            .filter(|(callee, _)| *callee == (span.start, span.end))
+            .map(|(_, call)| call)
+    }
+
+    /// `Identifier.js` in runes mode: a rune name may only be read as a
+    /// call's callee, through a member chain that spells a rune
+    /// (`$state.raw`). `e` is an identifier or member chain rooted at
+    /// one; `parent_call` is the call whose callee `e` is.
+    fn check_rune_reference(&mut self, e: &Expression<'_>, parent_call: Option<(u32, u32)>) {
+        let parent_is_call = parent_call.is_some();
+        use crate::messages as m;
+        if !self.hooks.is_some_and(|h| h.runes) {
+            return;
+        }
+        // The chain from the root identifier outwards.
+        let mut chain: Vec<&Expression<'_>> = vec![e];
+        let mut cur = e;
+        loop {
+            cur = match cur {
+                Expression::StaticMemberExpression(mem) => &mem.object,
+                Expression::ComputedMemberExpression(mem) => &mem.object,
+                _ => break,
+            };
+            chain.push(cur);
+        }
+        chain.reverse();
+        let Some(Expression::Identifier(root)) = chain.first() else {
+            return;
+        };
+        let root_name = root.name.as_str();
+        if !is_rune_name(root_name) {
+            return;
+        }
+        // The node enclosing `e` (the compiler reports some errors on
+        // it): the call when `e` is a callee, else the enclosing node
+        // the walk recorded.
+        let outer_parent = if parent_is_call {
+            parent_call
+        } else {
+            let n = self.node_spans.len();
+            // `node_spans` ends with `e` itself when it came through
+            // `visit_expr`.
+            let top = self.node_spans.last().copied();
+            let espan = (e.span().start, e.span().end);
+            if top == Some(espan) {
+                n.checked_sub(2)
+                    .and_then(|i| self.node_spans.get(i).copied())
+            } else {
+                top
+            }
+        };
+        let mut name = root_name.to_string();
+        let mut error: Option<(Code, String, (u32, u32))> = None;
+        for (i, link) in chain.iter().enumerate().skip(1) {
+            let link_span = (link.span().start, link.span().end);
+            let parent = match chain.get(i + 1) {
+                Some(p) => Some((p.span().start, p.span().end)),
+                None => outer_parent,
+            };
+            let property = match link {
+                Expression::StaticMemberExpression(mem) => mem.property.name.as_str(),
+                Expression::ComputedMemberExpression(_) => {
+                    error = Some((
+                        Code::rune_invalid_computed_property,
+                        m::rune_invalid_computed_property(),
+                        link_span,
+                    ));
+                    break;
+                }
+                _ => break,
+            };
+            name.push('.');
+            name.push_str(property);
+            if !is_rune_name(&name) {
+                let Some(parent) = parent else {
+                    return;
+                };
+                let (code, message) = match name.as_str() {
+                    "$effect.active" => (
+                        Code::rune_renamed,
+                        m::rune_renamed("$effect.active", "$effect.tracking"),
+                    ),
+                    "$state.frozen" => (
+                        Code::rune_renamed,
+                        m::rune_renamed("$state.frozen", "$state.raw"),
+                    ),
+                    "$state.is" => (Code::rune_removed, m::rune_removed("$state.is")),
+                    _ => (Code::rune_invalid_name, m::rune_invalid_name(&name)),
+                };
+                error = Some((code, message, parent));
+                break;
+            }
+        }
+        if error.is_none() && !parent_is_call {
+            let espan = e.span();
+            error = Some((
+                Code::rune_missing_parentheses,
+                m::rune_missing_parentheses(),
+                (espan.start, espan.end),
+            ));
+        }
+        if let Some((code, message, (start, end))) = error {
+            let range = self.abs(start, end);
+            let scope = self.cur_scope();
+            self.push_gated_error(
+                ErrorGate::Unshadowed {
+                    name: SmolStr::from(root_name),
+                    scope,
+                },
+                code,
+                message,
+                range,
+            );
+        }
+    }
+
+    /// `ensure_no_module_import_conflict`: a top-level instance
+    /// declaration may not reuse the name of a `<script module>`
+    /// import.
+    fn check_module_import_conflict(&mut self, id: &BindingPattern<'_>) {
+        if !self.is_instance || self.cur_scope() != self.scope_stack[0] {
+            return;
+        }
+        let Some(module_root) = self.tree.scopes[self.cur_scope().0 as usize].parent else {
+            return;
+        };
+        let module_scope = &self.tree.scopes[module_root.0 as usize];
+        let conflict = crate::scope_util::binding_idents_in_pattern(id)
+            .iter()
+            .any(|ident| {
+                module_scope
+                    .declarations
+                    .get(ident.name.as_str())
+                    .is_some_and(|b| {
+                        self.tree.bindings[b.0 as usize].declaration_kind == DeclarationKind::Import
+                    })
+            });
+        if conflict {
+            let span = id.span();
+            let range = self.abs(span.start, span.end);
+            self.push_error(
+                Code::declaration_duplicate_module_import,
+                crate::messages::declaration_duplicate_module_import(),
+                range,
+            );
+        }
+    }
+
+    /// The pattern a runes-mode `$props()` declarator may bind: an
+    /// identifier, or an object destructure of plain, non-computed,
+    /// non-`$$` properties.
+    fn check_props_pattern(&mut self, d: &VariableDeclarator<'_>) {
+        let scope = self.cur_scope();
+        let gate = || ErrorGate::Unshadowed {
+            name: SmolStr::new_static("$props"),
+            scope,
+        };
+        match &d.id {
+            BindingPattern::BindingIdentifier(_) => {}
+            BindingPattern::ObjectPattern(op) => {
+                for prop in &op.properties {
+                    let range = self.abs(prop.span.start, prop.span.end);
+                    if prop.computed {
+                        self.push_gated_error(
+                            gate(),
+                            Code::props_invalid_pattern,
+                            crate::messages::props_invalid_pattern(),
+                            range,
+                        );
+                    }
+                    if let PropertyKey::StaticIdentifier(key) = &prop.key
+                        && key.name.starts_with("$$")
+                    {
+                        self.push_gated_error(
+                            gate(),
+                            Code::props_illegal_name,
+                            crate::messages::props_illegal_name(),
+                            range,
+                        );
+                    }
+                    let value = match &prop.value {
+                        BindingPattern::AssignmentPattern(ap) => &ap.left,
+                        other => other,
+                    };
+                    if !matches!(value, BindingPattern::BindingIdentifier(_)) {
+                        self.push_gated_error(
+                            gate(),
+                            Code::props_invalid_pattern,
+                            crate::messages::props_invalid_pattern(),
+                            range,
+                        );
+                    }
+                }
+            }
+            _ => {
+                let range = self.abs(d.span.start, d.span.end);
+                self.push_gated_error(
+                    gate(),
+                    Code::props_invalid_identifier,
+                    crate::messages::props_invalid_identifier(),
+                    range,
+                );
+            }
+        }
+    }
+
+    /// Outside runes mode a declarator may not be initialised by a
+    /// `$state`, `$derived` or `$props` call (unless the name is a
+    /// store subscription).
+    fn check_legacy_rune_init(&mut self, d: &VariableDeclarator<'_>) {
+        let Some(Expression::CallExpression(c)) = d.init.as_ref().map(unwrap_ts_wrappers) else {
+            return;
+        };
+        let Expression::Identifier(callee) = &c.callee else {
+            return;
+        };
+        let name = callee.name.as_str();
+        if matches!(name, "$state" | "$derived" | "$props") {
+            let range = self.abs(c.span.start, c.span.end);
+            self.push_gated_error(
+                ErrorGate::NotStoreSub {
+                    name: SmolStr::from(name),
+                    scope: self.cur_scope(),
+                },
+                Code::rune_invalid_usage,
+                crate::messages::rune_invalid_usage(name),
+                range,
+            );
+        }
+    }
+
+    fn push_gated_error(&mut self, gate: ErrorGate, code: Code, message: String, range: Range) {
+        self.tree
+            .script_rule_events
+            .push(ScriptRuleEvent::GatedError {
+                gate,
+                code,
+                message,
+                range,
+            });
     }
 
     fn push_error(&mut self, code: Code, message: String, range: Range) {
@@ -3543,6 +4432,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 && id.name.starts_with('$')
             {
                 let pushed = self.push_leading_ignores(Some(e.span().start));
+                self.check_rune_reference(bare, None);
                 self.record_ref_id_full(
                     id.name.as_str(),
                     id.span.start,
@@ -3591,7 +4481,10 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         match e {
             // Direct identifier / member at top level: NOT flagged
             // (mirrors upstream bug).
-            Expression::Identifier(id) => self.record_ref(id, RefParentKind::Read),
+            Expression::Identifier(id) => {
+                self.check_rune_reference(e, None);
+                self.record_ref(id, RefParentKind::Read);
+            }
             // Nested — walk with the flag ON.
             _ => {
                 let saved = std::mem::replace(&mut self.in_state_arg_nested, true);
@@ -3604,7 +4497,35 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         }
     }
 
+    /// The state-field half of the compiler's `validate_assignment`: in
+    /// a constructor, a write to a state field may not precede the
+    /// assignment declaring it.
+    fn check_state_field_write(&mut self, name: Option<String>, span: oxc_span::Span) {
+        if !self.in_constructor_body {
+            return;
+        }
+        let Some(name) = name else { return };
+        let Some(&(_, declared_at, by_assignment)) = self
+            .state_fields
+            .iter()
+            .find(|(n, _, _)| n.as_str() == name)
+        else {
+            return;
+        };
+        if by_assignment && declared_at != span.start && span.start < declared_at {
+            let range = self.abs(span.start, span.end);
+            self.push_error(
+                Code::state_field_invalid_assignment,
+                crate::messages::state_field_invalid_assignment(),
+                range,
+            );
+        }
+    }
+
     fn visit_assignment(&mut self, a: &AssignmentExpression<'_>) {
+        if !self.state_fields.is_empty() && is_this_member_target(&a.left) {
+            self.check_state_field_write(this_field_name(&a.left), a.span);
+        }
         let mut targets = Vec::new();
         checked_write_targets(&a.left, &mut targets);
         let bare = matches!(a.left, AssignmentTarget::AssignmentTargetIdentifier(_));
@@ -3842,6 +4763,23 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     fn visit_update(&mut self, u: &UpdateExpression<'_>) {
         // `foo++` / `foo.bar++`
         let target = &u.argument;
+        if !self.state_fields.is_empty()
+            && let Some(member) = target.as_member_expression()
+            && matches!(member.object(), Expression::ThisExpression(_))
+        {
+            let name = match member {
+                oxc_ast::ast::MemberExpression::StaticMemberExpression(m) => {
+                    Some(m.property.name.to_string())
+                }
+                oxc_ast::ast::MemberExpression::PrivateFieldExpression(m) => {
+                    Some(format!("#{}", m.field.name))
+                }
+                oxc_ast::ast::MemberExpression::ComputedMemberExpression(m) => {
+                    literal_key_name(&m.expression)
+                }
+            };
+            self.check_state_field_write(name, u.span);
+        }
         if let SimpleAssignmentTarget::AssignmentTargetIdentifier(id) = target {
             self.push_write(vec![SmolStr::from(id.name.as_str())], true, u.span);
         }
@@ -3915,6 +4853,16 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         parent_kind: RefParentKind,
         parent_is_call: bool,
     ) {
+        // `arguments` outside every function declaration / expression
+        // (arrows have none of their own).
+        if name == "arguments" && self.plain_function_depth == 0 && self.hooks.is_some() {
+            let range = self.abs(start, end);
+            self.push_error(
+                Code::invalid_arguments_usage,
+                crate::messages::invalid_arguments_usage(),
+                range,
+            );
+        }
         let ignored = self.current_ignore_snapshot();
         self.tree.pending_refs.push(PendingRef {
             scope: self.cur_scope(),

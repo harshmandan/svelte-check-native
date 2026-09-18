@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "src/E10.svelte",
+            "line": 1,
+            "column": 5,
+            "code": 2322
+        },
+        {
+            "file": "src/E10.svelte",
+            "line": 1,
+            "column": 5,
+            "code": 6133
+        }
+    ],
+    "_note": "The compiler's parse() rejects duplicate instance / module scripts, an invalid context attribute, a reserved script attribute (server) and a valued module attribute; svelte2tsx then throws and svelte-check drops the whole file, TypeScript errors included (E08, E09, E04, E05 carry TS errors that never surface). E10 is a valid <script module> whose TS error does surface. Verified against upstream svelte-check."
+}

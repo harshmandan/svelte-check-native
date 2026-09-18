@@ -1735,6 +1735,7 @@ fn check_project(
                     .chain(template_errors.iter())
                     .any(|e| e.compiler_rejects());
                 if parse_rejected
+                    || svn_lint::script_tag_rejected(&doc)
                     || svn_lint::template_parse_rejected(&fragment, source, doc.script_lang())
                 {
                     return (None, (None, Vec::new(), Some(file.clone())));

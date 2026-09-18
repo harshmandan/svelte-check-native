@@ -27,6 +27,77 @@ use svn_core::Range;
 use svn_parser::ast::{AttrValuePart, Attribute, DirectiveValue, Fragment};
 use svn_parser::{Component, Element, ScriptLang, SvelteElement};
 
+/// Attributes the compiler reserves on `<script>` (`read/script.js`).
+const RESERVED_SCRIPT_ATTRIBUTES: [&str; 5] = ["server", "client", "worker", "test", "default"];
+
+/// True when the compiler's `read_script` rejects an attribute of the
+/// component's `<script>` tags: a reserved name, or a `module`
+/// attribute given a value. (An unknown `context` value and a
+/// duplicate script are parse errors our own parser reports.)
+pub fn script_tag_rejected(doc: &svn_parser::Document<'_>) -> bool {
+    [doc.module_script.as_ref(), doc.instance_script.as_ref()]
+        .into_iter()
+        .flatten()
+        .any(|script| script_attribute_error(script).is_some())
+}
+
+/// The compiler error `read_script` raises for a script's attributes,
+/// checked in attribute order.
+fn script_attribute_error(
+    script: &svn_parser::ScriptSection<'_>,
+) -> Option<(crate::Code, String, Range)> {
+    use crate::{Code, messages};
+    script.attrs.iter().find_map(|attr| {
+        if RESERVED_SCRIPT_ATTRIBUTES.contains(&attr.name.as_str()) {
+            Some((
+                Code::script_reserved_attribute,
+                messages::script_reserved_attribute(&attr.name),
+                attr.range,
+            ))
+        } else if attr.name == "module" && attr.value.is_some() {
+            Some((
+                Code::script_invalid_attribute_value,
+                messages::script_invalid_attribute_value(&attr.name),
+                attr.range,
+            ))
+        } else {
+            None
+        }
+    })
+}
+
+/// The first error the compiler raises while reading the component's
+/// top-level `<script>` tags: an attribute `read_script` rejects, an
+/// invalid `context`, or a second instance / module script. The
+/// compiler's `parse()` throws it, so svelte-check drops such a file
+/// before any of this is reported; the lint pass still names it.
+pub(crate) fn script_tag_error(
+    doc: &svn_parser::Document<'_>,
+    section_errors: &[svn_parser::ParseError],
+) -> Option<(crate::Code, String, Range)> {
+    use crate::{Code, messages};
+    let attribute_errors = [doc.module_script.as_ref(), doc.instance_script.as_ref()]
+        .into_iter()
+        .flatten()
+        .filter_map(script_attribute_error);
+    let section = section_errors.iter().filter_map(|e| match e {
+        svn_parser::ParseError::UnknownScriptContext { range, .. } => Some((
+            Code::script_invalid_context,
+            messages::script_invalid_context(),
+            *range,
+        )),
+        svn_parser::ParseError::DuplicateScript { range, .. } => Some((
+            Code::script_duplicate,
+            messages::script_duplicate(),
+            Range::new(range.start, range.start),
+        )),
+        _ => None,
+    });
+    attribute_errors
+        .chain(section)
+        .min_by_key(|(_, _, range)| range.start)
+}
+
 /// True when the compiler's `parse()` would throw on this template for
 /// one of the reasons in the module doc.
 pub fn template_parse_rejected(fragment: &Fragment, source: &str, lang: ScriptLang) -> bool {

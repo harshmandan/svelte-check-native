@@ -92,6 +92,7 @@ pub enum Code {
     css_unused_selector,
     custom_element_props_identifier,
     debug_tag_invalid_arguments,
+    declaration_duplicate,
     declaration_duplicate_module_import,
     derived_invalid_export,
     directive_invalid_value,
@@ -149,6 +150,7 @@ pub enum Code {
     props_invalid_identifier,
     props_invalid_pattern,
     props_invalid_placement,
+    reactive_declaration_cycle,
     reactive_declaration_invalid_placement,
     reactive_declaration_module_script_dependency,
     render_tag_invalid_call_expression,
@@ -165,6 +167,10 @@ pub enum Code {
     rune_renamed,
     runes_mode_invalid_import,
     script_context_deprecated,
+    script_duplicate,
+    script_invalid_attribute_value,
+    script_invalid_context,
+    script_reserved_attribute,
     script_unknown_attribute,
     slot_attribute_duplicate,
     slot_attribute_invalid,
@@ -333,6 +339,7 @@ impl Code {
             Self::css_unused_selector => "css_unused_selector",
             Self::custom_element_props_identifier => "custom_element_props_identifier",
             Self::debug_tag_invalid_arguments => "debug_tag_invalid_arguments",
+            Self::declaration_duplicate => "declaration_duplicate",
             Self::declaration_duplicate_module_import => "declaration_duplicate_module_import",
             Self::derived_invalid_export => "derived_invalid_export",
             Self::directive_invalid_value => "directive_invalid_value",
@@ -394,6 +401,7 @@ impl Code {
             Self::props_invalid_identifier => "props_invalid_identifier",
             Self::props_invalid_pattern => "props_invalid_pattern",
             Self::props_invalid_placement => "props_invalid_placement",
+            Self::reactive_declaration_cycle => "reactive_declaration_cycle",
             Self::reactive_declaration_invalid_placement => {
                 "reactive_declaration_invalid_placement"
             }
@@ -414,6 +422,10 @@ impl Code {
             Self::rune_renamed => "rune_renamed",
             Self::runes_mode_invalid_import => "runes_mode_invalid_import",
             Self::script_context_deprecated => "script_context_deprecated",
+            Self::script_duplicate => "script_duplicate",
+            Self::script_invalid_attribute_value => "script_invalid_attribute_value",
+            Self::script_invalid_context => "script_invalid_context",
+            Self::script_reserved_attribute => "script_reserved_attribute",
             Self::script_unknown_attribute => "script_unknown_attribute",
             Self::slot_attribute_duplicate => "slot_attribute_duplicate",
             Self::slot_attribute_invalid => "slot_attribute_invalid",
@@ -598,6 +610,7 @@ impl Code {
             "css_unused_selector" => Some(Self::css_unused_selector),
             "custom_element_props_identifier" => Some(Self::custom_element_props_identifier),
             "debug_tag_invalid_arguments" => Some(Self::debug_tag_invalid_arguments),
+            "declaration_duplicate" => Some(Self::declaration_duplicate),
             "declaration_duplicate_module_import" => {
                 Some(Self::declaration_duplicate_module_import)
             }
@@ -661,6 +674,7 @@ impl Code {
             "props_invalid_identifier" => Some(Self::props_invalid_identifier),
             "props_invalid_pattern" => Some(Self::props_invalid_pattern),
             "props_invalid_placement" => Some(Self::props_invalid_placement),
+            "reactive_declaration_cycle" => Some(Self::reactive_declaration_cycle),
             "reactive_declaration_invalid_placement" => {
                 Some(Self::reactive_declaration_invalid_placement)
             }
@@ -681,6 +695,10 @@ impl Code {
             "rune_renamed" => Some(Self::rune_renamed),
             "runes_mode_invalid_import" => Some(Self::runes_mode_invalid_import),
             "script_context_deprecated" => Some(Self::script_context_deprecated),
+            "script_duplicate" => Some(Self::script_duplicate),
+            "script_invalid_attribute_value" => Some(Self::script_invalid_attribute_value),
+            "script_invalid_context" => Some(Self::script_invalid_context),
+            "script_reserved_attribute" => Some(Self::script_reserved_attribute),
             "script_unknown_attribute" => Some(Self::script_unknown_attribute),
             "slot_attribute_duplicate" => Some(Self::slot_attribute_duplicate),
             "slot_attribute_invalid" => Some(Self::slot_attribute_invalid),
@@ -756,7 +774,7 @@ impl Code {
 }
 
 /// All known codes, alphabetically sorted.
-pub const CODES: &[&str; 214] = &[
+pub const CODES: &[&str; 220] = &[
     "a11y_accesskey",
     "a11y_aria_activedescendant_has_tabindex",
     "a11y_aria_attributes",
@@ -839,6 +857,7 @@ pub const CODES: &[&str; 214] = &[
     "css_unused_selector",
     "custom_element_props_identifier",
     "debug_tag_invalid_arguments",
+    "declaration_duplicate",
     "declaration_duplicate_module_import",
     "derived_invalid_export",
     "directive_invalid_value",
@@ -896,6 +915,7 @@ pub const CODES: &[&str; 214] = &[
     "props_invalid_identifier",
     "props_invalid_pattern",
     "props_invalid_placement",
+    "reactive_declaration_cycle",
     "reactive_declaration_invalid_placement",
     "reactive_declaration_module_script_dependency",
     "render_tag_invalid_call_expression",
@@ -912,6 +932,10 @@ pub const CODES: &[&str; 214] = &[
     "rune_renamed",
     "runes_mode_invalid_import",
     "script_context_deprecated",
+    "script_duplicate",
+    "script_invalid_attribute_value",
+    "script_invalid_context",
+    "script_reserved_attribute",
     "script_unknown_attribute",
     "slot_attribute_duplicate",
     "slot_attribute_invalid",
@@ -1007,6 +1031,7 @@ pub const COMPILER_ERROR_CODES: &[&str] = &[
     "constant_assignment",
     "constant_binding",
     "debug_tag_invalid_arguments",
+    "declaration_duplicate",
     "declaration_duplicate_module_import",
     "derived_invalid_export",
     "directive_invalid_value",
@@ -1047,6 +1072,7 @@ pub const COMPILER_ERROR_CODES: &[&str] = &[
     "props_invalid_identifier",
     "props_invalid_pattern",
     "props_invalid_placement",
+    "reactive_declaration_cycle",
     "render_tag_invalid_call_expression",
     "render_tag_invalid_expression",
     "render_tag_invalid_spread_argument",
@@ -1060,6 +1086,10 @@ pub const COMPILER_ERROR_CODES: &[&str] = &[
     "rune_removed",
     "rune_renamed",
     "runes_mode_invalid_import",
+    "script_duplicate",
+    "script_invalid_attribute_value",
+    "script_invalid_context",
+    "script_reserved_attribute",
     "slot_attribute_duplicate",
     "slot_attribute_invalid",
     "slot_attribute_invalid_placement",

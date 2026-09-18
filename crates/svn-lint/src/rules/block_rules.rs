@@ -38,6 +38,21 @@ pub fn visit_each(b: &EachBlock, ctx: &mut LintContext<'_>) {
     if let Some(alt) = &b.alternate {
         visit_block_fragment_for_empty(alt, ctx);
     }
+    // `EachBlock.js`: an item named `$state` or `$derived` is rejected
+    // with the rune placement error, on the whole block.
+    let context = b
+        .as_clause
+        .as_ref()
+        .and_then(|c| c.context_range)
+        .map(|r| r.slice(ctx.source))
+        .map(|text| text.split(':').next().unwrap_or_default().trim());
+    if let Some(name @ ("$state" | "$derived")) = context {
+        ctx.emit_error(
+            Code::state_invalid_placement,
+            messages::state_invalid_placement(name),
+            b.range,
+        );
+    }
     // A key makes the block keyed unless it is just the index; a keyed
     // block needs an `as` clause (`EachBlock.js`).
     if let Some(clause) = &b.as_clause

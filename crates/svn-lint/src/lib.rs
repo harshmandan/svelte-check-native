@@ -62,7 +62,7 @@ use std::path::Path;
 pub use codes::{CODES, Code};
 pub use compat::{CompatFeatures, SvelteVersion, detect_for_workspace};
 pub use context::{LintContext, Warning};
-pub use parse_rejection::template_parse_rejected;
+pub use parse_rejection::{script_tag_rejected, template_parse_rejected};
 
 /// The project compiler options the pass honours (from the nearest
 /// Svelte config).

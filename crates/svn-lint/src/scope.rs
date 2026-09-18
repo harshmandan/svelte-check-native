@@ -132,6 +132,26 @@ pub struct ScopeTree {
     pub(crate) store_refs: Vec<StoreRef>,
     /// The source range of the `<script module>` body.
     pub(crate) module_script_range: Option<Range>,
+    /// The instance script's top-level `$:` statements, in order.
+    pub(crate) reactive_statements: Vec<ReactiveStatement>,
+    /// Starts of the identifiers inside `$:` statements that are the
+    /// target of a plain `=` assignment, directly or as the object of
+    /// the assigned member (`a = …`, `a.b = …`) — references that do
+    /// not make the statement depend on them.
+    pub(crate) reactive_assignment_targets: std::collections::HashSet<u32>,
+}
+
+/// A top-level `$:` statement, as the compiler's legacy-mode ordering
+/// of reactive statements sees it.
+#[derive(Clone, Debug)]
+pub(crate) struct ReactiveStatement {
+    pub range: Range,
+    /// The scope the statement opens.
+    pub scope: ScopeId,
+    /// The names it assigns (plain and destructured assignment
+    /// targets, and the object of an updated member), each with the
+    /// scope of the assignment, in order.
+    pub assignments: Vec<(SmolStr, ScopeId)>,
 }
 
 /// One `$name` reference, with what `name` resolves to from it.
@@ -487,6 +507,10 @@ struct TreeBuilder {
     /// and, once the script walk is done, declares each one without an
     /// outer binding as `legacy_reactive`.
     implicit_reactive_decls: Vec<(SmolStr, Range)>,
+    /// See [`ScopeTree::reactive_statements`].
+    reactive_statements: Vec<ReactiveStatement>,
+    /// See [`ScopeTree::reactive_assignment_targets`].
+    reactive_assignment_targets: Vec<u32>,
     /// Accumulated `$props()` identifier / rest-element ranges that
     /// would fire `custom_element_props_identifier` when the file
     /// compiles as a custom element. Paired with an ignore-stack
@@ -512,6 +536,10 @@ struct TreeBuilder {
     /// declarator the way `{@const}` is not: a rune call may stand
     /// there.
     declaration_tag_init: bool,
+    /// Bindings our walk declares on entering a scope that the compiler
+    /// declares only after walking the scope's contents (the
+    /// `{:then}` / `{:catch}` values).
+    late_declared: Vec<BindingId>,
     /// See [`ScopeTree::has_await`].
     has_await: bool,
     /// See [`ScopeTree::template_rule_events`].
@@ -637,6 +665,8 @@ impl TreeBuilder {
             pending_updates: Vec::new(),
             pending_writes: Vec::new(),
             implicit_reactive_decls: Vec::new(),
+            reactive_statements: Vec::new(),
+            reactive_assignment_targets: Vec::new(),
             custom_element_props_candidates: Vec::new(),
             custom_element_props_ignored: Vec::new(),
             nonrunes_export_idents: Vec::new(),
@@ -644,6 +674,7 @@ impl TreeBuilder {
             export_spec_locals: Vec::new(),
             expr_alloc: None,
             declaration_tag_init: false,
+            late_declared: Vec::new(),
             has_await: false,
             script_rule_events: Vec::new(),
             template_rule_events: Vec::new(),
@@ -691,6 +722,28 @@ impl TreeBuilder {
                 };
                 scope = parent;
             }
+        }
+        // A name declared twice in one scope, neither time with `var`,
+        // is a compile error (the scope builder's own check; plain
+        // JavaScript duplicates fail to parse before this).
+        if self.declaration_error.is_none()
+            && declaration_kind != DeclarationKind::Var
+            && let Some(existing) = self.scopes[scope.0 as usize].declarations.get(&name)
+            && self.bindings[existing.0 as usize].declaration_kind != DeclarationKind::Var
+        {
+            // The compiler declares an `{:then}` / `{:catch}` value
+            // only after walking the branch, so a clash with a
+            // declaration inside the branch points at the value.
+            let at = if self.late_declared.contains(existing) {
+                self.bindings[existing.0 as usize].range
+            } else {
+                range
+            };
+            self.declaration_error = Some((
+                Code::declaration_duplicate,
+                crate::messages::declaration_duplicate(&name),
+                at,
+            ));
         }
         // `validate_identifier_name(binding, scope.function_depth)`:
         // outside parameters and synthetic bindings, a name at the
@@ -1056,6 +1109,7 @@ impl TreeBuilder {
             node_spans: Vec::new(),
             state_fields: Vec::new(),
             in_constructor_body: false,
+            reactive_statement: None,
         };
         if std::mem::take(&mut walker.tree.declaration_tag_init)
             && let Some(Statement::ExpressionStatement(es)) = parsed.program.body.first()
@@ -1384,6 +1438,9 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
                 InitialKind::EachBlock,
             );
             self.builder.bindings[bid.0 as usize].inside_rest = b.inside_rest;
+            if matches!(kind, ScopeKind::AwaitThen | ScopeKind::AwaitCatch) {
+                self.builder.late_declared.push(bid);
+            }
         }
         if let ScopeKind::Each {
             has_index,
@@ -1400,6 +1457,7 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
             } else {
                 BindingKind::Static
             };
+            let had_error = self.builder.declaration_error.is_some();
             self.builder.declare(
                 child,
                 index.name.clone(),
@@ -1408,6 +1466,11 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
                 DeclarationKind::Const,
                 InitialKind::EachBlock,
             );
+            // The compiler declares the index from a bare name with no
+            // source position, so an error about it has none either.
+            if !had_error && let Some(error) = &mut self.builder.declaration_error {
+                error.2 = Range::new(0, 0);
+            }
         }
     }
 
@@ -1574,6 +1637,7 @@ impl TreeBuilder {
             node_spans: Vec::new(),
             state_fields: Vec::new(),
             in_constructor_body: false,
+            reactive_statement: None,
         };
         // Push the template-comment ignores so they apply to every
         // reference recorded during this script walk.
@@ -1763,6 +1827,8 @@ impl TreeBuilder {
             declaration_error: self.declaration_error,
             store_refs,
             module_script_range: None,
+            reactive_statements: self.reactive_statements,
+            reactive_assignment_targets: self.reactive_assignment_targets.into_iter().collect(),
             template_rule_events: {
                 let mut events = self.template_rule_events;
                 events.sort_by_key(|e| e.range().start);
@@ -2091,6 +2157,16 @@ fn is_ts_declare_function(f: &oxc_ast::ast::Function<'_>) -> bool {
     f.declare || f.body.is_none()
 }
 
+/// The identifier at the root of a member chain (`a` of `a.b[c].d`).
+fn member_root_identifier<'e, 'a>(e: &'e Expression<'a>) -> Option<&'e IdentifierReference<'a>> {
+    match e {
+        Expression::Identifier(id) => Some(id),
+        other => other
+            .as_member_expression()
+            .and_then(|m| member_root_identifier(m.object())),
+    }
+}
+
 /// `this.name`, `this.#name` or `this[<literal>]` — an assignment
 /// target that names a class field.
 fn is_this_field_target(t: &AssignmentTarget<'_>) -> bool {
@@ -2308,6 +2384,9 @@ struct ScriptWalker<'b, 'src> {
     state_fields: Vec<(SmolStr, u32, bool)>,
     /// Walking a constructor body, outside any nested function.
     in_constructor_body: bool,
+    /// The index (in `tree.reactive_statements`) of the top-level `$:`
+    /// statement being walked.
+    reactive_statement: Option<usize>,
     /// Spans of the statements, declarators and expressions enclosing
     /// the node being walked, innermost last — the compiler's
     /// `context.path` as far as its errors report a parent node.
@@ -3017,11 +3096,20 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             let prev = std::mem::replace(&mut self.in_reactive_statement, true);
             let parent_scope = self.cur_scope();
             let scope = self.tree.new_scope(Some(parent_scope));
+            self.tree.reactive_statements.push(ReactiveStatement {
+                range: self.abs(lbl.span.start, lbl.span.end),
+                scope,
+                assignments: Vec::new(),
+            });
+            let prev_statement = self
+                .reactive_statement
+                .replace(self.tree.reactive_statements.len() - 1);
             let events_before = self.tree.script_rule_events.len();
             self.function_depth += 1;
             self.with_scope(scope, |w| w.visit_stmt(&lbl.body));
             self.function_depth -= 1;
             self.in_reactive_statement = prev;
+            self.reactive_statement = prev_statement;
             // `LabeledStatement.js` walks a reactive statement's body
             // twice (once to collect its dependencies, then again), so
             // every script warning inside it is reported twice.
@@ -4639,6 +4727,35 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         }
     }
 
+    /// What an assignment inside a `$:` statement tells the compiler's
+    /// reactive-statement ordering: the identifiers it assigns (not
+    /// members), and — for a plain `=` — the target identifier or
+    /// member root, whose reference is then no dependency.
+    fn note_reactive_assignment(&mut self, index: usize, a: &AssignmentExpression<'_>) {
+        let mut names = Vec::new();
+        assignment_target_identifiers(&a.left, &mut names);
+        let scope = self.cur_scope();
+        for (name, _, _) in names {
+            self.tree.reactive_statements[index]
+                .assignments
+                .push((SmolStr::from(name), scope));
+        }
+        if a.operator == oxc_syntax::operator::AssignmentOperator::Assign {
+            let target = match &a.left {
+                AssignmentTarget::AssignmentTargetIdentifier(id) => Some(id.span.start),
+                other => other
+                    .as_member_expression()
+                    .and_then(|m| member_root_identifier(m.object()))
+                    .map(|id| id.span.start),
+            };
+            if let Some(start) = target {
+                self.tree
+                    .reactive_assignment_targets
+                    .push(start + self.base_offset);
+            }
+        }
+    }
+
     /// The state-field half of the compiler's `validate_assignment`: in
     /// a constructor, a write to a state field may not precede the
     /// assignment declaring it.
@@ -4667,6 +4784,9 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     fn visit_assignment(&mut self, a: &AssignmentExpression<'_>) {
         if !self.state_fields.is_empty() && is_this_member_target(&a.left) {
             self.check_state_field_write(this_field_name(&a.left), a.span);
+        }
+        if let Some(index) = self.reactive_statement {
+            self.note_reactive_assignment(index, a);
         }
         let mut targets = Vec::new();
         checked_write_targets(&a.left, &mut targets);
@@ -4905,6 +5025,21 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     fn visit_update(&mut self, u: &UpdateExpression<'_>) {
         // `foo++` / `foo.bar++`
         let target = &u.argument;
+        if let Some(index) = self.reactive_statement {
+            let root = match target {
+                SimpleAssignmentTarget::AssignmentTargetIdentifier(id) => Some(id.name.as_str()),
+                other => other
+                    .as_member_expression()
+                    .and_then(|m| member_root_identifier(m.object()))
+                    .map(|id| id.name.as_str()),
+            };
+            if let Some(name) = root {
+                let scope = self.cur_scope();
+                self.tree.reactive_statements[index]
+                    .assignments
+                    .push((SmolStr::from(name), scope));
+            }
+        }
         if !self.state_fields.is_empty()
             && let Some(member) = target.as_member_expression()
             && matches!(member.object(), Expression::ThisExpression(_))

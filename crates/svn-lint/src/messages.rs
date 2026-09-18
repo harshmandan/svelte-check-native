@@ -719,6 +719,42 @@ pub fn props_duplicate(rune: &str) -> String {
     format!("Cannot use `{rune}()` more than once\nhttps://svelte.dev/e/props_duplicate")
 }
 
+/// Cyclical dependency detected: %cycle%
+pub fn reactive_declaration_cycle(cycle: &str) -> String {
+    format!(
+        "Cyclical dependency detected: {cycle}\nhttps://svelte.dev/e/reactive_declaration_cycle"
+    )
+}
+
+/// A component can have a single top-level `<script>` element and/or a single top-level `<script module>` element
+pub fn script_duplicate() -> String {
+    "A component can have a single top-level `<script>` element and/or a single top-level `<script module>` element\nhttps://svelte.dev/e/script_duplicate".to_string()
+}
+
+/// If the `%name%` attribute is supplied, it must be a boolean attribute
+pub fn script_invalid_attribute_value(name: &str) -> String {
+    format!(
+        "If the `{name}` attribute is supplied, it must be a boolean attribute\nhttps://svelte.dev/e/script_invalid_attribute_value"
+    )
+}
+
+/// If the context attribute is supplied, its value must be "module"
+pub fn script_invalid_context() -> String {
+    "If the context attribute is supplied, its value must be \"module\"\nhttps://svelte.dev/e/script_invalid_context".to_string()
+}
+
+/// The `%name%` attribute is reserved and cannot be used
+pub fn script_reserved_attribute(name: &str) -> String {
+    format!(
+        "The `{name}` attribute is reserved and cannot be used\nhttps://svelte.dev/e/script_reserved_attribute"
+    )
+}
+
+/// `%name%` has already been declared
+pub fn declaration_duplicate(name: &str) -> String {
+    format!("`{name}` has already been declared\nhttps://svelte.dev/e/declaration_duplicate")
+}
+
 /// Cannot declare a variable with the same name as an import from `<script module>`
 pub fn declaration_duplicate_module_import() -> String {
     "Cannot declare a variable with the same name as an import from `<script module>`\nhttps://svelte.dev/e/declaration_duplicate_module_import".to_string()

@@ -66,8 +66,13 @@ fn scripts_signal_runes(
 /// Template parsing happens inline via `svn-parser`. Script parsing
 /// happens later (Phase A's JS-side rules need the oxc AST).
 pub fn walk(source: &str, path: &Path, runes: Option<bool>, ctx: &mut LintContext<'_>) {
-    let (doc, _errors) = parse_sections(source);
+    let (doc, errors) = parse_sections(source);
     let (fragment, _parse_errors) = parse_all_template_runs(source, &doc.template.text_runs);
+    // Reading the `<script>` tags precedes everything else the
+    // compiler does.
+    if let Some((code, message, range)) = crate::parse_rejection::script_tag_error(&doc, &errors) {
+        ctx.emit_error(code, message, range);
+    }
     walk_parsed(&doc, &fragment, source, path, runes, ctx);
 }
 
@@ -304,6 +309,9 @@ pub fn walk_parsed(
     // Post-walk declaration loops (non_reactive_update /
     // export_let_unused) — upstream runs them after all three walks.
     crate::rules::binding_rules::visit_post_template(ctx);
+
+    // Legacy mode orders the `$:` statements, rejecting a cycle.
+    crate::rules::script_errors::reactive_cycle(ctx);
 
     // `export { name }` from `<script module>` must name a module
     // binding or a hoistable snippet.

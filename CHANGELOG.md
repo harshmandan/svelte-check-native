@@ -6,14 +6,69 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.7.0]
+
+A parity release built from a source-level audit of every place our
+pipeline decides something differently from upstream `svelte-check
+--tsgo` — the svelte2tsx conversion, the diagnostic mapping and
+filtering, the SvelteKit injection, the CLI surface and the compiler's
+own checks — with each difference probed against upstream and ported.
+The parity gate on the control workspaces was also hollow: upstream
+type-checked nothing there because two components compiled to
+unparsable TypeScript. It now applies a committed recipe and fails
+whenever upstream could not have checked anything; both control
+workspaces report exactly what upstream reports.
+
 ### Fixed
 
+- **Bogus "Property 'fn' is missing" on every consumer** of a
+  component that exports a function (#65). Named exports are now the
+  component's instance members, as upstream types them.
 - **No bogus `children` error on a Svelte 4 install** (#63). Slot
-  content passed to a component became an implicit `children` prop
-  regardless of the installed Svelte version, so a library typed with
-  `SvelteComponentTyped` and no default slot reported "'children' does
-  not exist". svelte-check adds that prop only when Svelte 5 or later is
-  installed, and so do we now.
+  content becomes an implicit `children` prop only when Svelte 5 or
+  later is installed, as svelte-check does.
+- **The Svelte compiler's errors are reported.** svelte-check reports a
+  component's first compiler error (and drops its warnings); we now
+  produce the compiler's rune, state, props, store, export, declaration,
+  element, directive, block, slot, snippet and `svelte:options` errors,
+  script syntax errors (`js_parse_error`, with acorn's messages and
+  positions, including through TypeScript's transpile when there is no
+  Svelte config), `typescript_invalid_feature`, compile-option
+  validation from the Svelte config, and the compiler's crash on a
+  dotted namespace. 134 of upstream's 188 compiler-error samples match
+  (was 64); the rest are CSS errors or cannot occur under svelte-check.
+- **Components the compiler or svelte2tsx rejects are left out** of the
+  run, as upstream leaves them out: templates `parse()` throws on, and
+  inputs svelte2tsx crashes on.
+- **Conversion follows svelte2tsx** in many more places: `$:` targets,
+  type hoisting, slot lets, `bind:this`, await/key/each blocks, quoted
+  directive values, attributes on elements and components, comma
+  values, root snippets, default-export shape, component events,
+  SvelteKit route typing and script copies, `svelte:boundary`, script
+  tags written as `<Script>` or closed with `</script >`.
+- **Diagnostics land where upstream puts them**, start and end: source
+  maps resolve to the user text before a generated position, component
+  prop keys and implicit `children` map like upstream, and TS1117 /
+  TS7028 / TS2454 / pug drops are decided on the source.
+- **A syntax error in your own script is reported as yours**, never as
+  our internal "overlay-syntax-error".
+- **Output matches svelte-check**: file order, human output and colours,
+  `NO_COLOR` / `FORCE_COLOR` / `CI`, and the CLI's error messages.
+- **The overlay tsconfig is written as svelte-check writes it**
+  (`rootDirs`, `paths` order, `references`, `types`, `composite`, a
+  tsconfig without `include`), and invalid `include` / `exclude`
+  patterns and tsconfig syntax are rejected as TypeScript rejects them.
+- **Many compiler warnings now match**: scopes, runes detection,
+  `svelte-ignore` handling, bidi-character warnings (including their
+  order across files), accessibility and store/rune conflicts.
+
+### Changed
+
+- **Incremental mode is opt-in** (`--incremental`), as in svelte-check.
+  A plain run never reuses tsgo's build info.
+- **A solution-style tsconfig is checked as written**: a root that only
+  lists `references` is no longer redirected into its sub-projects;
+  svelte-check compiles nothing there and reports only Svelte warnings.
 
 ## [1.6.0]
 

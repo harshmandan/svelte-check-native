@@ -910,13 +910,32 @@ fn native_diagnostics_for_parsed(
         compile_options: config.compile_options.clone(),
         compile_option_warnings,
     };
-    let warnings = svn_lint::lint_parsed(doc, fragment, source, pm, path, options, compat);
+    let report = svn_lint::lint_parsed(doc, fragment, source, pm, path, options, compat);
+    // A compiler crash reaches svelte-check as an exception with no
+    // position and no code; `createParserErrorDiagnostic` places it at
+    // the start of the file and copies the message alone.
+    let diags = report
+        .exception
+        .map(|message| svn_typecheck::CheckDiagnostic {
+            source_path: path.to_path_buf(),
+            line: 1,
+            column: 1,
+            end_line: 1,
+            end_column: 1,
+            severity: svn_typecheck::Severity::Error,
+            code: svn_typecheck::DiagnosticCode::Missing,
+            message,
+            source: svn_typecheck::DiagnosticSource::Svelte,
+            code_description_url: None,
+        })
+        .into_iter()
+        .collect();
 
     NativeFileDiagnostics {
         path: path.to_path_buf(),
-        diags: Vec::new(),
+        diags,
         broken: false,
-        warnings,
+        warnings: report.warnings,
     }
 }
 
@@ -2101,7 +2120,9 @@ fn check_project(
         }
         let code = match &d.code {
             svn_typecheck::DiagnosticCode::Slug(s) => s.as_str(),
-            svn_typecheck::DiagnosticCode::Numeric(_) => "",
+            svn_typecheck::DiagnosticCode::Numeric(_) | svn_typecheck::DiagnosticCode::Missing => {
+                ""
+            }
         };
         !plan.should_drop(code, Some(&d.source_path))
     });

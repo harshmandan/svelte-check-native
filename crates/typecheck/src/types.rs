@@ -254,6 +254,10 @@ pub struct CheckDiagnostic {
 pub enum DiagnosticCode {
     Numeric(u32),
     Slug(String),
+    /// No code at all: the compiler crashed with a plain JavaScript
+    /// exception rather than a compile error, and svelte-check reports
+    /// the exception's message with no `code` field.
+    Missing,
 }
 
 impl std::fmt::Display for DiagnosticCode {
@@ -265,6 +269,7 @@ impl std::fmt::Display for DiagnosticCode {
             // Compiler slugs render as-is — matches the way svelte-
             // check shows `state_referenced_locally`.
             Self::Slug(s) => f.write_str(s),
+            Self::Missing => Ok(()),
         }
     }
 }

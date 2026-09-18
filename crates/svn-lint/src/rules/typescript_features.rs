@@ -52,6 +52,12 @@ pub(crate) enum Finding {
     Crash,
 }
 
+/// The exception the removal throws on a dotted namespace. The
+/// visitor reads `node.body.body.map(…)`; the body is the inner
+/// namespace, which has no `body` array, and every published build of
+/// the compiler names that parameter `e`, so Node reports this.
+pub(crate) const DOTTED_NAMESPACE_EXCEPTION: &str = "e.body.body.map is not a function";
+
 const DECORATORS: &str = "decorators (related TSC proposal is not stage 4 yet)";
 const ACCESSOR_FIELDS: &str = "accessor fields (related TSC proposal is not stage 4 yet)";
 const ENUMS: &str = "enums";

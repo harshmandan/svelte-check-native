@@ -1,0 +1,29 @@
+{
+    "errors": [
+        {
+            "file": "src/IDottedNs.svelte",
+            "line": 1,
+            "column": 0,
+            "code": 1235
+        },
+        {
+            "file": "src/IDottedNs.svelte",
+            "line": 1,
+            "column": 10,
+            "code": 6133
+        },
+        {
+            "file": "src/MDottedNs.svelte",
+            "line": 0,
+            "column": 0
+        },
+        {
+            "file": "src/MDottedNs.svelte",
+            "line": 1,
+            "column": 10,
+            "code": 6133
+        }
+    ],
+    "warnings": [],
+    "_note": "A dotted namespace (`namespace A.B {}`) crashes the compiler's TypeScript removal in a script it reads itself (the untranspiled module script of a TypeScript component): the visitor maps over `e.body.body`, which the inner namespace lacks. svelte-check reports the TypeError at the start of the file with its message and no code. The instance script is transpiled first (no Svelte config), so it never reaches the removal."
+}

@@ -266,13 +266,17 @@ fn print_machine(
                 }),
             );
             obj.insert("message".to_string(), serde_json::json!(d.message));
-            obj.insert(
-                "code".to_string(),
-                match &d.code {
-                    svn_typecheck::DiagnosticCode::Numeric(n) => serde_json::json!(n),
-                    svn_typecheck::DiagnosticCode::Slug(s) => serde_json::json!(s),
-                },
-            );
+            // A code-less diagnostic has no `code` key at all, as
+            // `JSON.stringify` drops an undefined field.
+            match &d.code {
+                svn_typecheck::DiagnosticCode::Numeric(n) => {
+                    obj.insert("code".to_string(), serde_json::json!(n));
+                }
+                svn_typecheck::DiagnosticCode::Slug(s) => {
+                    obj.insert("code".to_string(), serde_json::json!(s));
+                }
+                svn_typecheck::DiagnosticCode::Missing => {}
+            }
             if let Some(href) = &d.code_description_url {
                 obj.insert(
                     "codeDescription".to_string(),

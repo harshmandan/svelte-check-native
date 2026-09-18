@@ -63,6 +63,10 @@ pub struct LintContext<'src> {
     /// no warnings for the file; later emissions are dropped.
     errored: bool,
 
+    /// The message of the JavaScript exception the compiler crashed
+    /// with, when it crashed rather than raising a compile error.
+    exception: Option<String>,
+
     /// `<!-- svelte-ignore ... -->` frames. Pushed on entering a node
     /// with leading ignore comments, popped on exit.
     ignore_stack: Vec<HashSet<SmolStr>>,
@@ -155,6 +159,7 @@ impl<'src> LintContext<'src> {
             runes: false,
             runes_option: None,
             errored: false,
+            exception: None,
             scope_tree: None,
             custom_element_info: None,
             compat: crate::compat::CompatFeatures::MODERN,
@@ -242,11 +247,23 @@ impl<'src> LintContext<'src> {
         });
     }
 
-    /// The compiler crashed on the component: nothing it would have
-    /// reported survives, and nothing more is reported.
-    pub(crate) fn abort(&mut self) {
+    /// The compiler crashed on the component with a JavaScript exception
+    /// whose message is `message`: nothing it would have reported
+    /// survives, and nothing more is reported. An error the compiler
+    /// raised first stands; it would have thrown before reaching the
+    /// crash.
+    pub(crate) fn abort(&mut self, message: &str) {
+        if self.errored {
+            return;
+        }
         self.errored = true;
         self.warnings.clear();
+        self.exception = Some(message.to_string());
+    }
+
+    /// The exception the compiler crashed with, if it did.
+    pub fn take_exception(&mut self) -> Option<String> {
+        self.exception.take()
     }
 
     pub fn take_warnings(self) -> Vec<Warning> {

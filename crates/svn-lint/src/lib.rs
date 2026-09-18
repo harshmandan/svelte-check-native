@@ -164,7 +164,7 @@ pub fn lint_parsed<'src>(
     path: &Path,
     options: LintOptions,
     compat: CompatFeatures,
-) -> Vec<Warning> {
+) -> LintReport {
     let mut ctx = LintContext::with_positions(source, positions);
     ctx.compat = compat;
     ctx.experimental_async = options.experimental_async;
@@ -172,5 +172,20 @@ pub fn lint_parsed<'src>(
     ctx.preprocess_configured = options.preprocess_configured;
     report_compile_options(&options, &mut ctx);
     crate::walk::walk_parsed(doc, fragment, source, path, options.runes, &mut ctx);
-    ctx.take_warnings()
+    let exception = ctx.take_exception();
+    LintReport {
+        warnings: ctx.take_warnings(),
+        exception,
+    }
+}
+
+/// What the compile-warning pass found in one component.
+#[derive(Debug, Clone, Default)]
+pub struct LintReport {
+    /// The compiler's warnings, or the one compile error it threw.
+    pub warnings: Vec<Warning>,
+    /// The message of the JavaScript exception the compiler crashed
+    /// with instead of compiling the component. svelte-check reports
+    /// it as an error with no code, at the start of the file.
+    pub exception: Option<String>,
 }

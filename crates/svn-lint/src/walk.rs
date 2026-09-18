@@ -418,7 +418,9 @@ fn typescript_feature_check(
             messages::typescript_invalid_feature(feature),
             range,
         ),
-        Some(Finding::Crash) => ctx.abort(),
+        Some(Finding::Crash) => {
+            ctx.abort(crate::rules::typescript_features::DOTTED_NAMESPACE_EXCEPTION)
+        }
         None => {}
     }
 }

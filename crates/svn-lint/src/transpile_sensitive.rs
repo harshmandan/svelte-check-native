@@ -132,9 +132,24 @@ struct PrinterDifferenceFinder {
 
 impl<'a> Visit<'a> for PrinterDifferenceFinder {
     fn visit_tagged_template_expression(&mut self, it: &TaggedTemplateExpression<'a>) {
-        if matches!(it.tag, Expression::ChainExpression(_)) {
+        if tag_has_optional_chain(&it.tag) {
             self.found = true;
         }
         walk::walk_tagged_template_expression(self, it);
+    }
+}
+
+/// Whether a tagged template's tag is (or ends in) an optional chain.
+/// A well-formed parse wraps it in a chain expression; when the parser
+/// has already rejected the construct it keeps the bare member or call
+/// with its `optional` flag instead.
+pub(crate) fn tag_has_optional_chain(tag: &Expression<'_>) -> bool {
+    match tag {
+        Expression::ChainExpression(_) => true,
+        Expression::StaticMemberExpression(m) => m.optional || tag_has_optional_chain(&m.object),
+        Expression::ComputedMemberExpression(m) => m.optional || tag_has_optional_chain(&m.object),
+        Expression::PrivateFieldExpression(m) => m.optional || tag_has_optional_chain(&m.object),
+        Expression::CallExpression(c) => c.optional || tag_has_optional_chain(&c.callee),
+        _ => false,
     }
 }

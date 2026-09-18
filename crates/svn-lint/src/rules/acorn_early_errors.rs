@@ -43,9 +43,9 @@ use oxc_ast::ast::{
     TSExternalModuleDeclaration, TSGlobalDeclaration, TSImportEqualsDeclaration,
     TSInterfaceDeclaration, TSNamespaceDeclaration, TSNamespaceDeclarationBody,
     TSSatisfiesExpression, TSType, TSTypeAliasDeclaration, TSTypeAnnotation,
-    TSTypeParameterDeclaration, TSTypeParameterInstantiation, UnaryExpression, UnaryOperator,
-    VariableDeclaration, VariableDeclarationKind, VariableDeclarator, WhileStatement,
-    WithStatement,
+    TSTypeParameterDeclaration, TSTypeParameterInstantiation, TaggedTemplateExpression,
+    UnaryExpression, UnaryOperator, VariableDeclaration, VariableDeclarationKind,
+    VariableDeclarator, WhileStatement, WithStatement,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_span::{GetSpan, Span};
@@ -1320,6 +1320,20 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
     fn visit_private_field_expression(&mut self, it: &PrivateFieldExpression<'a>) {
         self.visit_expression(&it.object);
         self.use_private(it.field.name.as_str(), it.field.span.start);
+    }
+
+    fn visit_tagged_template_expression(&mut self, it: &TaggedTemplateExpression<'a>) {
+        // acorn rejects an optional chain as the tag at the template.
+        // TypeScript's parser accepts it (the checker reports it), and
+        // TypeScript's transpile prints it unchanged, so the compiler
+        // still sees it in a transpiled script.
+        if crate::transpile_sensitive::tag_has_optional_chain(&it.tag) {
+            self.error(
+                it.quasi.span.start,
+                "Optional chaining cannot appear in the tag of tagged template expressions",
+            );
+        }
+        walk::walk_tagged_template_expression(self, it);
     }
 
     fn visit_private_in_expression(&mut self, it: &PrivateInExpression<'a>) {

@@ -798,6 +798,15 @@ mod tests {
         Some(format!("{}:{} {first}{hint}", at.line, at.character))
     }
 
+    #[test]
+    fn optional_chain_as_template_tag() {
+        let src = "<script lang=\"ts\">\na?.b`x`;\n</script>\n";
+        assert_eq!(
+            report(src, true, false).as_deref(),
+            Some("1:4 Optional chaining cannot appear in the tag of tagged template expressions")
+        );
+    }
+
     fn as_written(source: &str) -> Option<String> {
         report(source, false, true)
     }

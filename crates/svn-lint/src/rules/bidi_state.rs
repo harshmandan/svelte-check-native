@@ -12,8 +12,15 @@
 //!
 //! The tested values come in the compiler's walk order: the module
 //! script, the instance script, then the template (a template
-//! literal's substitutions before its chunks). [`compiler_warned`]
-//! replays that sequence and returns the literals that warn.
+//! literal's substitutions before its chunks). [`replay`] records that
+//! sequence and runs it to find the literals that warn.
+//!
+//! The regex is a module global of the compiler, so its `lastIndex`
+//! also carries from one compiled component to the next: svelte-check
+//! compiles every component in one process, and a component starts
+//! from wherever the previous one left the regex. [`BidiTrace`] is what
+//! one component does to it, for the caller to run the components in
+//! the compiler's order.
 
 use std::collections::HashSet;
 
@@ -29,30 +36,47 @@ use oxc_span::SourceType;
 use smol_str::SmolStr;
 use svn_analyze::template_scope::{TemplateScopeVisitor, walk_with_visitor};
 use svn_core::Range;
-use svn_parser::ast::{AttrValuePart, Attribute, DirectiveValue, Fragment};
+use svn_parser::ast::{AttrValuePart, Attribute, DirectiveValue, Fragment, Node};
 use svn_parser::{Component, Document, Element, SvelteElement};
 
-/// Start offsets of the literals and template chunks the compiler
-/// warns on, or `None` when the component cannot hold a bidi
-/// character at all (no such character, no `\u` escape).
-pub(crate) fn compiler_warned(
+/// The literals and template chunks the compiler warns on (their start
+/// offsets) when the component starts with the regex at `last_index`,
+/// or `None` when the component cannot hold a bidi character at all (no
+/// such character, no `\u` escape); and what the component does to the
+/// regex.
+pub(crate) fn replay(
     doc: &Document<'_>,
     fragment: Option<&Fragment>,
     source: &str,
     module_program: Option<&Program<'_>>,
     instance_program: Option<&Program<'_>>,
-) -> Option<HashSet<u32>> {
-    if !source.chars().any(is_bidi) && !source.contains("\\u") {
-        return None;
+    last_index: u32,
+) -> (Option<HashSet<u32>>, BidiTrace) {
+    let may_hold_bidi = source.chars().any(is_bidi) || source.contains("\\u");
+    // The compiler parses the template with its trailing whitespace
+    // trimmed, so text there is never tested.
+    let template_end = source.trim_end().len() as u32;
+    if !may_hold_bidi {
+        // Every search fails and resets the regex; only whether any
+        // happens matters. Text at the top level almost always settles
+        // it without a walk.
+        let top_level_text = fragment.is_some_and(|f| {
+            f.nodes
+                .iter()
+                .any(|n| matches!(n, Node::Text(t) if t.range.start < template_end))
+        });
+        if top_level_text {
+            return (None, BidiTrace::Resets);
+        }
     }
-    let mut state = State::default();
+    let mut uses = Vec::new();
     for (script, program) in [
         (doc.module_script.as_ref(), module_program),
         (doc.instance_script.as_ref(), instance_program),
     ] {
         if let (Some(script), Some(program)) = (script, program) {
             let mut tester = Tester {
-                state: &mut state,
+                uses: &mut uses,
                 base: script.content_range.start,
             };
             tester.visit_program(program);
@@ -61,67 +85,108 @@ pub(crate) fn compiler_warned(
     if let Some(fragment) = fragment {
         let mut template = TemplateTester {
             source,
+            template_end,
             ts: crate::rules::typescript_features::compiler_parses_as_ts(source),
             allocator: Allocator::default(),
-            state: &mut state,
+            uses: &mut uses,
         };
         walk_with_visitor(fragment, source, &mut template);
     }
-    Some(state.warned)
+    if !may_hold_bidi {
+        let trace = if uses.is_empty() {
+            BidiTrace::Untouched
+        } else {
+            BidiTrace::Resets
+        };
+        return (None, trace);
+    }
+    let trace = BidiTrace::Uses(uses);
+    let (_, warned) = trace.run(last_index);
+    (Some(warned.into_iter().collect()), trace)
 }
 
 fn is_bidi(c: char) -> bool {
     matches!(c as u32, 0x202A..=0x202E | 0x2066..=0x2069)
 }
 
-#[derive(Default)]
-struct State {
-    /// The regex's `lastIndex`, in UTF-16 code units.
-    last_index: usize,
-    warned: HashSet<u32>,
+/// What compiling one component does to the compiler's bidi regex.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum BidiTrace {
+    /// Nothing is tested: the regex keeps its state.
+    #[default]
+    Untouched,
+    /// Values are tested, none can hold a bidi character: the regex
+    /// ends reset.
+    Resets,
+    /// The searches in order.
+    Uses(Vec<RegexUse>),
 }
 
-impl State {
-    /// One `test` call on `value` for the node starting at `start`.
-    fn test(&mut self, value: &str, start: u32) {
-        let mut offset = 0usize;
-        let mut chars = value.chars().peekable();
-        let mut found = false;
-        while let Some(c) = chars.next() {
-            if offset >= self.last_index && is_bidi(c) {
-                // Bidi characters are one UTF-16 unit each; the match
-                // runs to the end of the consecutive group.
-                offset += 1;
-                while chars.peek().is_some_and(|c| is_bidi(*c)) {
-                    chars.next();
-                    offset += 1;
-                }
-                found = true;
-                break;
-            }
-            offset += c.len_utf16();
-        }
-        if found {
-            self.last_index = offset;
-            self.warned.insert(start);
-        } else {
-            self.last_index = 0;
-        }
-    }
+/// One use of the regex.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegexUse {
+    /// A text node sets `lastIndex` to 0 and searches a copy.
+    Text,
+    /// `test` on the value of the node starting at `start`; `groups`
+    /// are the runs of bidi characters in the value (UTF-16 ranges).
+    Test { start: u32, groups: Vec<(u32, u32)> },
+}
 
-    fn text(&mut self) {
-        self.last_index = 0;
+impl BidiTrace {
+    /// Run the component's searches from `last_index`: where the regex
+    /// ends, and the start offsets of the nodes whose test matches.
+    pub fn run(&self, mut last_index: u32) -> (u32, Vec<u32>) {
+        let mut warned = Vec::new();
+        match self {
+            BidiTrace::Untouched => {}
+            BidiTrace::Resets => last_index = 0,
+            BidiTrace::Uses(uses) => {
+                for use_ in uses {
+                    match use_ {
+                        RegexUse::Text => last_index = 0,
+                        RegexUse::Test { start, groups } => {
+                            // A match starts at or after `lastIndex` and
+                            // runs to the end of its group.
+                            match groups.iter().find(|&&(_, end)| end > last_index) {
+                                Some(&(_, end)) => {
+                                    last_index = end;
+                                    warned.push(*start);
+                                }
+                                None => last_index = 0,
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        (last_index, warned)
     }
+}
+
+fn record_test(uses: &mut Vec<RegexUse>, value: &str, start: u32) {
+    let mut groups: Vec<(u32, u32)> = Vec::new();
+    let mut offset = 0u32;
+    for c in value.chars() {
+        if is_bidi(c) {
+            // Bidi characters are one UTF-16 unit each.
+            match groups.last_mut() {
+                Some(last) if last.1 == offset => last.1 += 1,
+                _ => groups.push((offset, offset + 1)),
+            }
+        }
+        offset += c.len_utf16() as u32;
+    }
+    uses.push(RegexUse::Test { start, groups });
 }
 
 struct Tester<'s> {
-    state: &'s mut State,
+    uses: &'s mut Vec<RegexUse>,
     base: u32,
 }
 
 impl<'a> Visit<'a> for Tester<'_> {
     fn visit_string_literal(&mut self, it: &StringLiteral<'a>) {
-        self.state.test(&it.value, self.base + it.span.start);
+        record_test(self.uses, &it.value, self.base + it.span.start);
     }
 
     fn visit_template_literal(&mut self, it: &TemplateLiteral<'a>) {
@@ -130,7 +195,7 @@ impl<'a> Visit<'a> for Tester<'_> {
         }
         for quasi in &it.quasis {
             let cooked = quasi.value.cooked.as_deref().unwrap_or_default();
-            self.state.test(cooked, self.base + quasi.span.start);
+            record_test(self.uses, cooked, self.base + quasi.span.start);
         }
     }
 
@@ -215,9 +280,11 @@ impl<'a> Visit<'a> for Tester<'_> {
 
 struct TemplateTester<'s> {
     source: &'s str,
+    /// Where the template the compiler parses ends.
+    template_end: u32,
     ts: bool,
     allocator: Allocator,
-    state: &'s mut State,
+    uses: &'s mut Vec<RegexUse>,
 }
 
 impl TemplateTester<'_> {
@@ -231,7 +298,7 @@ impl TemplateTester<'_> {
         self.allocator.reset();
         if let Ok(expr) = Parser::new(&self.allocator, text, source_type).parse_expression() {
             let mut tester = Tester {
-                state: self.state,
+                uses: self.uses,
                 base: range.start,
             };
             tester.visit_expression(&expr);
@@ -250,7 +317,7 @@ impl TemplateTester<'_> {
         let wrapped = format!("let {text}");
         let parsed = Parser::new(&self.allocator, &wrapped, source_type).parse();
         let mut tester = Tester {
-            state: self.state,
+            uses: self.uses,
             base: range.start.wrapping_sub(4),
         };
         tester.visit_program(&parsed.program);
@@ -281,7 +348,7 @@ impl TemplateTester<'_> {
     fn parts(&mut self, parts: &[AttrValuePart]) {
         for part in parts {
             match part {
-                AttrValuePart::Text { .. } => self.state.text(),
+                AttrValuePart::Text { .. } => self.uses.push(RegexUse::Text),
                 AttrValuePart::Expression {
                     expression_range, ..
                 } => self.expression(*expression_range),
@@ -299,8 +366,10 @@ impl TemplateScopeVisitor for TemplateTester<'_> {
         self.declaration(expr_range);
     }
 
-    fn visit_text(&mut self, _range: Range) {
-        self.state.text();
+    fn visit_text(&mut self, range: Range) {
+        if range.start < self.template_end {
+            self.uses.push(RegexUse::Text);
+        }
     }
 
     fn visit_element(&mut self, element: &Element) {

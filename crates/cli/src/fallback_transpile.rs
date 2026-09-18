@@ -43,42 +43,89 @@ pub(crate) struct ScriptTag {
     pub transpiled: bool,
 }
 
-/// The script tags `svelte.preprocess` processes, in source order: the
-/// matches of its tag pattern
+/// One match of the tag pattern `svelte.preprocess` uses for scripts:
 ///
 /// ```text
 /// <!--[^]*?-->|<script((?:\s+[^=>'"/\s]+=(?:"[^"]*"|'[^']*'|[^>\s]+)|\s+[^=>'"/\s]+)*\s*)(?:\/>|>([\S\s]*?)<\/script>)
 /// ```
 ///
-/// Comments are matched (and passed over) so a tag inside one does not
-/// count; a self-closing tag has no content to process.
-pub(crate) fn script_tags(source: &str) -> Vec<ScriptTag> {
+/// Comments are matched so a tag inside one does not count.
+enum TagMatch {
+    Comment,
+    Script {
+        /// The attribute text (whitespace included).
+        attrs: std::ops::Range<usize>,
+        /// The content; `None` for a self-closing tag.
+        content: Option<std::ops::Range<usize>>,
+    },
+}
+
+fn tag_matches(source: &str) -> Vec<TagMatch> {
     let bytes = source.as_bytes();
-    let mut tags = Vec::new();
+    let mut matches = Vec::new();
     let mut at = 0;
     while at < bytes.len() {
         let rest = &source[at..];
         if rest.starts_with("<!--")
             && let Some(end) = rest[4..].find("-->")
         {
+            matches.push(TagMatch::Comment);
             at += 4 + end + 3;
             continue;
         }
         if rest.starts_with("<script")
             && let Some((attrs, content, end)) = match_script_tag(source, at + "<script".len())
         {
-            if let Some(content) = content {
-                tags.push(ScriptTag {
-                    transpiled: lang_is_ts(&source[attrs]),
-                    content,
-                });
-            }
+            matches.push(TagMatch::Script { attrs, content });
             at = end;
             continue;
         }
         at += rest.chars().next().map_or(1, char::len_utf8);
     }
-    tags
+    matches
+}
+
+/// The script tags `svelte.preprocess` hands the script preprocessor
+/// with content, in source order.
+pub(crate) fn script_tags(source: &str) -> Vec<ScriptTag> {
+    tag_matches(source)
+        .into_iter()
+        .filter_map(|m| match m {
+            TagMatch::Script {
+                attrs,
+                content: Some(content),
+            } => Some(ScriptTag {
+                transpiled: lang_is_ts(&source[attrs]),
+                content,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// How far the fallback preprocessor's asynchronous steps take a
+/// component before it reaches the compiler, relative to the others:
+/// 0 when the tag pattern matches nothing, 1 when every match settles
+/// without calling the script preprocessor (a comment, a tag with
+/// neither attribute text nor content), 2 when some tag is handed to
+/// the preprocessor (whatever its `lang`). Each level awaits a few more
+/// promise resolutions, and components start their diagnostics
+/// together, so a lower level reaches the compiler first.
+pub(crate) fn preprocess_steps(source: &str) -> u8 {
+    tag_matches(source)
+        .iter()
+        .map(|m| match m {
+            TagMatch::Comment => 1,
+            TagMatch::Script { attrs, content } => {
+                if attrs.is_empty() && content.as_ref().is_none_or(|c| c.is_empty()) {
+                    1
+                } else {
+                    2
+                }
+            }
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 fn is_js_space(c: char) -> bool {
@@ -785,6 +832,15 @@ mod tests {
         );
         assert_eq!(tags("<scripts>a</script>"), vec![]);
         assert_eq!(tags("<script lang=\"ts\">a</script >"), vec![]);
+    }
+
+    #[test]
+    fn preprocess_steps_follow_what_the_preprocessor_awaits() {
+        assert_eq!(preprocess_steps("<p>{a}</p>"), 0);
+        assert_eq!(preprocess_steps("<!-- c --><p>{a}</p>"), 1);
+        assert_eq!(preprocess_steps("<script></script><p>{a}</p>"), 1);
+        assert_eq!(preprocess_steps("<script>let a = 1;</script>"), 2);
+        assert_eq!(preprocess_steps("<script lang=\"ts\"></script>"), 2);
     }
 
     #[test]

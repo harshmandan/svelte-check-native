@@ -66,6 +66,7 @@ pub use compat::{CompatFeatures, SvelteVersion, detect_for_workspace};
 pub use compile_options::{CompileOptionsCheck, LateOption, OptionValue, check_compile_options};
 pub use context::{LintContext, Warning};
 pub use parse_rejection::{script_tag_rejected, template_parse_rejected};
+pub use rules::bidi_state::{BidiTrace, RegexUse};
 
 /// The project compiler options the pass honours (from the nearest
 /// Svelte config).
@@ -88,6 +89,10 @@ pub struct LintOptions {
     /// warns about an option once per process, so only the first
     /// component compiled with it shows each (the caller decides which).
     pub compile_option_warnings: Vec<(Code, String)>,
+    /// The `lastIndex` the compiler's bidirectional-character regex
+    /// holds when this component is compiled: it is shared by every
+    /// compile in the process (see [`LintReport::bidi`]).
+    pub bidi_last_index: u32,
 }
 
 /// Report the compile options' validation before anything else: its
@@ -171,14 +176,23 @@ pub fn lint_parsed<'src>(
     ctx.experimental_async = options.experimental_async;
     ctx.ts_scripts_transpiled = options.ts_scripts_transpiled;
     ctx.preprocess_configured = options.preprocess_configured;
+    ctx.bidi_last_index = options.bidi_last_index;
     report_compile_options(&options, &mut ctx);
     crate::walk::walk_parsed(doc, fragment, source, path, options.runes, &mut ctx);
     let exception = ctx.take_exception();
     let needs_real_transpile = ctx.needs_real_transpile && !ctx.real_transpile_unavailable;
+    // A compile that throws never reaches the analysis, where the regex
+    // is used.
+    let bidi = if ctx.errored {
+        BidiTrace::Untouched
+    } else {
+        std::mem::take(&mut ctx.bidi_trace)
+    };
     LintReport {
         warnings: ctx.take_warnings(),
         exception,
         needs_real_transpile,
+        bidi,
     }
 }
 
@@ -198,4 +212,8 @@ pub struct LintReport {
     /// config, so the language server's fallback TypeScript transpile
     /// is the preprocessor.
     pub needs_real_transpile: bool,
+    /// What compiling this component does to the compiler's shared
+    /// bidirectional-character regex, for running components in the
+    /// order the compiler sees them.
+    pub bidi: BidiTrace,
 }

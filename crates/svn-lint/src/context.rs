@@ -61,7 +61,7 @@ pub struct LintContext<'src> {
     /// A compile error has been raised. The compiler throws on its
     /// first error, so `svelte-check` reports that one diagnostic and
     /// no warnings for the file; later emissions are dropped.
-    errored: bool,
+    pub(crate) errored: bool,
 
     /// The message of the JavaScript exception the compiler crashed
     /// with, when it crashed rather than raising a compile error.
@@ -141,6 +141,11 @@ pub struct LintContext<'src> {
     /// tsgo cannot print the transpile faithfully for this component
     /// (see `crate::transpile_sensitive::printed_differently_by_tsgo`).
     pub(crate) real_transpile_unavailable: bool,
+    /// Where the compiler's bidi regex starts (see
+    /// [`crate::LintOptions::bidi_last_index`]).
+    pub(crate) bidi_last_index: u32,
+    /// What compiling the component does to that regex.
+    pub(crate) bidi_trace: crate::rules::bidi_state::BidiTrace,
     pub(crate) first_slot: Option<(SmolStr, Range)>,
     /// The error reading the config's `customElement` / `css` option
     /// throws during the analysis (see
@@ -181,6 +186,8 @@ impl<'src> LintContext<'src> {
             preprocess_configured: false,
             needs_real_transpile: false,
             real_transpile_unavailable: false,
+            bidi_last_index: 0,
+            bidi_trace: crate::rules::bidi_state::BidiTrace::Untouched,
             first_slot: None,
             compile_options_late_error: None,
         }

@@ -237,6 +237,7 @@ pub fn build_with_template_and_runes(
     preprocess_ts: bool,
     module_program: Option<&Program<'_>>,
     instance_program: Option<&Program<'_>>,
+    bidi_warned: Option<std::collections::HashSet<u32>>,
 ) -> ScopeTree {
     let mut tree = build_with_template(
         doc,
@@ -246,6 +247,7 @@ pub fn build_with_template_and_runes(
         preprocess_ts,
         module_program,
         instance_program,
+        bidi_warned,
     );
     if runes {
         // `ExportSpecifier.js`: in runes mode an exported local counts
@@ -414,6 +416,7 @@ pub(crate) fn collect_preceding_template_ignores(
 /// parses each section exactly once and shares the `Program` between
 /// this builder and the script-AST rules. A `Some` script section is
 /// always paired with a `Some` program.
+#[allow(clippy::too_many_arguments)]
 pub fn build_with_template(
     doc: &Document<'_>,
     fragment: Option<&svn_parser::ast::Fragment>,
@@ -422,17 +425,12 @@ pub fn build_with_template(
     preprocess_ts: bool,
     module_program: Option<&Program<'_>>,
     instance_program: Option<&Program<'_>>,
+    bidi_warned: Option<std::collections::HashSet<u32>>,
 ) -> ScopeTree {
     let mut tree_builder = TreeBuilder::new();
     tree_builder.runes = runes;
     tree_builder.preprocess_ts = preprocess_ts;
-    tree_builder.bidi_warned = crate::rules::bidi_state::compiler_warned(
-        doc,
-        fragment,
-        source,
-        module_program,
-        instance_program,
-    );
+    tree_builder.bidi_warned = bidi_warned;
 
     // Module scope: if there's no module script at all we still create
     // a synthetic empty one so resolve() has a stable root. Matches

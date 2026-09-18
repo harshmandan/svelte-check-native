@@ -854,6 +854,9 @@ struct NativeFileDiagnostics {
     /// preprocessor really transpiles it (see
     /// [`relint_with_real_transpile`]).
     needs_real_transpile: bool,
+    /// What compiling the component does to the compiler's shared
+    /// bidirectional-character regex (see [`carry_bidi_regex`]).
+    bidi: svn_lint::BidiTrace,
 }
 
 /// One file's native diagnostics from an ALREADY-PARSED document —
@@ -871,6 +874,7 @@ fn native_diagnostics_for_parsed(
     compat: svn_lint::CompatFeatures,
     compile_option_warnings: Vec<(svn_lint::Code, String)>,
     already_transpiled: bool,
+    bidi_last_index: u32,
 ) -> NativeFileDiagnostics {
     let pm = svn_core::PositionMap::new(source);
 
@@ -901,6 +905,7 @@ fn native_diagnostics_for_parsed(
             broken: true,
             warnings: Vec::new(),
             needs_real_transpile: false,
+            bidi: svn_lint::BidiTrace::Untouched,
         };
     }
 
@@ -918,6 +923,7 @@ fn native_diagnostics_for_parsed(
         preprocess_configured: config.preprocess_configured,
         compile_options: config.compile_options.clone(),
         compile_option_warnings,
+        bidi_last_index,
     };
     let report = svn_lint::lint_parsed(doc, fragment, source, pm, path, options, compat);
     // A compiler crash reaches svelte-check as an exception with no
@@ -946,6 +952,81 @@ fn native_diagnostics_for_parsed(
         broken: false,
         warnings: report.warnings,
         needs_real_transpile: report.needs_real_transpile,
+        bidi: report.bidi,
+    }
+}
+
+/// What the native pass reads besides the component itself.
+struct NativeLint<'a> {
+    config_resolver: &'a svelte_config::ConfigResolver,
+    compat: svn_lint::CompatFeatures,
+    compile_option_warnings: &'a [Vec<(svn_lint::Code, String)>],
+}
+
+impl NativeLint<'_> {
+    /// Lint component `idx` from scratch: from its text, or from the
+    /// text the fallback preprocessor hands the compiler (with the
+    /// diagnostics mapped back). `None` when the preprocessed text does
+    /// not parse.
+    fn lint(
+        &self,
+        idx: usize,
+        path: &Path,
+        source: &str,
+        preprocessed: Option<&fallback_transpile::Preprocessed>,
+        bidi_last_index: u32,
+    ) -> Option<NativeFileDiagnostics> {
+        let text = preprocessed.map_or(source, |pre| pre.text.as_str());
+        let (doc, section_errors) = svn_parser::parse_sections(text);
+        let (fragment, template_errors) =
+            svn_parser::parse_all_template_runs(text, &doc.template.text_runs);
+        let mut result = native_diagnostics_for_parsed(
+            path,
+            text,
+            &doc,
+            &fragment,
+            &section_errors,
+            &template_errors,
+            self.config_resolver,
+            self.compat,
+            self.compile_option_warnings[idx].clone(),
+            preprocessed.is_some(),
+            bidi_last_index,
+        );
+        let Some(pre) = preprocessed else {
+            return Some(result);
+        };
+        if result.broken {
+            return None;
+        }
+        result.warnings = std::mem::take(&mut result.warnings)
+            .into_iter()
+            .filter(|w| {
+                !fallback_transpile::is_transpile_false_positive(
+                    w.code.as_str(),
+                    &w.message,
+                    source,
+                )
+            })
+            .map(|w| {
+                let ((sl, sc), (el, ec)) = fallback_transpile::map_range(
+                    pre,
+                    (w.start_line.saturating_sub(1), w.start_column),
+                    (w.end_line.saturating_sub(1), w.end_column),
+                );
+                // `range` stays in the preprocessed text's offsets;
+                // only the line/column pairs are reported.
+                svn_lint::Warning {
+                    start_line: sl + 1,
+                    start_column: sc,
+                    end_line: el + 1,
+                    end_column: ec,
+                    ..w
+                }
+            })
+            .collect();
+        result.needs_real_transpile = false;
+        Some(result)
     }
 }
 
@@ -955,15 +1036,14 @@ fn native_diagnostics_for_parsed(
 /// tsgo in one batch, lint each component as the compiler receives it,
 /// and map every diagnostic back the way the language server does.
 /// A component keeps its modelled result when anything here fails.
-#[allow(clippy::too_many_arguments)]
+/// Returns the preprocessed components, by index.
 fn relint_with_real_transpile(
     workspace: &Path,
     sources: &[(PathBuf, std::sync::Arc<str>)],
     results: &mut [Option<NativeFileDiagnostics>],
-    config_resolver: &svelte_config::ConfigResolver,
-    compat: svn_lint::CompatFeatures,
-    compile_option_warnings: &[Vec<(svn_lint::Code, String)>],
-) {
+    native: &NativeLint<'_>,
+) -> std::collections::HashMap<usize, fallback_transpile::Preprocessed> {
+    let mut preprocessed = std::collections::HashMap::new();
     let wanted: Vec<usize> = results
         .iter()
         .enumerate()
@@ -974,7 +1054,7 @@ fn relint_with_real_transpile(
         .map(|(idx, _)| idx)
         .collect();
     if wanted.is_empty() {
-        return;
+        return preprocessed;
     }
     let tags: Vec<Vec<fallback_transpile::ScriptTag>> = wanted
         .iter()
@@ -990,7 +1070,7 @@ fn relint_with_real_transpile(
         })
         .collect();
     if contents.is_empty() {
-        return;
+        return preprocessed;
     }
     let mut printed = fallback_transpile::print_scripts(workspace, &contents).into_iter();
     for (&idx, tags) in wanted.iter().zip(&tags) {
@@ -1001,55 +1081,74 @@ fn relint_with_real_transpile(
         };
         let (path, source) = &sources[idx];
         let pre = fallback_transpile::preprocess(source, tags, &scripts);
-        let (doc, section_errors) = svn_parser::parse_sections(&pre.text);
-        let (fragment, template_errors) =
-            svn_parser::parse_all_template_runs(&pre.text, &doc.template.text_runs);
-        let relinted = native_diagnostics_for_parsed(
-            path,
-            &pre.text,
-            &doc,
-            &fragment,
-            &section_errors,
-            &template_errors,
-            config_resolver,
-            compat,
-            compile_option_warnings[idx].clone(),
-            true,
-        );
-        if relinted.broken {
+        if let Some(relinted) = native.lint(idx, path, source, Some(&pre), 0) {
+            results[idx] = Some(relinted);
+            preprocessed.insert(idx, pre);
+        }
+    }
+    preprocessed
+}
+
+/// Run the compiler's bidirectional-character regex through the
+/// components in the order svelte-check compiles them. The regex is
+/// global and stateful (`lastIndex`), and every component is compiled
+/// in one process, so each starts where the previous one left it; the
+/// parallel pass linted every component from a fresh regex, and a
+/// component whose warnings change from where it really starts is
+/// linted again from there.
+///
+/// svelte-check starts every component's diagnostics at once and each
+/// reaches the compiler after its own chain of awaits, whose length
+/// depends on the preprocessing: components finishing it in fewer
+/// steps are compiled first, the rest in discovery order (see
+/// [`fallback_transpile::preprocess_steps`]).
+fn carry_bidi_regex(
+    sources: &[(PathBuf, std::sync::Arc<str>)],
+    discovery_order: &[PathBuf],
+    results: &mut [Option<NativeFileDiagnostics>],
+    native: &NativeLint<'_>,
+    preprocessed: &std::collections::HashMap<usize, fallback_transpile::Preprocessed>,
+) {
+    let position: std::collections::HashMap<&Path, usize> = discovery_order
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.as_path(), i))
+        .collect();
+    let mut order: Vec<(u8, usize, usize)> = results
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.is_some())
+        .map(|(idx, _)| {
+            let (path, source) = &sources[idx];
+            let config = native.config_resolver.for_path(path);
+            // Only the language server's fallback preprocessor (no
+            // Svelte config) is modelled; without any preprocessor
+            // every component takes the same steps.
+            let steps = if config.ts_scripts_transpiled && !config.preprocess_configured {
+                fallback_transpile::preprocess_steps(source)
+            } else {
+                0
+            };
+            let at = position.get(path.as_path()).copied().unwrap_or(usize::MAX);
+            (steps, at, idx)
+        })
+        .collect();
+    order.sort();
+    let mut last_index = 0u32;
+    for (_, _, idx) in order {
+        let Some(result) = &results[idx] else {
             continue;
+        };
+        let (after, warned) = result.bidi.run(last_index);
+        if last_index != 0 && warned != result.bidi.run(0).1 {
+            let (path, source) = &sources[idx];
+            if let Some(relinted) =
+                native.lint(idx, path, source, preprocessed.get(&idx), last_index)
+            {
+                results[idx] = Some(relinted);
+            }
         }
-        let warnings = relinted
-            .warnings
-            .into_iter()
-            .filter(|w| {
-                !fallback_transpile::is_transpile_false_positive(
-                    w.code.as_str(),
-                    &w.message,
-                    source,
-                )
-            })
-            .map(|w| {
-                let ((sl, sc), (el, ec)) = fallback_transpile::map_range(
-                    &pre,
-                    (w.start_line.saturating_sub(1), w.start_column),
-                    (w.end_line.saturating_sub(1), w.end_column),
-                );
-                // `range` stays in the preprocessed text's offsets;
-                // only the line/column pairs are reported.
-                svn_lint::Warning {
-                    start_line: sl + 1,
-                    start_column: sc,
-                    end_line: el + 1,
-                    end_column: ec,
-                    ..w
-                }
-            })
-            .collect();
-        if let Some(result) = &mut results[idx] {
-            result.warnings = warnings;
-            result.needs_real_transpile = false;
-        }
+        last_index = after;
     }
 }
 
@@ -1920,6 +2019,7 @@ fn check_project(
                         compat,
                         compile_option_warnings[idx].clone(),
                         false,
+                        0,
                     )
                 });
                 // TSGO-ENHANCEMENT: missing `.svelte` imports (TS2307) —
@@ -1994,13 +2094,23 @@ fn check_project(
             dropped_files.extend(dropped);
         }
         if let Some(compat) = native_compat {
-            relint_with_real_transpile(
+            let native = NativeLint {
+                config_resolver: config_resolver_ref,
+                compat,
+                compile_option_warnings,
+            };
+            let preprocessed = relint_with_real_transpile(
                 workspace,
                 &svelte_sources,
                 &mut native_results,
-                config_resolver_ref,
-                compat,
-                compile_option_warnings,
+                &native,
+            );
+            carry_bidi_regex(
+                &svelte_sources,
+                &svelte_files_all,
+                &mut native_results,
+                &native,
+                &preprocessed,
             );
         }
 

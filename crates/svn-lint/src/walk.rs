@@ -168,6 +168,17 @@ pub fn walk_parsed(
     // template walk here is what surfaces "identifier is referenced
     // in the template, not just in a script helper" to rules like
     // `non_reactive_update`.
+    // Which literals the compiler's shared bidi regex reports, given
+    // where the previous component left it.
+    let (bidi_warned, bidi_trace) = crate::rules::bidi_state::replay(
+        doc,
+        Some(fragment),
+        source,
+        module_program,
+        instance_program,
+        ctx.bidi_last_index,
+    );
+    ctx.bidi_trace = bidi_trace;
     let mut tree = crate::scope::build_with_template_and_runes(
         doc,
         Some(fragment),
@@ -177,6 +188,7 @@ pub fn walk_parsed(
         ctx.ts_scripts_transpiled,
         module_program,
         instance_program,
+        bidi_warned.clone(),
     );
 
     // Authoritative runes resolution (see the comment above). The
@@ -201,6 +213,7 @@ pub fn walk_parsed(
                 ctx.ts_scripts_transpiled,
                 module_program,
                 instance_program,
+                bidi_warned,
             );
         }
     }

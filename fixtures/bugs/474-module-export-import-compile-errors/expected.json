@@ -1,0 +1,83 @@
+{
+    "errors": [
+        {
+            "file": "src/B01.svelte",
+            "line": 1,
+            "column": 1,
+            "code": "derived_invalid_export"
+        },
+        {
+            "file": "src/B02.svelte",
+            "line": 1,
+            "column": 1,
+            "code": "state_invalid_export"
+        },
+        {
+            "file": "src/B03.svelte",
+            "line": 2,
+            "column": 10,
+            "code": "state_invalid_export"
+        },
+        {
+            "file": "src/B04.svelte",
+            "line": 2,
+            "column": 10,
+            "code": "derived_invalid_export"
+        },
+        {
+            "file": "src/B05.svelte",
+            "line": 1,
+            "column": 10,
+            "code": "export_undefined"
+        },
+        {
+            "file": "src/B06.svelte",
+            "line": 1,
+            "column": 10,
+            "code": "snippet_invalid_export"
+        },
+        {
+            "file": "src/B08.svelte",
+            "line": 1,
+            "column": 10,
+            "code": "snippet_invalid_export"
+        },
+        {
+            "file": "src/B09.svelte",
+            "line": 1,
+            "column": 1,
+            "code": "import_svelte_internal_forbidden"
+        },
+        {
+            "file": "src/B10.svelte",
+            "line": 1,
+            "column": 19,
+            "code": "runes_mode_invalid_import"
+        },
+        {
+            "file": "src/B13.svelte",
+            "line": 1,
+            "column": 1,
+            "code": "derived_invalid_export"
+        },
+        {
+            "file": "src/B14.svelte",
+            "line": 1,
+            "column": 1,
+            "code": "state_invalid_export"
+        },
+        {
+            "file": "src/B15.svelte",
+            "line": 3,
+            "column": 18,
+            "code": "bind_invalid_value"
+        },
+        {
+            "file": "src/B17.svelte",
+            "line": 3,
+            "column": 14,
+            "code": "snippet_shadowing_prop"
+        }
+    ],
+    "_note": "Exports of derived or reassigned state, module exports of undeclared names and of snippets the compiler cannot hoist, runes-mode imports of svelte/internal and the legacy lifecycle functions, and a snippet shadowing a prop passed to its component. Files without an entry compile clean upstream. Verified against upstream svelte-check."
+}

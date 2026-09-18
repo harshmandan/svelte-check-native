@@ -1,0 +1,59 @@
+{
+    "errors": [
+        {
+            "file": "src/A21.svelte",
+            "line": 1,
+            "column": 9,
+            "code": "rune_invalid_name"
+        },
+        {
+            "file": "src/A22.svelte",
+            "line": 1,
+            "column": 9,
+            "code": "rune_renamed"
+        },
+        {
+            "file": "src/A23.svelte",
+            "line": 1,
+            "column": 9,
+            "code": "rune_renamed"
+        },
+        {
+            "file": "src/A24.svelte",
+            "line": 1,
+            "column": 9,
+            "code": "rune_removed"
+        },
+        {
+            "file": "src/A25.svelte",
+            "line": 1,
+            "column": 9,
+            "code": "rune_invalid_computed_property"
+        },
+        {
+            "file": "src/A26.svelte",
+            "line": 1,
+            "column": 9,
+            "code": "rune_missing_parentheses"
+        },
+        {
+            "file": "src/A27.svelte",
+            "line": 2,
+            "column": 13,
+            "code": "invalid_arguments_usage"
+        },
+        {
+            "file": "src/A28.svelte",
+            "line": 3,
+            "column": 1,
+            "code": "invalid_arguments_usage"
+        },
+        {
+            "file": "src/A29.svelte",
+            "line": 2,
+            "column": 15,
+            "code": "invalid_arguments_usage"
+        }
+    ],
+    "_note": "The compiler's Identifier checks in runes mode: a rune read without a call, through a computed member, or through a member chain that names no rune (renamed and removed runes get their own codes), and 'arguments' outside a function. A34 forces legacy mode, where the $state reference becomes a store subscription and nothing fires. Verified against upstream svelte-check."
+}

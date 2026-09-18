@@ -126,6 +126,24 @@ pub struct ScopeTree {
     /// Scope creation precedes every analysis walk, so this error wins
     /// over anything the walks report.
     pub(crate) declaration_error: Option<(Code, String, Range)>,
+    /// Every `$name` store-subscription reference (`$` and `$$name`
+    /// excluded), as the compiler's store-subscription loop sees it
+    /// before it declares the subscriptions.
+    pub(crate) store_refs: Vec<StoreRef>,
+    /// The source range of the `<script module>` body.
+    pub(crate) module_script_range: Option<Range>,
+}
+
+/// One `$name` reference, with what `name` resolves to from it.
+#[derive(Clone, Debug)]
+pub(crate) struct StoreRef {
+    pub name: SmolStr,
+    pub range: Range,
+    /// `name` (without the `$`) resolves from the reference to a
+    /// declaration below the module and instance top levels — a
+    /// subscription to it cannot be set up.
+    pub nested_store: bool,
+    pub parent_is_call: bool,
 }
 
 impl ScopeTree {
@@ -451,7 +469,9 @@ pub fn build_with_template(
         tree_builder.walk_template(frag, source, template_root, lang);
     }
 
-    tree_builder.finish(module_root, instance_root)
+    let mut tree = tree_builder.finish(module_root, instance_root);
+    tree.module_script_range = doc.module_script.as_ref().map(|s| s.content_range);
+    tree
 }
 
 struct TreeBuilder {
@@ -1706,6 +1726,24 @@ impl TreeBuilder {
         let pending_writes = std::mem::take(&mut self.pending_writes);
         let write_violations = resolve_writes(&self, pending_writes);
 
+        let store_refs: Vec<StoreRef> = unresolved
+            .iter()
+            .filter(|r| {
+                let n = r.name.as_bytes();
+                n.first() == Some(&b'$') && n.len() > 1 && n[1] != b'$'
+            })
+            .map(|r| StoreRef {
+                name: r.name.clone(),
+                range: r.range,
+                nested_store: resolve_by_name(&self.scopes, r.scope, &r.name[1..]).is_some_and(
+                    |b| {
+                        let scope = self.bindings[b.0 as usize].scope;
+                        scope != module_root && scope != instance_root
+                    },
+                ),
+                parent_is_call: r.parent_is_call,
+            })
+            .collect();
         synthesize_store_subs(&mut self, &mut unresolved, instance_root);
 
         ScopeTree {
@@ -1723,6 +1761,8 @@ impl TreeBuilder {
             export_spec_locals: self.export_spec_locals,
             script_rule_events: self.script_rule_events,
             declaration_error: self.declaration_error,
+            store_refs,
+            module_script_range: None,
             template_rule_events: {
                 let mut events = self.template_rule_events;
                 events.sort_by_key(|e| e.range().start);
@@ -2537,6 +2577,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             // `import type …` never reaches the compiler's scope builder.
             Statement::ImportDeclaration(imp) if imp.import_kind.is_type() => {}
             Statement::ImportDeclaration(imp) => {
+                self.check_runes_import(imp);
                 let source = SmolStr::from(imp.source.value.as_str());
                 if let Some(specs) = &imp.specifiers {
                     for s in specs {
@@ -2622,12 +2663,24 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                             range,
                         );
                     }
+                    if let Declaration::VariableDeclaration(v) = decl
+                        && !v.declare
+                    {
+                        let range = self.abs(end.span.start, end.span.end);
+                        for d in &v.declarations {
+                            for id in crate::scope_util::binding_idents_in_pattern(&d.id) {
+                                self.check_export(id.name.as_str(), range);
+                            }
+                        }
+                    }
                 }
             }
             Statement::ExportNamedDeclaration(end) if !end.export_kind.is_type() => {
+                self.check_export_specifiers(&end.specifiers);
                 self.check_default_export_specifiers(&end.specifiers, end.span);
             }
             Statement::ExportFromDeclaration(end) if !end.export_kind.is_type() => {
+                self.check_export_specifiers(&end.specifiers);
                 self.check_default_export_specifiers(&end.specifiers, end.span);
                 self.string_literal_hook(&end.source);
             }
@@ -2798,6 +2851,95 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// `ImportDeclaration.js` (runes mode): `svelte/internal` is off
+    /// limits, and so are the legacy lifecycle functions.
+    fn check_runes_import(&mut self, imp: &oxc_ast::ast::ImportDeclaration<'_>) {
+        if !self.hooks.is_some_and(|h| h.runes) {
+            return;
+        }
+        let source = imp.source.value.as_str();
+        if source.starts_with("svelte/internal") {
+            let range = self.abs(imp.span.start, imp.span.end);
+            self.push_error(
+                Code::import_svelte_internal_forbidden,
+                crate::messages::import_svelte_internal_forbidden(),
+                range,
+            );
+        }
+        if source == "svelte" {
+            for spec in imp.specifiers.iter().flatten() {
+                use oxc_ast::ast::{ImportDeclarationSpecifier as S, ModuleExportName};
+                let S::ImportSpecifier(spec) = spec else {
+                    continue;
+                };
+                if spec.import_kind.is_type() {
+                    continue;
+                }
+                let ModuleExportName::IdentifierName(imported) = &spec.imported else {
+                    continue;
+                };
+                let name = imported.name.as_str();
+                if matches!(name, "beforeUpdate" | "afterUpdate") {
+                    let range = self.abs(spec.span.start, spec.span.end);
+                    self.push_error(
+                        Code::runes_mode_invalid_import,
+                        crate::messages::runes_mode_invalid_import(name),
+                        range,
+                    );
+                }
+            }
+        }
+    }
+
+    /// `validate_export` (runes mode): derived state, and state the
+    /// component reassigns, may not be exported. Which one `name` is
+    /// waits for the finished tree.
+    fn check_export(&mut self, name: &str, range: Range) {
+        if !self.hooks.is_some_and(|h| h.runes) {
+            return;
+        }
+        let scope = self.cur_scope();
+        self.push_gated_error(
+            ErrorGate::DerivedExport {
+                name: SmolStr::from(name),
+                scope,
+            },
+            Code::derived_invalid_export,
+            crate::messages::derived_invalid_export(),
+            range,
+        );
+        self.push_gated_error(
+            ErrorGate::ReassignedStateExport {
+                name: SmolStr::from(name),
+                scope,
+            },
+            Code::state_invalid_export,
+            crate::messages::state_invalid_export(),
+            range,
+        );
+    }
+
+    /// `ExportSpecifier.js`: outside the instance script, each exported
+    /// local goes through `validate_export`.
+    fn check_export_specifiers(&mut self, specifiers: &[oxc_ast::ast::ExportSpecifier<'_>]) {
+        use oxc_ast::ast::ModuleExportName;
+        if self.is_instance || self.hooks.is_none() {
+            return;
+        }
+        for spec in specifiers {
+            if spec.export_kind.is_type() {
+                continue;
+            }
+            let local = match &spec.local {
+                ModuleExportName::IdentifierName(id) => id.name.as_str(),
+                ModuleExportName::IdentifierReference(id) => id.name.as_str(),
+                ModuleExportName::StringLiteral(l) => l.value.as_str(),
+            };
+            let range = self.abs(spec.span.start, spec.span.end);
+            self.check_export(local, range);
         }
     }
 

@@ -825,6 +825,64 @@ pub fn state_invalid_placement(rune: &str) -> String {
     )
 }
 
+/// Cannot subscribe to stores that are not declared at the top level of the component
+pub fn store_invalid_scoped_subscription() -> String {
+    "Cannot subscribe to stores that are not declared at the top level of the component\nhttps://svelte.dev/e/store_invalid_scoped_subscription".to_string()
+}
+
+/// Cannot reference store value inside `<script module>`
+pub fn store_invalid_subscription() -> String {
+    "Cannot reference store value inside `<script module>`\nhttps://svelte.dev/e/store_invalid_subscription".to_string()
+}
+
+/// Cannot export derived state from a module. To expose the current derived value, export a function returning its value
+pub fn derived_invalid_export() -> String {
+    "Cannot export derived state from a module. To expose the current derived value, export a function returning its value\nhttps://svelte.dev/e/derived_invalid_export".to_string()
+}
+
+/// `%name%` is not defined
+pub fn export_undefined(name: &str) -> String {
+    format!("`{name}` is not defined\nhttps://svelte.dev/e/export_undefined")
+}
+
+/// Imports of `svelte/internal/*` are forbidden. It contains private runtime code which is subject to change without notice. If you're importing from `svelte/internal/*` to work around a limitation of Svelte, please open an issue at https://github.com/sveltejs/svelte and explain your use case
+pub fn import_svelte_internal_forbidden() -> String {
+    "Imports of `svelte/internal/*` are forbidden. It contains private runtime code which is subject to change without notice. If you're importing from `svelte/internal/*` to work around a limitation of Svelte, please open an issue at https://github.com/sveltejs/svelte and explain your use case\nhttps://svelte.dev/e/import_svelte_internal_forbidden".to_string()
+}
+
+/// Cannot use `$$props` in runes mode
+pub fn legacy_props_invalid() -> String {
+    "Cannot use `$$props` in runes mode\nhttps://svelte.dev/e/legacy_props_invalid".to_string()
+}
+
+/// Cannot use `$$restProps` in runes mode
+pub fn legacy_rest_props_invalid() -> String {
+    "Cannot use `$$restProps` in runes mode\nhttps://svelte.dev/e/legacy_rest_props_invalid"
+        .to_string()
+}
+
+/// %name% cannot be used in runes mode
+pub fn runes_mode_invalid_import(name: &str) -> String {
+    format!("{name} cannot be used in runes mode\nhttps://svelte.dev/e/runes_mode_invalid_import")
+}
+
+/// An exported snippet can only reference things declared in a `<script module>`, or other exportable snippets
+pub fn snippet_invalid_export() -> String {
+    "An exported snippet can only reference things declared in a `<script module>`, or other exportable snippets\nhttps://svelte.dev/e/snippet_invalid_export".to_string()
+}
+
+/// This snippet is shadowing the prop `%prop%` with the same name
+pub fn snippet_shadowing_prop(prop: &str) -> String {
+    format!(
+        "This snippet is shadowing the prop `{prop}` with the same name\nhttps://svelte.dev/e/snippet_shadowing_prop"
+    )
+}
+
+/// Cannot export state from a module if it is reassigned. Either export a function returning the state value or only mutate the state value's properties
+pub fn state_invalid_export() -> String {
+    "Cannot export state from a module if it is reassigned. Either export a function returning the state value or only mutate the state value's properties\nhttps://svelte.dev/e/state_invalid_export".to_string()
+}
+
 /// `%name%` has already been declared
 pub fn duplicate_class_field(name: &str) -> String {
     format!("`{name}` has already been declared\nhttps://svelte.dev/e/duplicate_class_field")

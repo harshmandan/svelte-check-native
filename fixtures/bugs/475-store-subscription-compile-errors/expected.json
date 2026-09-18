@@ -1,0 +1,53 @@
+{
+    "errors": [
+        {
+            "file": "src/C01.svelte",
+            "line": 4,
+            "column": 24,
+            "code": "store_invalid_scoped_subscription"
+        },
+        {
+            "file": "src/C02.svelte",
+            "line": 2,
+            "column": 28,
+            "code": "store_invalid_scoped_subscription"
+        },
+        {
+            "file": "src/C03.svelte",
+            "line": 3,
+            "column": 13,
+            "code": "store_invalid_subscription"
+        },
+        {
+            "file": "src/C05.svelte",
+            "line": 3,
+            "column": 28,
+            "code": "store_invalid_scoped_subscription"
+        },
+        {
+            "file": "src/C06.svelte",
+            "line": 4,
+            "column": 21,
+            "code": "store_invalid_scoped_subscription"
+        },
+        {
+            "file": "src/C07.svelte",
+            "line": 2,
+            "column": 28,
+            "code": "store_invalid_scoped_subscription"
+        },
+        {
+            "file": "src/C08.svelte",
+            "line": 1,
+            "column": 13,
+            "code": "global_reference_invalid"
+        },
+        {
+            "file": "src/C09.svelte",
+            "line": 3,
+            "column": 23,
+            "code": "store_invalid_subscription"
+        }
+    ],
+    "_note": "Store subscriptions to stores declared below the top level (each item, function parameter), store reads inside <script module>, and illegal $$ names. Verified against upstream svelte-check."
+}

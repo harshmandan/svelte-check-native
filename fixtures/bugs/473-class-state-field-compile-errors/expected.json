@@ -1,0 +1,43 @@
+{
+    "errors": [
+        {
+            "file": "src/A37.svelte",
+            "line": 1,
+            "column": 22,
+            "code": "state_invalid_placement"
+        },
+        {
+            "file": "src/A38.svelte",
+            "line": 1,
+            "column": 26,
+            "code": "duplicate_class_field"
+        },
+        {
+            "file": "src/A39.svelte",
+            "line": 1,
+            "column": 31,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/A41.svelte",
+            "line": 1,
+            "column": 32,
+            "code": "duplicate_class_field"
+        },
+        {
+            "file": "src/A43.svelte",
+            "line": 1,
+            "column": 27,
+            "code": "state_field_invalid_assignment"
+        }
+    ],
+    "warnings": [
+        {
+            "file": "src/A44.svelte",
+            "line": 9,
+            "column": 13,
+            "code": "state_referenced_locally"
+        }
+    ],
+    "_note": "Runes-mode class checks: $state only as a non-static field or a constructor field assignment, duplicate class members and state fields, and writes to a constructor-declared state field before its declaration. A44 shows TypeScript wrappers and parentheses around valid rune positions stay valid. Verified against upstream svelte-check."
+}

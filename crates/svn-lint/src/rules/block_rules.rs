@@ -301,10 +301,25 @@ fn snippet_rest_parameter(b: &SnippetBlock, source: &str) -> Option<svn_core::Ra
     ))
 }
 
-/// `snippet_conflict` (`SnippetBlock.js`, checked once the snippet's
-/// body has been visited): an explicit `{#snippet children()}` passed
-/// to a component that also has implicit children content.
+/// The checks `SnippetBlock.js` makes once the snippet's body has been
+/// visited: a snippet passed to a `<Component>` may not share its name
+/// with a prop the component's attributes pass (`snippet_shadowing_prop`),
+/// and an explicit `{#snippet children()}` conflicts with implicit
+/// children content (`snippet_conflict`).
 pub fn visit_snippet_after_body(b: &SnippetBlock, ctx: &mut LintContext<'_>) {
+    if let Some(crate::walk::PathFrame::Component {
+        kind: crate::walk::ComponentKind::Component,
+        props,
+        ..
+    }) = ctx.template_path.last()
+        && props.contains(&b.name)
+    {
+        ctx.emit_error(
+            Code::snippet_shadowing_prop,
+            messages::snippet_shadowing_prop(&b.name),
+            b.range,
+        );
+    }
     if b.name != "children" {
         return;
     }

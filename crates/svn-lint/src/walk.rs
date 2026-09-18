@@ -279,6 +279,10 @@ pub fn walk_parsed(
     // already skips that fixture via the `_config.js` escape.
     visit_svelte_options_attributes(fragment, source, ctx);
 
+    // `$$props` / `$$restProps` in runes mode — rejected before the
+    // script walks.
+    crate::rules::script_errors::legacy_props(ctx);
+
     // <script>-body (JS/TS AST) rules: perf_avoid_inline_class,
     // perf_avoid_nested_class, reactive_declaration_invalid_placement,
     // ... — buffered during the shared script walk (module first,
@@ -300,6 +304,17 @@ pub fn walk_parsed(
     // Post-walk declaration loops (non_reactive_update /
     // export_let_unused) — upstream runs them after all three walks.
     crate::rules::binding_rules::visit_post_template(ctx);
+
+    // `export { name }` from `<script module>` must name a module
+    // binding or a hoistable snippet.
+    if let (Some(section), Some(program)) = (doc.module_script.as_ref(), module_program) {
+        crate::rules::script_errors::module_exports(
+            program,
+            section.content_range.start,
+            fragment,
+            ctx,
+        );
+    }
 
     // Once every walk is done, the compiler rejects a component that
     // mixes `on:` directives and `on*` attributes on its elements,
@@ -539,6 +554,9 @@ pub(crate) enum PathFrame {
         default_slot_content: Option<svn_core::Range>,
         /// The slot names its direct children have filled so far.
         filled_slots: Vec<SmolStr>,
+        /// The names the component's attributes and `bind:`
+        /// directives pass (set for `<Component>` only).
+        props: Vec<SmolStr>,
     },
     /// `<svelte:element>`; `slotted` marks one carrying a `slot`
     /// attribute.
@@ -638,7 +656,31 @@ impl PathFrame {
             implicit_children,
             default_slot_content,
             filled_slots: Vec::new(),
+            props: Vec::new(),
         }
+    }
+
+    /// A `<Component>` frame, which also records the prop names its
+    /// attributes and `bind:` directives pass.
+    fn component_node(comp: &svn_parser::ast::Component, source: &str) -> Self {
+        let mut frame =
+            Self::component(ComponentKind::Component, &comp.name, &comp.children, source);
+        if let Self::Component { props, .. } = &mut frame {
+            *props = comp
+                .attributes
+                .iter()
+                .filter_map(|a| match a {
+                    Attribute::Plain(p) => Some(p.name.clone()),
+                    Attribute::Expression(e) => Some(e.name.clone()),
+                    Attribute::Shorthand(s) => Some(s.name.clone()),
+                    Attribute::Directive(d) if d.kind == svn_parser::ast::DirectiveKind::Bind => {
+                        Some(d.name.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+        }
+        frame
     }
 }
 
@@ -836,12 +878,8 @@ fn walk_fragment_nodes(
                 // Component ancestor), but the a11y is_parent walk
                 // continues past it — upstream's path never resets.
                 ancestors.push(Ancestor::Boundary);
-                ctx.template_path.push(PathFrame::component(
-                    ComponentKind::Component,
-                    &comp.name,
-                    &comp.children,
-                    source,
-                ));
+                ctx.template_path
+                    .push(PathFrame::component_node(comp, source));
                 walk_component_children(&comp.children, ctx, ancestors);
                 ctx.template_path.pop();
                 ancestors.pop();

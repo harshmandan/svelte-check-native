@@ -1,0 +1,41 @@
+{
+    "errors": [
+        {
+            "file": "src/A30.svelte",
+            "line": 2,
+            "column": 19,
+            "code": "props_illegal_name"
+        },
+        {
+            "file": "src/A31.svelte",
+            "line": 1,
+            "column": 7,
+            "code": "dollar_prefix_invalid"
+        },
+        {
+            "file": "src/A32.svelte",
+            "line": 1,
+            "column": 5,
+            "code": "props_invalid_identifier"
+        },
+        {
+            "file": "src/A33.svelte",
+            "line": 1,
+            "column": 7,
+            "code": "props_invalid_pattern"
+        },
+        {
+            "file": "src/B11.svelte",
+            "line": 3,
+            "column": 1,
+            "code": "legacy_props_invalid"
+        },
+        {
+            "file": "src/B12.svelte",
+            "line": 3,
+            "column": 9,
+            "code": "legacy_props_invalid"
+        }
+    ],
+    "_note": "$props() declarator patterns the compiler rejects, $$ names read off a rest-props binding, and $$props / $$restProps in runes mode. Verified against upstream svelte-check."
+}

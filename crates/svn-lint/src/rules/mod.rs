@@ -23,6 +23,7 @@ pub mod element_rules;
 pub mod implicit_close;
 pub(crate) mod js_parse_error;
 pub mod script_ast_rules;
+pub(crate) mod script_errors;
 pub mod script_rules;
 pub mod svelte_element_rules;
 pub mod text_rules;

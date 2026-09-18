@@ -77,12 +77,18 @@ pub(crate) enum ErrorGate {
     /// and an error in the module script or when the component is not
     /// compiled as a custom element.
     Host { scope: ScopeId, module: bool },
-    /// Legacy-mode rune use: an error unless `name` is a store
+    /// Legacy-mode rune use: an error when `name` resolves to a binding
+    /// other than a store subscription. An unresolved rune name never
+    /// fires: outside runes mode the compiler turns it into a store
     /// subscription.
     NotStoreSub { name: SmolStr, scope: ScopeId },
     /// `object.$$name`: an error when `object` is a `$props()` rest
     /// binding.
     RestProp { object: SmolStr, scope: ScopeId },
+    /// An exported name that is derived state.
+    DerivedExport { name: SmolStr, scope: ScopeId },
+    /// An exported name that is state the component reassigns.
+    ReassignedStateExport { name: SmolStr, scope: ScopeId },
 }
 
 impl ErrorGate {
@@ -98,7 +104,16 @@ impl ErrorGate {
             }
             Self::NotStoreSub { name, scope } => tree
                 .resolve(*scope, name)
-                .is_none_or(|b| tree.binding(b).kind != BindingKind::StoreSub),
+                .is_some_and(|b| tree.binding(b).kind != BindingKind::StoreSub),
+            Self::DerivedExport { name, scope } => tree
+                .resolve(*scope, name)
+                .is_some_and(|b| tree.binding(b).kind == BindingKind::Derived),
+            Self::ReassignedStateExport { name, scope } => {
+                tree.resolve(*scope, name).is_some_and(|b| {
+                    let b = tree.binding(b);
+                    matches!(b.kind, BindingKind::State | BindingKind::RawState) && b.reassigned
+                })
+            }
             Self::RestProp { object, scope } => tree.resolve(*scope, object).is_some_and(|b| {
                 let b = tree.binding(b);
                 b.kind == BindingKind::RestProp && b.declaration_kind != DeclarationKind::Synthetic

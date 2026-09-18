@@ -46,37 +46,90 @@ pub fn visit_pre_options(ctx: &mut LintContext<'_>) {
     ctx.scope_tree = Some(tree);
 }
 
-/// Compiler error `global_reference_invalid` — upstream
-/// `2-analyze/index.js`, the store-subscription synthesis loop. For
-/// each `$`-prefixed name referenced anywhere in the component and
-/// not resolved to a binding: `$` alone or a `$$name` that is not one
-/// of the reserved ambients is illegal outright; a non-rune `$name`
-/// whose store name has no declaration and starts with a lowercase
-/// letter is illegal unless runes were switched off by option. Fires
-/// once per name, at its first reference.
+/// The compiler errors of the store-subscription loop (upstream
+/// `2-analyze/index.js`), which visits each `$`-prefixed name
+/// referenced in the component and not otherwise declared, in
+/// first-reference order:
+///
+/// - `$` alone, or a `$$name` that is not one of the reserved
+///   ambients, is `global_reference_invalid` outright;
+/// - a name the compiler treats as a store subscription (anything but
+///   a rune name, unless it is backed by a store or runes are off by
+///   option) is `store_invalid_scoped_subscription` when a reference
+///   sees its store declared below the top level (a function
+///   parameter, an each-block item, …); `global_reference_invalid`
+///   when no store of that lowercase name exists (unless runes are
+///   off by option); and `store_invalid_subscription` when it is
+///   referenced in `<script module>` other than as a rune call.
 fn global_reference_invalid(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
     const RESERVED: [&str; 3] = ["$$props", "$$restProps", "$$slots"];
-    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    let mut refs: Vec<&crate::scope_types::UnresolvedRef> = tree.unresolved_refs.iter().collect();
-    refs.sort_by_key(|r| r.range.start);
-    for r in refs {
-        let name = r.name.as_str();
-        if !name.starts_with('$') || RESERVED.contains(&name) || !seen.insert(name) {
+    let runes_off = ctx.runes_option == Some(false);
+    let mut firsts: Vec<(u32, &str, svn_core::Range)> = Vec::new();
+    for (name, range) in tree
+        .unresolved_refs
+        .iter()
+        .map(|r| (r.name.as_str(), r.range))
+        .chain(tree.store_refs.iter().map(|r| (r.name.as_str(), r.range)))
+    {
+        if !name.starts_with('$') || RESERVED.contains(&name) {
             continue;
         }
-        let illegal = if name.len() == 1 || name.as_bytes()[1] == b'$' {
-            true
-        } else {
-            let store_name = &name[1..];
-            ctx.runes_option != Some(false)
-                && !is_rune_name(name)
-                && tree.resolve(tree.instance_root, store_name).is_none()
-                && store_name.starts_with(|c: char| c.is_ascii_lowercase())
-        };
-        if illegal {
+        match firsts.iter_mut().find(|(_, n, _)| *n == name) {
+            Some(entry) if range.start < entry.0 => *entry = (range.start, name, range),
+            Some(_) => {}
+            None => firsts.push((range.start, name, range)),
+        }
+    }
+    firsts.sort_by_key(|(start, _, _)| *start);
+    for (_, name, first) in firsts {
+        if name.len() == 1 || name.as_bytes()[1] == b'$' {
             ctx.emit_error(
                 Code::global_reference_invalid,
                 messages::global_reference_invalid(name),
+                first,
+            );
+            continue;
+        }
+        let store_name = &name[1..];
+        let subscribed = tree
+            .all_bindings()
+            .any(|(_, b)| b.kind == BindingKind::StoreSub && b.name == name);
+        if !(runes_off || !is_rune_name(name) || subscribed) {
+            continue;
+        }
+        let refs = || tree.store_refs.iter().filter(move |r| r.name == name);
+        if let Some(r) = refs()
+            .filter(|r| r.nested_store)
+            .min_by_key(|r| r.range.start)
+        {
+            ctx.emit_error(
+                Code::store_invalid_scoped_subscription,
+                messages::store_invalid_scoped_subscription(),
+                r.range,
+            );
+        }
+        if !runes_off
+            && tree.resolve(tree.instance_root, store_name).is_none()
+            && store_name.starts_with(|c: char| c.is_ascii_lowercase())
+        {
+            ctx.emit_error(
+                Code::global_reference_invalid,
+                messages::global_reference_invalid(name),
+                first,
+            );
+        }
+        if let Some(module) = tree.module_script_range
+            && let Some(r) = refs()
+                .filter(|r| {
+                    r.range.start > module.start
+                        && r.range.end < module.end
+                        && !(r.parent_is_call && is_rune_name(name))
+                })
+                .min_by_key(|r| r.range.start)
+        {
+            ctx.emit_error(
+                Code::store_invalid_subscription,
+                messages::store_invalid_subscription(),
                 r.range,
             );
         }

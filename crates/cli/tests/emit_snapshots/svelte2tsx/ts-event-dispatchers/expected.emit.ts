@@ -23,7 +23,17 @@ function $$render_e40e2c10() {
         });
         }
     });
-    return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {(({ "click": HTMLElementEventMap["click"] })) & { [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {(Omit<Omit<{ [__svn_K in keyof (Omit<({
+    /**
+     * A DOC
+     */
+    hi: boolean;
+    }), keyof ({btn: string;})> & ({btn: string;}))]: CustomEvent<(Omit<({
+    /**
+     * A DOC
+     */
+    hi: boolean;
+    }), keyof ({btn: string;})> & ({btn: string;}))[__svn_K]> }, keyof ({ "click": HTMLElementEventMap["click"] })> & ({ "click": HTMLElementEventMap["click"] }), keyof ({ "bye": CustomEvent<any> })> & ({ "bye": CustomEvent<any> })) & { [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
 /** @type {__SvnIsomorphicComponent<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */

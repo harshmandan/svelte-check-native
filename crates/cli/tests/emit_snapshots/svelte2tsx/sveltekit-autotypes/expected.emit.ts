@@ -16,7 +16,7 @@ function $$render_aad4163e() {
     void form;
     void snapshot;
     void nope;
-    return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ snapshot: typeof snapshot; }} */ ({}) };
+    return { props: /** @type {{ data: any; form: any; snapshot?: typeof snapshot; nope: any; form?: typeof form; data: number; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ snapshot: typeof snapshot; }} */ ({}) };
 }
 $$render_aad4163e;
 /** @type {__SvnIsomorphicComponent<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_aad4163e>>['props']>>, Awaited<ReturnType<typeof $$render_aad4163e>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_aad4163e>>['slots']>>, Awaited<ReturnType<typeof $$render_aad4163e>>['exports'], Awaited<ReturnType<typeof $$render_aad4163e>>['bindings']>} */

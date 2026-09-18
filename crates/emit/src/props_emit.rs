@@ -202,7 +202,10 @@ pub(crate) fn inject_component_props_annotation(
     lang: svn_parser::ScriptLang,
 ) -> String {
     let alloc = Allocator::default();
-    let parsed = svn_parser::parse_script_body(&alloc, content, lang);
+    // Read with TypeScript's parser whatever the language, as
+    // svelte2tsx reads every script: a JavaScript component's
+    // annotation is type syntax, but it is there all the same.
+    let parsed = svn_parser::parse_script_body(&alloc, content, svn_parser::ScriptLang::Ts);
     // Upstream rewrites every top-level `$props()` declaration the same
     // way. Each rewrite declares its own `$$ComponentProps`, and only the
     // first declaration counts, so a later destructure is typed by the
@@ -223,12 +226,16 @@ pub(crate) fn inject_component_props_annotation(
     }
     let mut out = content.to_string();
     for action in actions.into_iter().rev() {
-        out = apply_annotation_action(&out, action);
+        out = apply_annotation_action(&out, action, lang);
     }
     out
 }
 
-fn apply_annotation_action(content: &str, action: AnnotationAction) -> String {
+fn apply_annotation_action(
+    content: &str,
+    action: AnnotationAction,
+    lang: svn_parser::ScriptLang,
+) -> String {
     let mut out = String::with_capacity(content.len() + 32);
     match action {
         AnnotationAction::ReplaceTypeArgument { start, end } => {
@@ -279,11 +286,25 @@ fn apply_annotation_action(content: &str, action: AnnotationAction) -> String {
             // Do not "unify" the two spellings by teaching the scanner
             // this one: a user's own error inside a `$props()` type
             // annotation would start disappearing.
+            //
+            // In a JavaScript component the replacement is itself type
+            // syntax, which draws TS8010 on the alias name; upstream's
+            // markers drop it. Only there, the ASCII pair goes inside
+            // so the mapper drops it too: the alias name is all the
+            // span holds, so nothing the user wrote is fenced off.
+            let js = lang == svn_parser::ScriptLang::Js;
             let dropped_newlines = content[start..end].matches('\n').count();
             out.push_str(&content[..start]);
-            out.push_str(": /*\u{03A9}ignore_start\u{03A9}*/$$ComponentProps");
+            out.push_str(": /*\u{03A9}ignore_start\u{03A9}*/");
+            if js {
+                out.push_str("/*svn:ignore_start*/");
+            }
+            out.push_str("$$ComponentProps");
             for _ in 0..dropped_newlines {
                 out.push('\n');
+            }
+            if js {
+                out.push_str("/*svn:ignore_end*/");
             }
             out.push_str("/*\u{03A9}ignore_end\u{03A9}*/");
             out.push_str(&content[end..]);

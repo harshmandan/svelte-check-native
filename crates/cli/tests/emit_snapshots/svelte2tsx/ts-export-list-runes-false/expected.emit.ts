@@ -37,7 +37,7 @@ function $$render_e40e2c10() {
     void RenameFoo;
     void renamebar;
     void renamebaz;
-    return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ Foo: typeof Foo; bar: typeof bar; baz: typeof baz; RenamedFoo: typeof RenameFoo; renamedbar: typeof renamebar; renamedbaz: typeof renamebaz; }} */ ({}) };
+    return { props: /** @type {{ name1?: string; name2?: string; name3?: string; name4?: string; renamed1?: string; renamed2?: string; Foo?: typeof Foo; bar?: typeof bar; baz?: string; RenamedFoo?: typeof RenameFoo; renamedbar?: typeof renamebar; renamedbaz?: string; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ Foo: typeof Foo; bar: typeof bar; baz: typeof baz; RenamedFoo: typeof RenameFoo; renamedbar: typeof renamebar; renamedbaz: typeof renamebaz; }} */ ({}) };
 }
 $$render_e40e2c10;
 /** @type {__SvnIsomorphicComponent<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */

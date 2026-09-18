@@ -204,6 +204,26 @@ pub struct TokenMapEntry {
     pub source_byte_end: u32,
 }
 
+/// Parse a script the way svelte2tsx reads it: with TypeScript's
+/// parser whatever the script's language. A plain-JavaScript script
+/// that uses type syntax (a `$props()` destructure with a type
+/// annotation, say) still has its declarations, annotations included,
+/// to svelte2tsx; oxc's JavaScript parse gives up on such a script, so
+/// its TypeScript parse stands in when that one succeeds.
+fn parse_script_as_svelte2tsx<'a>(
+    allocator: &'a Allocator,
+    script: &svn_parser::ScriptSection<'a>,
+) -> svn_parser::ParsedScript<'a> {
+    let parsed = parse_script_body(allocator, script.content, script.lang);
+    if parsed.panicked && script.lang == svn_parser::ScriptLang::Js {
+        let typescript = parse_script_body(allocator, script.content, svn_parser::ScriptLang::Ts);
+        if !typescript.panicked {
+            return typescript;
+        }
+    }
+    parsed
+}
+
 /// What the instance-script split needs to decide which type
 /// declarations move to module scope.
 fn hoist_context(
@@ -365,12 +385,12 @@ fn emit_document_with_render_name(
     let parsed_instance = doc
         .instance_script
         .as_ref()
-        .map(|s| parse_script_body(&alloc_instance, s.content, s.lang));
+        .map(|s| parse_script_as_svelte2tsx(&alloc_instance, s));
     let alloc_module = Allocator::default();
     let parsed_module = doc
         .module_script
         .as_ref()
-        .map(|s| parse_script_body(&alloc_module, s.content, s.lang));
+        .map(|s| parse_script_as_svelte2tsx(&alloc_module, s));
     // Root `{#snippet}` blocks are hoisted out of the template
     // (upstream `index.ts`, `rootSnippets`): to module scope when
     // every free name they reference is allowed there — nothing the
@@ -1015,17 +1035,17 @@ fn emit_document_with_render_name(
     // rename/find-references to work seamlessly and for the
     // destructure's `data`/`form`/etc. locals to pick up the
     // synthesized route type rather than `$props()`'s loose return.
-    let will_emit_component_props_alias = is_ts
-        && props_info
-            .type_text
-            .as_deref()
-            .is_some_and(|t| t.trim_start().starts_with('{'))
-        && matches!(
-            props_info.source,
-            svn_analyze::PropsSource::SynthesisedFromDestructure
-                | svn_analyze::PropsSource::RuneAnnotation
-                | svn_analyze::PropsSource::RuneGeneric
-        );
+    let will_emit_component_props_alias = props_info
+        .type_text
+        .as_deref()
+        .is_some_and(|t| t.trim_start().starts_with('{'))
+        && match props_info.source {
+            svn_analyze::PropsSource::SynthesisedFromDestructure => is_ts,
+            svn_analyze::PropsSource::RuneAnnotation | svn_analyze::PropsSource::RuneGeneric => {
+                true
+            }
+            _ => false,
+        };
     // SVELTE-4-COMPAT: when `type NAME = $$Generic[<args>];` declarations
     // synthesised the render-fn's generic param list (see
     // `synthesise_generics_from_dollar_generic`), blank those
@@ -1205,14 +1225,18 @@ fn emit_document_with_render_name(
         .type_text
         .as_deref()
         .is_some_and(|t| t.trim_start().starts_with('{'));
-    let should_alias = is_ts
-        && ty_is_literal
-        && matches!(
-            props_info.source,
-            svn_analyze::PropsSource::SynthesisedFromDestructure
-                | svn_analyze::PropsSource::RuneAnnotation
-                | svn_analyze::PropsSource::RuneGeneric
-        );
+    // svelte2tsx moves a `$props()` annotation or type argument into the
+    // alias whatever the script's language: in a JavaScript component
+    // the alias is itself type syntax (TS8008 on its name), and the
+    // annotation it replaces is fenced off.
+    let should_alias = ty_is_literal
+        && match props_info.source {
+            svn_analyze::PropsSource::SynthesisedFromDestructure => is_ts,
+            svn_analyze::PropsSource::RuneAnnotation | svn_analyze::PropsSource::RuneGeneric => {
+                true
+            }
+            _ => false,
+        };
     // Alias placement: ALWAYS body-local when emitting `type
     // $$ComponentProps = …`. Two reasons body-scope is the right home:
     //
@@ -1328,23 +1352,30 @@ fn emit_document_with_render_name(
     // annotation rewrite (`: $$ComponentProps`) downstream can reference
     // it. The `T` in `<script generics="T">` is the render fn's binder
     // and is in scope here.
-    // Reviewer follow-up #1: same TS-only gate as `type $$Events`
-    // below — JS overlays can't carry TS-only `type X = …`
-    // declarations. The JS render-fn return short-circuits and
-    // doesn't reference `$$ComponentProps`; the JS default export
-    // gets its Props through `Awaited<ReturnType<typeof
-    // $$render>>['props']` which already projects the destructure's
-    // declared type. Skipping the alias on JS is safe.
-    if is_ts && let Some(body) = alias_body.as_deref() {
-        buf.push_str("    type $$ComponentProps = ");
+    // A JavaScript component gets the alias too (see `should_alias`).
+    if let Some(body) = alias_body.as_deref() {
         // The user's own annotation or type argument moved here, as
-        // upstream moves it: its bytes keep their source positions.
+        // upstream moves it: its bytes keep their source positions, and
+        // the alias head svelte2tsx prepends to the moved text maps to
+        // where that text starts, the whitespace after the `:` or `<`
+        // included.
         match (props_info.type_span, doc.instance_script.as_ref()) {
             (Some((start, end)), Some(script)) => {
                 let base = script.content_range.start;
+                let moved_start = script.content[..start as usize]
+                    .trim_end_matches(|c: char| c.is_whitespace())
+                    .len() as u32;
+                buf.push_str("    ");
+                buf.append_with_source(
+                    "type $$ComponentProps = ",
+                    svn_core::Range::new(base + moved_start, base + moved_start + 1),
+                );
                 buf.append_with_source(body, svn_core::Range::new(base + start, base + end));
             }
-            _ => buf.push_str(body),
+            _ => {
+                buf.push_str("    type $$ComponentProps = ");
+                buf.push_str(body);
+            }
         }
         buf.push_str(";\n");
     }

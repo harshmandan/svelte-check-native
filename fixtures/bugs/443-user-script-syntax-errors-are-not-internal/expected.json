@@ -1,0 +1,89 @@
+{
+    "errors": [
+        {
+            "file": "src/J_extra_close.svelte",
+            "line": 1,
+            "column": 11,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/J_html_comment.svelte",
+            "line": 1,
+            "column": 0,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/J_html_comment.svelte",
+            "line": 1,
+            "column": 0,
+            "code": 1109
+        },
+        {
+            "file": "src/J_html_comment.svelte",
+            "line": 1,
+            "column": 7,
+            "code": 1005
+        },
+        {
+            "file": "src/J_html_comment.svelte",
+            "line": 1,
+            "column": 9,
+            "code": 1109
+        },
+        {
+            "file": "src/J_html_comment.svelte",
+            "line": 2,
+            "column": 0,
+            "code": 1109
+        },
+        {
+            "file": "src/J_unclosed_brace.svelte",
+            "line": 2,
+            "column": 0,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/J_unterm_template.svelte",
+            "line": 1,
+            "column": 9,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/T_html_comment.svelte",
+            "line": 1,
+            "column": 1,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/T_html_comment.svelte",
+            "line": 1,
+            "column": 2,
+            "code": 1110
+        },
+        {
+            "file": "src/T_html_comment.svelte",
+            "line": 1,
+            "column": 7,
+            "code": 1005
+        },
+        {
+            "file": "src/T_html_comment.svelte",
+            "line": 1,
+            "column": 9,
+            "code": 1109
+        },
+        {
+            "file": "src/T_html_comment.svelte",
+            "line": 2,
+            "column": 0,
+            "code": 1109
+        },
+        {
+            "file": "src/T_unclosed_brace.svelte",
+            "line": 2,
+            "column": 0,
+            "code": "js_parse_error"
+        }
+    ],
+    "warnings": []
+}

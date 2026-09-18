@@ -93,7 +93,18 @@ pub(crate) fn emit_template_check_fn(
     // which collapses any `let project = ... ; project = X ?? Y;`
     // narrowing back to the declared union type. The arrow-expression
     // form preserves narrowing — see design/gap_c_assignment_narrowing/.
-    buf.push_str("    ;(async () => {\n");
+    // svelte2tsx writes the `;` that ends the script body over the
+    // instance script's `</script>`, so a syntax error the body leaves
+    // open (a stray `<!--`, say) is reported at that tag.
+    buf.push_str("    ");
+    match &doc.instance_script {
+        Some(s) => buf.append_with_source(
+            ";",
+            svn_core::Range::new(s.close_tag_range.start, s.close_tag_range.start + 1),
+        ),
+        None => buf.push_str(";"),
+    }
+    buf.push_str("(async () => {\n");
     buf.push_str("        // template type-check body (incremental)\n");
     emit_legacy_action_attrs(buf.raw_string_mut(), summary, is_ts);
     emit_bind_pair_declarations(buf.raw_string_mut(), summary, is_ts);

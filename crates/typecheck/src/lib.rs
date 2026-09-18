@@ -1163,7 +1163,7 @@ fn overlay_syntax_failures(
                     position::find_tightest_token(&data.token_map, byte).is_some()
                 })
             });
-            if on_user_text {
+            if on_user_text || user_script_fails_to_parse(&source) {
                 return None;
             }
             seen.insert(source.clone()).then(|| CheckDiagnostic {
@@ -1189,6 +1189,26 @@ fn overlay_syntax_failures(
             })
         })
         .collect()
+}
+
+/// Whether one of the component's own `<script>` bodies is not valid
+/// script. The overlay copies the body in, so the syntax error is the
+/// user's: svelte-check reports its TypeScript error where it maps, and
+/// drops it where it lands on generated text, without any report of a
+/// fault in the generated code.
+fn user_script_fails_to_parse(source_path: &Path) -> bool {
+    let Ok(source) = std::fs::read_to_string(source_path) else {
+        return false;
+    };
+    let (doc, _) = svn_parser::parse_sections(&source);
+    [doc.instance_script.as_ref(), doc.module_script.as_ref()]
+        .into_iter()
+        .flatten()
+        .any(|script| {
+            let alloc = oxc_allocator::Allocator::default();
+            let parsed = svn_parser::parse_script_body(&alloc, script.content, script.lang);
+            !parsed.errors.is_empty() || parsed.panicked
+        })
 }
 
 /// Which language a diagnostic is attributed to — the `(ts)` / `(js)`

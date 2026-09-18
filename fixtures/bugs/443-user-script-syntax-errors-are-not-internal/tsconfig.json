@@ -1,0 +1,6 @@
+{
+    "extends": "../_shared/tsconfig.base.json",
+    "compilerOptions": { "allowJs": true, "checkJs": true },
+    "include": ["**/*"],
+    "exclude": ["node_modules/**"]
+}

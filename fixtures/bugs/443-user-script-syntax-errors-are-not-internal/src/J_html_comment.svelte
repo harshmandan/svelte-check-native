@@ -1,0 +1,3 @@
+<script>
+<!-- x -->
+</script>

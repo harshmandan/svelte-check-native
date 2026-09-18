@@ -317,6 +317,18 @@ fn emit_document_with_render_name(
     // A script block svelte2tsx's own scan does not recognise is not a
     // script to it: emit without it and keep its text in the template.
     let spans = verbatim_scripts::recognised_script_spans(doc.source);
+    if let Some((merged, swallowed)) = verbatim_scripts::merge_extended_scripts(doc, &spans) {
+        return verbatim_scripts::with_swallowed_close_tags(swallowed, || {
+            emit_document_with_render_name(
+                &merged,
+                fragment,
+                summary,
+                render_name,
+                source_path,
+                is_ts,
+            )
+        });
+    }
     let unrecognised = |s: &Option<svn_parser::ScriptSection<'_>>| {
         s.as_ref().is_some_and(|s| {
             !verbatim_scripts::is_recognised(&spans, s.open_tag_range, s.close_tag_range)
@@ -435,9 +447,11 @@ fn emit_document_with_render_name(
             None
         };
         let overlay_start = buf.raw_string_mut().len();
+        let rewrites =
+            verbatim_scripts::module_script_rewrites(content, module_script.content_range.start);
         let mut rest_from = 0usize;
         if let Some(split) = split {
-            append_module_part(&mut buf, doc.source, module_script, 0, split);
+            append_module_part(&mut buf, doc.source, module_script, 0, split, &rewrites);
             for (snippet, hoist) in root_snippets.iter().zip(&module_hoisted) {
                 if *hoist {
                     crate::nodes::snippet_block::emit_snippet_const(
@@ -458,6 +472,7 @@ fn emit_document_with_render_name(
             module_script,
             rest_from,
             content.len(),
+            &rewrites,
         );
         let body_end = buf.raw_string_mut().trim_end_matches('\n').len();
         module_body = Some(overlay_start..body_end.max(overlay_start));
@@ -2200,28 +2215,65 @@ pub(crate) use void_block::{emit_bind_pair_declarations, emit_void_block};
 /// Append `content[from..to]` of the module script verbatim, with a
 /// byte-exact token map and a trailing newline when the slice lacks one
 /// (a line-map entry needs at least one newline).
+///
+/// `rewrites` are svelte2tsx's type-assertion rewrites of swallowed
+/// close tags (`verbatim_scripts::close_tag_type_assertion`): the `<`
+/// at `start` goes and ` as ` follows `end`. The text in between keeps
+/// its source positions through its own token map entry.
 fn append_module_part(
     buf: &mut EmitBuffer,
     source: &str,
     module_script: &svn_parser::ScriptSection<'_>,
     from: usize,
     to: usize,
+    rewrites: &[(usize, usize)],
 ) {
-    let part = &module_script.content[from..to];
-    let body_no_pad = part.trim_end_matches('\n');
-    let source_start = module_script.content_range.start + from as u32;
+    let base = module_script.content_range.start;
+    let content = module_script.content;
+    let part = &content[from..to];
     let overlay_start = buf.raw_string_mut().len() as u32;
-    buf.push_token_map(TokenMapEntry {
-        overlay_byte_start: overlay_start,
-        overlay_byte_end: overlay_start + body_no_pad.len() as u32,
-        source_byte_start: source_start,
-        source_byte_end: source_start + body_no_pad.len() as u32,
-    });
-    let range = svn_core::Range::new(source_start, module_script.content_range.start + to as u32);
+    // (content offset, overlay offset) pairs where byte-exact runs
+    // start, and the rewritten text.
+    let mut text = String::with_capacity(part.len() + 8);
+    let mut entries: Vec<TokenMapEntry> = Vec::new();
+    let run = |text: &String, start: usize, end: usize, overlay_len: usize| TokenMapEntry {
+        overlay_byte_start: overlay_start + text.len() as u32,
+        overlay_byte_end: overlay_start + (text.len() + overlay_len) as u32,
+        source_byte_start: base + start as u32,
+        source_byte_end: base + end as u32,
+    };
+    let mut at = from;
+    for &(lt, end) in rewrites
+        .iter()
+        .filter(|&&(lt, end)| lt >= from && end <= to)
+    {
+        entries.push(run(&text, at, lt, lt - at));
+        text.push_str(&content[at..lt]);
+        entries.push(run(&text, lt + 1, end, end - lt - 1));
+        text.push_str(&content[lt + 1..end]);
+        // The appended ` as ` (and the line break after it) has no
+        // source text of its own; a position there resolves to the
+        // moved text's last character, as a source-map lookup does.
+        let tail_len = if content[end..].starts_with('\n') {
+            5
+        } else {
+            4
+        };
+        entries.push(run(&text, end - 1, end, tail_len));
+        text.push_str(" as ");
+        at = end;
+    }
+    let tail = content[at..to].trim_end_matches('\n');
+    entries.push(run(&text, at, at + tail.len(), tail.len()));
+    text.push_str(&content[at..to]);
+    for entry in entries {
+        buf.push_token_map(entry);
+    }
+    let range = svn_core::Range::new(base + from as u32, base + to as u32);
     if part.ends_with('\n') {
-        buf.append_verbatim(part, source, range);
+        buf.append_verbatim(&text, source, range);
     } else {
-        buf.append_verbatim(&format!("{part}\n"), source, range);
+        buf.append_verbatim(&format!("{text}\n"), source, range);
     }
 }
 

@@ -1,0 +1,48 @@
+{
+    "errors": [
+        {
+            "file": "src/JavaScriptModule.svelte",
+            "line": 2,
+            "column": 1,
+            "code": 1161
+        },
+        {
+            "file": "src/JavaScriptModule.svelte",
+            "line": 3,
+            "column": 8,
+            "code": 1005
+        },
+        {
+            "file": "src/JavaScriptModule.svelte",
+            "line": 4,
+            "column": 4,
+            "code": 1005
+        },
+        {
+            "file": "src/ModuleFirst.svelte",
+            "line": 2,
+            "column": 1,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/ModuleFirst.svelte",
+            "line": 2,
+            "column": 1,
+            "code": 1161
+        },
+        {
+            "file": "src/ModuleFirst.svelte",
+            "line": 3,
+            "column": 8,
+            "code": 1005
+        },
+        {
+            "file": "src/ModuleFirst.svelte",
+            "line": 4,
+            "column": 4,
+            "code": 1005
+        }
+    ],
+    "warnings": [],
+    "_note": "svelte2tsx and the compiler's preprocess find scripts with a regular expression that needs a literal `</script>`, so a module script closed by `</script >` runs on to the instance script's close tag and both read as one module script. svelte2tsx rewrites the swallowed `</script >` (TypeScript's `<`, an empty type, and a regular expression) to `/script > as `, whose unterminated regular expression is TS1161 at the `/`. When that one script is `lang=\"ts\"`, the no-config fallback preprocessor transpiles it and acorn stops at the same `/` with a js_parse_error; a plain JavaScript module script is not transpiled, and the compiler reads both scripts as the Svelte parser does."
+}

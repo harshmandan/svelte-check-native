@@ -111,6 +111,49 @@ pub(crate) fn script_parse_error(
     None
 }
 
+/// A transpiled script the preprocessor runs on past its close tag: the
+/// open-tag range of that script, and the error the compiler raises
+/// after its body.
+///
+/// The compiler's `preprocess` finds scripts with a regular expression
+/// that needs a literal `</script>` (`regex_script_tags`), so a script
+/// the Svelte parser closes some other way (`</script >`) runs on to the
+/// next literal close tag, and the preprocessor transpiles all of it,
+/// later script blocks included, as one `<script lang="ts">` body. The
+/// compiler then reads only that one script. In it, the swallowed
+/// `</script …>` is TypeScript's `<` followed by a regular expression
+/// from the `/`; unterminated, it survives the transpile and acorn stops
+/// there with "Unterminated regular expression", mapped back to the `/`.
+/// An error in the script's own body comes first.
+pub(crate) fn merged_script_error(
+    doc: &Document<'_>,
+    source: &str,
+    settings: &Settings,
+) -> Option<(Range, Option<(String, Range)>)> {
+    let spans = svn_parser::script_tag_expression_spans(source);
+    let first = [doc.module_script.as_ref(), doc.instance_script.as_ref()]
+        .into_iter()
+        .flatten()
+        .filter(|s| {
+            crate::rules::typescript_features::script_is_transpiled(s, settings.preprocess_ts)
+        })
+        .find(|s| {
+            spans.iter().any(|&(start, end)| {
+                start == s.open_tag_range.start as usize && end > s.close_tag_range.end as usize
+            })
+        })?;
+    let slash = first.close_tag_range.start as usize + 1;
+    let regex_end = svn_parser::typescript_regex_end(source, slash);
+    let unterminated = matches!(source.as_bytes().get(regex_end), None | Some(b'\n' | b'\r'));
+    let error = unterminated.then(|| {
+        (
+            "Unterminated regular expression\nhttps://svelte.dev/e/js_parse_error".to_string(),
+            Range::new(slash as u32, slash as u32),
+        )
+    });
+    Some((first.open_tag_range, error))
+}
+
 /// The first error acorn raises in one script.
 fn first_error(script: &Script<'_, '_, '_>, mode: Mode) -> Option<Candidate> {
     let text = script.section.content;

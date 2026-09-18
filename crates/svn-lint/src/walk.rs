@@ -234,7 +234,19 @@ pub fn walk_parsed(
             preprocess_ts: ctx.ts_scripts_transpiled,
             preprocess_configured: ctx.preprocess_configured,
         };
-        if let Some((message, range)) = script_parse_error(doc, source, &scripts, &settings) {
+        // A script whose body the preprocessor runs on past its close tag
+        // is all the compiler sees up to there; see `merged_script_error`.
+        let merged = crate::rules::js_parse_error::merged_script_error(doc, source, &settings);
+        let scripts: Vec<Script<'_, '_, '_>> = match &merged {
+            Some((first, _)) => scripts
+                .into_iter()
+                .filter(|s| s.section.open_tag_range == *first)
+                .collect(),
+            None => scripts,
+        };
+        if let Some((message, range)) = script_parse_error(doc, source, &scripts, &settings)
+            .or_else(|| merged.and_then(|(_, error)| error))
+        {
             ctx.emit_error(Code::js_parse_error, message, range);
         }
     }

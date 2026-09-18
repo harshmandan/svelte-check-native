@@ -189,12 +189,14 @@ impl ScopeTree {
 /// at build time — see `Binding::fires_state_referenced_locally`. The
 /// rule layer then reads that field directly instead of re-consulting
 /// `compat` per binding.
+#[allow(clippy::too_many_arguments)]
 pub fn build_with_template_and_runes(
     doc: &Document<'_>,
     fragment: Option<&svn_parser::ast::Fragment>,
     source: &str,
     runes: bool,
     compat: crate::compat::CompatFeatures,
+    preprocess_ts: bool,
     module_program: Option<&Program<'_>>,
     instance_program: Option<&Program<'_>>,
 ) -> ScopeTree {
@@ -203,6 +205,7 @@ pub fn build_with_template_and_runes(
         fragment,
         source,
         runes,
+        preprocess_ts,
         module_program,
         instance_program,
     );
@@ -378,11 +381,20 @@ pub fn build_with_template(
     fragment: Option<&svn_parser::ast::Fragment>,
     source: &str,
     runes: bool,
+    preprocess_ts: bool,
     module_program: Option<&Program<'_>>,
     instance_program: Option<&Program<'_>>,
 ) -> ScopeTree {
     let mut tree_builder = TreeBuilder::new();
     tree_builder.runes = runes;
+    tree_builder.preprocess_ts = preprocess_ts;
+    tree_builder.bidi_warned = crate::rules::bidi_state::compiler_warned(
+        doc,
+        fragment,
+        source,
+        module_program,
+        instance_program,
+    );
 
     // Module scope: if there's no module script at all we still create
     // a synthetic empty one so resolve() has a stable root. Matches
@@ -481,6 +493,12 @@ struct TreeBuilder {
     template_rule_events: Vec<ScriptRuleEvent>,
     /// See [`ScopeTree::declaration_error`].
     declaration_error: Option<(Code, String, Range)>,
+    /// The literals the compiler's stateful bidi search reports (see
+    /// `bidi_state`); `None` when the file holds no bidi character.
+    bidi_warned: Option<std::collections::HashSet<u32>>,
+    /// The project's preprocessors transpile `<script lang="ts">`
+    /// (see `typescript_features::script_is_transpiled`).
+    preprocess_ts: bool,
     /// The file's runes mode, for the template-expression rule hooks.
     runes: bool,
     /// See [`ScopeTree::script_rule_events`] — filled by the
@@ -605,6 +623,8 @@ impl TreeBuilder {
             template_rule_events: Vec::new(),
             declaration_error: None,
             runes: false,
+            preprocess_ts: false,
+            bidi_warned: None,
         }
     }
 
@@ -982,6 +1002,7 @@ impl TreeBuilder {
             hooks: Some(ScriptRuleHooks {
                 runes,
                 is_instance: false,
+                transpiled: false,
             }),
             in_reactive_expression: true,
             props_calls: 0,
@@ -1448,6 +1469,7 @@ impl TreeBuilder {
         leading_ignores: &[SmolStr],
     ) {
         let base = script.content_range.start;
+        let preprocess_ts = self.preprocess_ts;
         let start_depth = self.scopes[root_scope.0 as usize].function_depth;
         // Index every comment in the script body so the walker can
         // resolve leading `// svelte-ignore …` runs per node. Offsets
@@ -1475,7 +1497,14 @@ impl TreeBuilder {
             script_content: script.content,
             ignore_frames: Vec::new(),
             counts_await: is_instance,
-            hooks: Some(ScriptRuleHooks { runes, is_instance }),
+            hooks: Some(ScriptRuleHooks {
+                runes,
+                is_instance,
+                transpiled: crate::rules::typescript_features::script_is_transpiled(
+                    script,
+                    preprocess_ts,
+                ),
+            }),
             in_reactive_expression: false,
             props_calls: 0,
             declarator_init_call: None,
@@ -1485,6 +1514,9 @@ impl TreeBuilder {
         // reference recorded during this script walk.
         if !leading_ignores.is_empty() {
             walker.ignore_frames.push(leading_ignores.to_vec());
+        }
+        for directive in &program.directives {
+            walker.string_literal_hook(&directive.expression);
         }
         for stmt in &program.body {
             walker.at_program_top = true;
@@ -2076,6 +2108,34 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         Range::new(start + self.base_offset, end + self.base_offset)
     }
 
+    /// A string literal outside expression position (a property key,
+    /// a module source, a directive), which the compiler's `Literal`
+    /// visitor tests all the same.
+    fn string_literal_hook(&mut self, lit: &oxc_ast::ast::StringLiteral<'_>) {
+        if let Some(h) = self.hooks {
+            let range = self.abs(lit.span.start, lit.span.end);
+            h.string_literal(
+                &mut self.tree.script_rule_events,
+                &self.ignore_frames,
+                self.tree.bidi_warned.as_ref(),
+                &lit.value,
+                range,
+            );
+        }
+    }
+
+    /// A property key: a computed key is an expression, a plain string
+    /// key a literal.
+    fn visit_key(&mut self, key: &PropertyKey<'_>, computed: bool) {
+        if computed {
+            if let Some(k) = expression_from_property_key(key) {
+                self.visit_expr(k);
+            }
+        } else if let PropertyKey::StringLiteral(lit) = key {
+            self.string_literal_hook(lit);
+        }
+    }
+
     fn write_origin(&self) -> WriteOrigin {
         match &self.hooks {
             Some(h) if h.is_instance => WriteOrigin::Instance,
@@ -2276,6 +2336,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                         );
                     }
                 }
+                self.string_literal_hook(&imp.source);
             }
             Statement::ExportDeclaration(end) => {
                 {
@@ -2340,6 +2401,10 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             }
             Statement::ExportFromDeclaration(end) if !end.export_kind.is_type() => {
                 self.check_default_export_specifiers(&end.specifiers, end.span);
+                self.string_literal_hook(&end.source);
+            }
+            Statement::ExportAllDeclaration(all) if !all.export_kind.is_type() => {
+                self.string_literal_hook(&all.source);
             }
             Statement::BlockStatement(b) => {
                 // Non-function block — porous w.r.t. function_depth.
@@ -2653,11 +2718,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             let pushed = self.push_leading_ignores(Some(m.span().start));
             match m {
                 ClassElement::MethodDefinition(md) => {
-                    if md.computed
-                        && let Some(k) = expression_from_property_key(&md.key)
-                    {
-                        self.visit_expr(k);
-                    }
+                    self.visit_key(&md.key, md.computed);
                     self.with_function(|w| {
                         if let Some(body) = &md.value.body {
                             for p in &md.value.params.items {
@@ -2673,21 +2734,13 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     });
                 }
                 ClassElement::PropertyDefinition(p) => {
-                    if p.computed
-                        && let Some(k) = expression_from_property_key(&p.key)
-                    {
-                        self.visit_expr(k);
-                    }
+                    self.visit_key(&p.key, p.computed);
                     if let Some(v) = &p.value {
                         self.visit_expr(v);
                     }
                 }
                 ClassElement::AccessorProperty(p) => {
-                    if p.computed
-                        && let Some(k) = expression_from_property_key(&p.key)
-                    {
-                        self.visit_expr(k);
-                    }
+                    self.visit_key(&p.key, p.computed);
                     if let Some(v) = &p.value {
                         self.visit_expr(v);
                     }
@@ -3230,34 +3283,36 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 // inner expression.
                 self.visit_expr(&p.expression);
             }
-            Expression::StringLiteral(lit) => {
-                if let Some(h) = self.hooks {
-                    let range = self.abs(lit.span.start, lit.span.end);
-                    h.string_literal(
-                        &mut self.tree.script_rule_events,
-                        &self.ignore_frames,
-                        &lit.value,
-                        range,
-                    );
-                }
-            }
+            Expression::StringLiteral(lit) => self.string_literal_hook(lit),
             Expression::TemplateLiteral(t) => {
+                for e in &t.expressions {
+                    self.visit_expr(e);
+                }
                 if let Some(h) = self.hooks {
                     h.template_literal(
                         &mut self.tree.script_rule_events,
                         &self.ignore_frames,
+                        self.tree.bidi_warned.as_ref(),
                         t,
                         self.base_offset,
                     );
-                }
-                for e in &t.expressions {
-                    self.visit_expr(e);
                 }
             }
             Expression::TaggedTemplateExpression(t) => {
                 self.visit_expr(&t.tag);
                 for e in &t.quasi.expressions {
                     self.visit_expr(e);
+                }
+                // The template of a tagged template is an ordinary
+                // template literal to the compiler's visitors.
+                if let Some(h) = self.hooks {
+                    h.template_literal(
+                        &mut self.tree.script_rule_events,
+                        &self.ignore_frames,
+                        self.tree.bidi_warned.as_ref(),
+                        &t.quasi,
+                        self.base_offset,
+                    );
                 }
             }
             Expression::AwaitExpression(a) => {
@@ -3343,13 +3398,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             let pushed = self.push_leading_ignores(Some(p.span().start));
             match p {
                 ObjectPropertyKind::ObjectProperty(op) => {
-                    if op.computed {
-                        if let PropertyKey::StaticIdentifier(_) = &op.key {
-                            // ignore
-                        } else if let Some(e) = expression_from_property_key(&op.key) {
-                            self.visit_expr(e);
-                        }
-                    }
+                    self.visit_key(&op.key, op.computed);
                     self.visit_expr(&op.value);
                 }
                 // `{ ...rest }` — walk the spread argument so
@@ -3662,11 +3711,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                             }
                         }
                         ATP::AssignmentTargetPropertyProperty(pp) => {
-                            if pp.computed
-                                && let Some(k) = expression_from_property_key(&pp.name)
-                            {
-                                self.visit_expr(k);
-                            }
+                            self.visit_key(&pp.name, pp.computed);
                             self.visit_assignment_target_maybe_default(&pp.binding);
                         }
                     }
@@ -3781,11 +3826,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                             }
                         }
                         ATP::AssignmentTargetPropertyProperty(pp) => {
-                            if pp.computed
-                                && let Some(k) = expression_from_property_key(&pp.name)
-                            {
-                                self.visit_expr(k);
-                            }
+                            self.visit_key(&pp.name, pp.computed);
                             maybe_default(self, &pp.binding);
                         }
                     }

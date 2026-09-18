@@ -548,6 +548,9 @@ pub trait TemplateScopeVisitor {
     /// every name; lint ignores the list and re-parses for
     /// declarations.
     fn visit_at_const(&mut self, bound_names: &[SmolStr], expr_range: Range) {}
+
+    /// A text node of a fragment, in walk order.
+    fn visit_text(&mut self, range: Range) {}
 }
 
 /// Drive the visitor over a template fragment. Handles all
@@ -773,7 +776,8 @@ fn walk_node_inner<V: TemplateScopeVisitor>(node: &Node, source: &str, visitor: 
             visitor.visit_expr(i.expression_range);
         }
         // Leaf nodes — no children, no scope, nothing for the visitor.
-        Node::Text(_) | Node::Comment(_) => {}
+        Node::Text(t) => visitor.visit_text(t.range),
+        Node::Comment(_) => {}
     }
 }
 
@@ -1079,7 +1083,8 @@ mod compiler {
                 visitor.visit_at_const(&names, i.expression_range);
             }
             Node::Interpolation(i) => visitor.visit_expr(i.expression_range),
-            Node::Text(_) | Node::Comment(_) => {}
+            Node::Text(t) => visitor.visit_text(t.range),
+            Node::Comment(_) => {}
         }
     }
 }

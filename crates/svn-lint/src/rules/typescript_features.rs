@@ -116,6 +116,24 @@ fn script_tag_lang(after: &str) -> Option<&str> {
     None
 }
 
+/// Whether the project's preprocessors (`preprocess_ts`: they
+/// transpile TypeScript scripts at all) turn this script into
+/// JavaScript before the compiler sees it. A preprocessor reads the
+/// tag's attributes as an object, so the last `lang` wins, and only the
+/// exact value `ts` is handled.
+pub(crate) fn script_is_transpiled(
+    script: &svn_parser::ScriptSection<'_>,
+    preprocess_ts: bool,
+) -> bool {
+    preprocess_ts
+        && script
+            .attrs
+            .iter()
+            .rev()
+            .find(|a| a.name == "lang")
+            .is_some_and(|a| a.value.as_deref() == Some("ts"))
+}
+
 /// The first finding in a script (or a template expression parsed as
 /// a program), with spans offset by `base`. `transpiled` says a
 /// preprocessor turned the script into JavaScript first.

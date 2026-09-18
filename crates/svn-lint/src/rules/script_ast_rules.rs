@@ -91,6 +91,10 @@ pub(crate) struct ScriptRuleHooks {
     pub runes: bool,
     /// Instance script vs module script.
     pub is_instance: bool,
+    /// A preprocessor turns the script into JavaScript before the
+    /// compiler runs, and svelte-check maps the compiler's positions
+    /// back through the transpiler's source map.
+    pub transpiled: bool,
 }
 
 /// Does any active ignore frame mention `code`? Upstream's per-node
@@ -197,15 +201,23 @@ impl ScriptRuleHooks {
         }
     }
 
-    /// `bidirectional_control_characters` on a string literal.
+    /// `bidirectional_control_characters` on a string literal. `warned`
+    /// is the set of literal starts the compiler's stateful search
+    /// reports (`bidi_state`); `None` when the file holds no bidi
+    /// character.
     pub fn string_literal(
         &self,
         events: &mut Vec<ScriptRuleEvent>,
         frames: &[Vec<SmolStr>],
+        warned: Option<&std::collections::HashSet<u32>>,
         value: &str,
         range: Range,
     ) {
-        if has_bidi_char(value) && !is_ignored(frames, Code::bidirectional_control_characters) {
+        let warns = match warned {
+            Some(set) => set.contains(&range.start),
+            None => has_bidi_char(value),
+        };
+        if warns && !is_ignored(frames, Code::bidirectional_control_characters) {
             events.push(ScriptRuleEvent::Warning {
                 code: Code::bidirectional_control_characters,
                 message: messages::bidirectional_control_characters(),
@@ -215,24 +227,32 @@ impl ScriptRuleHooks {
     }
 
     /// `bidirectional_control_characters` on a template literal's
-    /// quasis. All quasis are checked before the caller walks the
-    /// interpolation expressions, matching upstream's visitor order.
+    /// quasis. The compiler visits the substitutions first, so the
+    /// caller walks them before calling this. `warned` as in
+    /// [`Self::string_literal`].
     pub fn template_literal(
         &self,
         events: &mut Vec<ScriptRuleEvent>,
         frames: &[Vec<SmolStr>],
+        warned: Option<&std::collections::HashSet<u32>>,
         tl: &TemplateLiteral<'_>,
         base_offset: u32,
     ) {
         for q in &tl.quasis {
-            if let Some(cooked) = q.value.cooked.as_deref()
-                && has_bidi_char(cooked)
-                && !is_ignored(frames, Code::bidirectional_control_characters)
-            {
+            let warns = match warned {
+                Some(set) => set.contains(&(q.span.start + base_offset)),
+                None => q.value.cooked.as_deref().is_some_and(has_bidi_char),
+            };
+            if warns && !is_ignored(frames, Code::bidirectional_control_characters) {
+                // TypeScript's output maps a template chunk from the
+                // delimiter before it (the backtick or the `}` closing
+                // the previous substitution), so a transpiled script's
+                // position lands there.
+                let start = q.span.start + base_offset - u32::from(self.transpiled);
                 events.push(ScriptRuleEvent::Warning {
                     code: Code::bidirectional_control_characters,
                     message: messages::bidirectional_control_characters(),
-                    range: Range::new(q.span.start + base_offset, q.span.end + base_offset),
+                    range: Range::new(start, q.span.end + base_offset),
                 });
             }
         }

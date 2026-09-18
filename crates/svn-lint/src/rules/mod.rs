@@ -13,6 +13,7 @@
 //! `walk::walk`.
 
 pub mod a11y_rules;
+pub(crate) mod bidi_state;
 pub mod bind_properties;
 pub mod binding_rules;
 pub mod block_rules;
@@ -23,6 +24,7 @@ pub mod script_ast_rules;
 pub mod script_rules;
 pub mod svelte_element_rules;
 pub mod text_rules;
+pub(crate) mod transpile_positions;
 pub(crate) mod typescript_features;
 
 // Utility helpers shared by rule modules.

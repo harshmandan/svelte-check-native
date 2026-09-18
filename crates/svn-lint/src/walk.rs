@@ -155,6 +155,7 @@ pub fn walk_parsed(
         source,
         ctx.runes,
         ctx.compat,
+        ctx.ts_scripts_transpiled,
         module_program,
         instance_program,
     );
@@ -178,6 +179,7 @@ pub fn walk_parsed(
                 source,
                 ctx.runes,
                 ctx.compat,
+                ctx.ts_scripts_transpiled,
                 module_program,
                 instance_program,
             );
@@ -287,7 +289,13 @@ pub fn walk_parsed(
             let range = match ctx.first_slot.as_ref() {
                 Some((_, range)) => *range,
                 None => {
-                    let at = source.find("$$slot").unwrap_or(0) as u32;
+                    let at = crate::rules::transpile_positions::first_dollar_slot(
+                        doc,
+                        source,
+                        module_program,
+                        instance_program,
+                        ctx.ts_scripts_transpiled,
+                    );
                     svn_core::Range::new(at, at)
                 }
             };
@@ -314,16 +322,9 @@ fn typescript_feature_check(
     ctx: &mut LintContext<'_>,
 ) {
     use crate::rules::typescript_features::{Finding, first_finding, first_template_finding};
-    let preprocessed = ctx.ts_scripts_transpiled;
+    let preprocess_ts = ctx.ts_scripts_transpiled;
     let transpiled = |s: &svn_parser::ScriptSection<'_>| {
-        // The preprocessor sees the tag's attributes as an object, so
-        // the last `lang` wins; only the exact value `ts` is handled.
-        preprocessed
-            && s.attrs
-                .iter()
-                .rev()
-                .find(|a| a.name == "lang")
-                .is_some_and(|a| a.value.as_deref() == Some("ts"))
+        crate::rules::typescript_features::script_is_transpiled(s, preprocess_ts)
     };
     let script_finding = |s: Option<&svn_parser::ScriptSection<'_>>,
                           program: Option<&oxc_ast::ast::Program<'_>>| {
@@ -602,6 +603,7 @@ fn walk_fragment_impl(
         match node {
             Node::Element(el) => {
                 crate::rules::element_rules::visit(el, ctx, parent_tag, ancestors);
+                attribute_text(&el.attributes, ctx);
                 flush_expr_events_before(children_start(&el.children, el.range), ctx);
                 ancestors.push(Ancestor::Element(el.name.to_string()));
                 // `<slot>` is a SlotElement to the compiler: it neither
@@ -631,6 +633,7 @@ fn walk_fragment_impl(
             }
             Node::Component(comp) => {
                 crate::rules::component_rules::visit(comp, ctx);
+                attribute_text(&comp.attributes, ctx);
                 flush_expr_events_before(children_start(&comp.children, comp.range), ctx);
                 // A Boundary frame: the HTML placement checks stop
                 // here (upstream RegularElement.js breaks at a
@@ -648,6 +651,10 @@ fn walk_fragment_impl(
             }
             Node::SvelteElement(se) => {
                 crate::rules::svelte_element_rules::visit(se, ctx, ancestors);
+                // `<svelte:options>` is lifted out of the template.
+                if se.kind != SvelteElementKind::Options {
+                    attribute_text(&se.attributes, ctx);
+                }
                 flush_expr_events_before(children_start(&se.children, se.range), ctx);
                 // Placement checks stop here too, while the a11y
                 // is_parent walk answers "unknown tag — play it safe"
@@ -786,6 +793,32 @@ fn text_placement_error(parent: &str, range: svn_core::Range, ctx: &mut LintCont
             messages::node_invalid_placement(&msg),
             range,
         );
+    }
+}
+
+/// The compiler visits an element's attributes after its own checks:
+/// value text chunks run the text visitor, interleaved with the
+/// expressions' events by position.
+fn attribute_text(attributes: &[Attribute], ctx: &mut LintContext<'_>) {
+    use svn_parser::ast::{AttrValuePart, DirectiveValue};
+    for attr in attributes {
+        let parts = match attr {
+            Attribute::Plain(p) => p.value.as_ref().map(|v| v.parts.as_slice()),
+            Attribute::Directive(d) => match &d.value {
+                Some(DirectiveValue::Quoted(v)) => Some(v.parts.as_slice()),
+                _ => None,
+            },
+            Attribute::Expression(_)
+            | Attribute::Shorthand(_)
+            | Attribute::Spread(_)
+            | Attribute::Comment(_) => None,
+        };
+        for part in parts.unwrap_or_default() {
+            if let AttrValuePart::Text { range } = part {
+                flush_expr_events_before(range.start, ctx);
+                crate::rules::text_rules::visit_attribute_text(*range, ctx);
+            }
+        }
     }
 }
 

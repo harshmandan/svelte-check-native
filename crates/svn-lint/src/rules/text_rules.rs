@@ -31,50 +31,59 @@ pub fn visit_text(t: &Text, preceding: &[Node], ctx: &mut LintContext<'_>) {
     //
     // Walk contiguous runs of bidi-control chars — upstream fires
     // once per match (each match is a run of 1+ of these chars).
-    let start_byte = t.range.start as usize;
-    let content = t.range.slice(ctx.source);
+    for run in bidi_runs(t.range, ctx.source) {
+        // A text node does not take the ignore comments before it
+        // the way elements do. Instead, each match looks at every
+        // earlier comment in the fragment (not just the adjacent
+        // ones) and stops at the first that ignores the warning;
+        // each comment it parses reports its unknown codes again.
+        let mut is_ignored = false;
+        for sibling in preceding {
+            if is_ignored {
+                break;
+            }
+            if let Node::Comment(c) = sibling {
+                is_ignored = crate::ignore::comment_ignores_code(
+                    c,
+                    Code::bidirectional_control_characters,
+                    ctx,
+                );
+            }
+        }
+        if !is_ignored {
+            let msg = messages::bidirectional_control_characters();
+            ctx.emit(Code::bidirectional_control_characters, msg, run);
+        }
+    }
+}
+
+/// The text chunks of an attribute value are text nodes to the
+/// compiler too; outside a fragment they skip the comment scan.
+pub fn visit_attribute_text(range: Range, ctx: &mut LintContext<'_>) {
+    for run in bidi_runs(range, ctx.source) {
+        let msg = messages::bidirectional_control_characters();
+        ctx.emit(Code::bidirectional_control_characters, msg, run);
+    }
+}
+
+/// Each maximal run of bidi-control characters in `range`.
+fn bidi_runs(range: Range, source: &str) -> Vec<Range> {
+    let base = range.start;
+    let content = range.slice(source);
+    let mut runs = Vec::new();
     let mut chars = content.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
         if is_bidi_control(c) {
-            // Expand to contiguous run.
-            let run_start = i;
-            let mut run_end = i + c.len_utf8();
+            let mut end = i + c.len_utf8();
             while let Some(&(j, nc)) = chars.peek() {
                 if !is_bidi_control(nc) {
                     break;
                 }
                 chars.next();
-                run_end = j + nc.len_utf8();
+                end = j + nc.len_utf8();
             }
-            // A text node does not take the ignore comments before it
-            // the way elements do. Instead, each match looks at every
-            // earlier comment in the fragment (not just the adjacent
-            // ones) and stops at the first that ignores the warning;
-            // each comment it parses reports its unknown codes again.
-            let mut is_ignored = false;
-            for sibling in preceding {
-                if is_ignored {
-                    break;
-                }
-                if let Node::Comment(c) = sibling {
-                    is_ignored = crate::ignore::comment_ignores_code(
-                        c,
-                        Code::bidirectional_control_characters,
-                        ctx,
-                    );
-                }
-            }
-            if is_ignored {
-                continue;
-            }
-            let abs_start = (start_byte + run_start) as u32;
-            let abs_end = (start_byte + run_end) as u32;
-            let msg = messages::bidirectional_control_characters();
-            ctx.emit(
-                Code::bidirectional_control_characters,
-                msg,
-                Range::new(abs_start, abs_end),
-            );
+            runs.push(Range::new(base + i as u32, base + end as u32));
         }
     }
+    runs
 }

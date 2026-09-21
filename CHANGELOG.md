@@ -6,6 +6,23 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.8.0]
+
+Adds Android (Termux) support and updates oxc.
+
+### Added
+
+- **Android arm64** (#67). The `linux-arm64` binary is now a static
+  musl build, so it has no glibc dependency and the same package
+  installs and runs on Android. TypeScript 7 publishes no Android
+  build, so install its `linux-arm64` compiler explicitly — see the
+  README's Android section. The static build is within noise of the
+  previous glibc one on a 1358-file workspace.
+
+### Changed
+
+- oxc 0.148 → 0.149.
+
 ## [1.7.0]
 
 A parity release built from a source-level audit of every place our

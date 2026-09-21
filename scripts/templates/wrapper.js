@@ -35,6 +35,7 @@ function resolveBinary() {
       'darwin-x64',
       'linux-arm64',
       'linux-x64',
+      'android-arm64',
       'win32-x64',
     ];
     process.stderr.write(

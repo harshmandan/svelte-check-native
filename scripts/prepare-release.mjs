@@ -9,7 +9,7 @@
 //   - dist-packs/pkgs/svelte-check-native/package.json         (main)
 //   - dist-packs/pkgs/svelte-check-native/README.md            (mirror of /README.md)
 //   - dist-packs/pkgs/svelte-check-native/bin/svelte-check-native.js  (copy of scripts/templates/wrapper.js)
-//   - dist-packs/pkgs/svelte-check-native-<platform>/package.json   (× 5 platforms)
+//   - dist-packs/pkgs/svelte-check-native-<platform>/package.json   (one per target in targets.mjs)
 //
 // Binaries (copied separately by `copy-binary.mjs` / `build-all.mjs`)
 // land at `dist-packs/pkgs/svelte-check-native-<platform>/bin/<bin>`.

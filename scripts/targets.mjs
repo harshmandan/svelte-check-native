@@ -34,6 +34,15 @@ export const TARGETS = [
     nativeOnly: false,
   },
   {
+    // Android (Termux) has no glibc, so the gnu build can't run there.
+    // A static musl binary needs no libc at all and runs as-is on
+    // Android's kernel.
+    rustTarget: 'aarch64-unknown-linux-musl',
+    npmPlatform: 'android-arm64',
+    binName: 'svelte-check-native',
+    nativeOnly: false,
+  },
+  {
     rustTarget: 'x86_64-pc-windows-gnu',
     npmPlatform: 'win32-x64',
     binName: 'svelte-check-native.exe',

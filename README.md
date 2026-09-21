@@ -123,6 +123,19 @@ as upstream's does.
 - `CLAUDECODE=1` — makes `machine` the default output format.
 - `NO_COLOR` / `FORCE_COLOR` — turn colour off / on, as for upstream.
 
+## Android (Termux)
+
+`svelte-check-native` ships an `android-arm64` binary. TypeScript 7
+doesn't publish an Android build, so npm skips its native compiler
+there. Its `linux-arm64` build runs fine on Android; install it
+explicitly:
+
+```sh
+npm i -D --force @typescript/typescript-linux-arm64@<your typescript version>
+```
+
+Or point `TSGO_BIN` at any Linux arm64 `tsc`/`tsgo` binary.
+
 ## Exit codes
 
 - `0` — no errors (and no warnings if `--fail-on-warnings`)

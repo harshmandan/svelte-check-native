@@ -135,7 +135,7 @@ function platformPackageJson(target, v) {
     license: 'MIT',
     author: 'Harsh Mandan',
     files: [`bin/${target.binName}`],
-    os: [os],
+    os: target.npmOs ?? [os],
     cpu: [arch],
     engines: { node: '>=18' },
   };

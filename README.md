@@ -125,10 +125,10 @@ as upstream's does.
 
 ## Android (Termux)
 
-`svelte-check-native` ships an `android-arm64` binary. TypeScript 7
-doesn't publish an Android build, so npm skips its native compiler
-there. Its `linux-arm64` build runs fine on Android; install it
-explicitly:
+`svelte-check-native`'s `linux-arm64` binary is static, so it installs
+and runs on Android too. TypeScript 7 doesn't publish an Android
+build, so npm skips its native compiler there. Its `linux-arm64` build
+runs fine on Android; install it explicitly:
 
 ```sh
 npm i -D --force @typescript/typescript-linux-arm64@<your typescript version>

@@ -706,12 +706,14 @@ runnable; bench-wide sweeps stay interactive (bench isn't part of
 
 ## Release workflow
 
-Seven packages ship together: `svelte-check-native` (meta wrapper) +
-six platform binaries (`-darwin-arm64`, `-darwin-x64`,
-`-linux-arm64`, `-linux-x64`, `-android-arm64`, `-win32-x64`). The
-android package is a static `aarch64-unknown-linux-musl` build. The
-wrapper's `optionalDependencies` pins each platform at the same version.
-`scripts/prepare-release.mjs` keeps the seven `package.json` versions
+Six packages ship together: `svelte-check-native` (meta wrapper) +
+five platform binaries (`-darwin-arm64`, `-darwin-x64`,
+`-linux-arm64`, `-linux-x64`, `-win32-x64`). `-linux-arm64` is a
+static `aarch64-unknown-linux-musl` build that also installs on
+Android (`os: ["linux", "android"]`; the wrapper maps `android` to
+`linux`). The wrapper's `optionalDependencies` pins each platform at
+the same version. `scripts/prepare-release.mjs` keeps the six
+`package.json` versions
 and pins in lockstep — always re-run after any version bump.
 
 **Pre-bump diagnostic-coverage snapshot.** Before bumping the

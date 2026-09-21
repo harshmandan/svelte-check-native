@@ -19,7 +19,8 @@ const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 
 function platformPackageName() {
-  const platform = process.platform; // 'darwin' | 'linux' | 'win32' | ...
+  // Android runs the static linux binary; its package declares both OSes.
+  const platform = process.platform === 'android' ? 'linux' : process.platform;
   const arch = process.arch;          // 'arm64' | 'x64' | ...
   return `svelte-check-native-${platform}-${arch}`;
 }
@@ -35,7 +36,6 @@ function resolveBinary() {
       'darwin-x64',
       'linux-arm64',
       'linux-x64',
-      'android-arm64',
       'win32-x64',
     ];
     process.stderr.write(

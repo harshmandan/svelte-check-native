@@ -6,7 +6,9 @@
 // The wrapper at npm/svelte-check-native/bin/svelte-check-native.js
 // computes `svelte-check-native-${process.platform}-${process.arch}`
 // and `require.resolve`s its package.json — so npmPlatform here MUST
-// match `${process.platform}-${process.arch}` for each target.
+// match `${process.platform}-${process.arch}` for each target. The one
+// exception is Android, which the wrapper maps to `linux` (see
+// `npmOs` below).
 
 export const TARGETS = [
   {
@@ -22,23 +24,18 @@ export const TARGETS = [
     nativeOnly: false,
   },
   {
-    rustTarget: 'aarch64-unknown-linux-gnu',
+    // Static musl, not gnu: it needs no libc, so the same binary also
+    // runs on Android (Termux), which has no glibc. Measured on a
+    // 1358-file workspace, it's within noise of the gnu build.
+    rustTarget: 'aarch64-unknown-linux-musl',
     npmPlatform: 'linux-arm64',
+    npmOs: ['linux', 'android'],
     binName: 'svelte-check-native',
     nativeOnly: false,
   },
   {
     rustTarget: 'x86_64-unknown-linux-gnu',
     npmPlatform: 'linux-x64',
-    binName: 'svelte-check-native',
-    nativeOnly: false,
-  },
-  {
-    // Android (Termux) has no glibc, so the gnu build can't run there.
-    // A static musl binary needs no libc at all and runs as-is on
-    // Android's kernel.
-    rustTarget: 'aarch64-unknown-linux-musl',
-    npmPlatform: 'android-arm64',
     binName: 'svelte-check-native',
     nativeOnly: false,
   },

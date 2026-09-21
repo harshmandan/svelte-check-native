@@ -351,7 +351,7 @@ fn is_valid_binding_pattern(pattern: &str) -> bool {
         oxc_span::SourceType::default().with_typescript(true),
     )
     .parse();
-    parsed.diagnostics.is_empty() && !parsed.panicked && parsed.program.body.len() == 1
+    parsed.diagnostics.is_empty() && !parsed.fatal_error && parsed.program.body.len() == 1
 }
 
 /// Plain-identifier check for index bindings (`i` in `as item, i`).

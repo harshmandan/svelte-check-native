@@ -219,7 +219,7 @@ fn early_error_before(text: &str, stop: u32, mode: Mode) -> Option<Candidate> {
         let allocator = oxc_allocator::Allocator::default();
         let prefix = &text[..cut];
         let parsed = oxc_parser::Parser::new(&allocator, prefix, source_type).parse();
-        if parsed.panicked {
+        if parsed.fatal_error {
             continue;
         }
         return first_early_error(&parsed.program, prefix, mode);
@@ -246,7 +246,7 @@ fn early_error_in_typescript_reading(text: &str, stop: u32, mode: Mode) -> Optio
         .with_module(true)
         .with_typescript(true);
     let parsed = oxc_parser::Parser::new(&allocator, text, source_type).parse();
-    if parsed.panicked || !parsed.diagnostics.is_empty() {
+    if parsed.fatal_error || !parsed.diagnostics.is_empty() {
         return None;
     }
     first_early_error(&parsed.program, text, mode).filter(|c| c.detect < stop)

@@ -779,7 +779,7 @@ fn bind_pair_split(src: &str, start: u32, end: u32) -> Option<u32> {
         oxc_span::SourceType::default().with_typescript(true),
     )
     .parse();
-    if !parsed.diagnostics.is_empty() || parsed.panicked || parsed.program.body.len() != 1 {
+    if !parsed.diagnostics.is_empty() || parsed.fatal_error || parsed.program.body.len() != 1 {
         return None;
     }
     let Statement::ExpressionStatement(stmt) = &parsed.program.body[0] else {

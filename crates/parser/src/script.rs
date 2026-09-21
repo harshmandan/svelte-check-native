@@ -48,7 +48,7 @@ pub fn parse_script_body<'alloc>(
     let ParserReturn {
         program,
         diagnostics,
-        panicked,
+        fatal_error,
         ..
     } = Parser::new(allocator, content, source_type).parse();
 
@@ -59,7 +59,7 @@ pub fn parse_script_body<'alloc>(
         // vec our `ParsedScript` exposes.
         errors: diagnostics.into_vec(),
         is_typescript: lang == ScriptLang::Ts,
-        panicked,
+        panicked: fatal_error,
     }
 }
 

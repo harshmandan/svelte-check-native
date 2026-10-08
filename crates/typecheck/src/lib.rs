@@ -320,6 +320,9 @@ pub struct CheckSession {
     /// trees) to the pre-tsgo critical path. Joined in [`Self::finish`]
     /// right before the overlay tsconfig build consumes the result.
     kit_types_mirror_task: std::thread::JoinHandle<std::io::Result<Option<PathBuf>>>,
+    /// Extra `paths` entries for the overlay tsconfig; see
+    /// [`Self::set_path_aliases`].
+    path_aliases: Vec<(String, PathBuf)>,
 }
 
 impl CheckSession {
@@ -357,7 +360,18 @@ impl CheckSession {
         Ok(Self {
             layout,
             kit_types_mirror_task,
+            path_aliases: Vec::new(),
         })
+    }
+
+    /// Extra `paths` entries — pattern and absolute target, `*` kept —
+    /// for the overlay tsconfig. Each gets the treatment the user's own
+    /// entries get: its target, then that target's mirror in the
+    /// overlay, so a `.svelte` file reached through the alias resolves
+    /// to its generated types. A pattern the user's `paths` already maps
+    /// is left to the user's entry.
+    pub fn set_path_aliases(&mut self, aliases: Vec<(String, PathBuf)>) {
+        self.path_aliases = aliases;
     }
 
     /// Write one input's generated TS (and ambient sidecar) into the
@@ -666,6 +680,7 @@ impl CheckSession {
             &js_overlay_paths,
             &kit_overlay_sources,
             kit_types_mirror.as_deref(),
+            &self.path_aliases,
         );
         let overlay_text = serde_json::to_string_pretty(&overlay)?;
         write_if_changed(&layout.overlay_tsconfig, &overlay_text)?;

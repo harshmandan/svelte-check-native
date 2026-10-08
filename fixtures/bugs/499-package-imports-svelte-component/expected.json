@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "src/App.svelte",
+            "line": 5,
+            "column": 8,
+            "code": 2322
+        }
+    ],
+    "_note": "A component imported through package.json `imports` (`#lib/Card.svelte`, SvelteKit 3's replacement for `$lib`) carries its own types: `'nope'` is checked against the module script's `Scope`, so the one error is TS2322 on `bad`. svelte-check --tsgo cannot reach the component's generated types this way — package.json resolution lands on the source directory and `rootDirs` covers relative imports only — so it reports TS2307 here (or, with svelte installed, TS2614 through the `*.svelte` wildcard); the default engine resolves it. The TSGO-ENHANCEMENT layer adds the imports entries as overlay `paths`; `--disable-enhance` restores the --tsgo result."
+}

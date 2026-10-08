@@ -1955,10 +1955,16 @@ fn check_project(
         // background `.svelte-kit/types/` mirror start here, BEFORE
         // the emit fan-out, so the mirror's tree walk overlaps the
         // whole emit phase instead of just the overlay writes.
-        let session = match svn_typecheck::CheckSession::new(workspace) {
+        let mut session = match svn_typecheck::CheckSession::new(workspace) {
             Ok(session) => session,
             Err(err) => return Err(run_failed(&err)),
         };
+        // TSGO-ENHANCEMENT: a `.svelte` file imported through package.json
+        // `imports` (SvelteKit 3's `#lib/...`) reaches its generated types
+        // through overlay `paths`, the way `$lib` already does.
+        if !disable_enhance {
+            session.set_path_aliases(svn_enhance::package_import_aliases(tsconfig));
+        }
         let session_ref = &session;
         // TSGO-ENHANCEMENT: shared `.svelte`-import resolver, built once
         // (tsconfig `paths` + node_modules + `exports`) and borrowed by the

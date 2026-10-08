@@ -1224,6 +1224,7 @@ dependencies = [
  "oxc_ast_visit",
  "oxc_resolver",
  "rayon",
+ "serde_json",
  "svn-core",
  "svn-parser",
  "tempfile",

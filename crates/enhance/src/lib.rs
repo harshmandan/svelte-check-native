@@ -32,7 +32,16 @@
 //! Because this layer intentionally diverges from `svelte-check --tsgo`,
 //! it can be turned off at runtime — without recompiling — via the CLI's
 //! `--disable-enhance` flag or the `SVN_DISABLE_ENHANCE` env var. Both
-//! route through `SvelteImportResolver::disabled()`.
+//! route through `SvelteImportResolver::disabled()` and skip
+//! `package_import_aliases`.
+//!
+//! ## What is here
+//!
+//! - `missing_svelte_imports`: TS2307 for a `.svelte` import that
+//!   resolves to no file.
+//! - `package_imports`: `.svelte` files imported through package.json
+//!   `imports` (SvelteKit 3's `#lib`), which `--tsgo` sends to svelte's
+//!   `*.svelte` wildcard instead of the component's types.
 //!
 //! ## Removal is mechanical
 //!
@@ -44,7 +53,9 @@
 
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 mod missing_svelte_imports;
+mod package_imports;
 
 pub use missing_svelte_imports::{
     EnhancementDiagnostic, SvelteImportResolver, missing_svelte_import_diagnostics,
 };
+pub use package_imports::package_import_aliases;

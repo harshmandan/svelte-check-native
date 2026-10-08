@@ -1,0 +1,9 @@
+{
+    "name": "package-imports-svelte-component",
+    "private": true,
+    "type": "module",
+    "imports": {
+        "#lib": "./src/lib/index.js",
+        "#lib/*": "./src/lib/*"
+    }
+}

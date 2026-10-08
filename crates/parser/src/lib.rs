@@ -47,6 +47,8 @@ pub use document::{
 };
 pub use error::ParseError;
 pub use script::{ParsedScript, parse_script_body};
-pub use script_tag_expression::{script_tag_expression_spans, typescript_regex_end};
+pub use script_tag_expression::{
+    script_tag_expression_spans, svelte2tsx_script_spans, typescript_regex_end,
+};
 pub use sections::parse_sections;
 pub use template::{parse_all_template_runs, parse_template};

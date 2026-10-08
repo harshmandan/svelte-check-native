@@ -2,7 +2,7 @@
 //!
 //! svelte2tsx finds a component's script blocks with its own regular
 //! expression (`utils/htmlxparser.ts` `scriptRegex`, see
-//! [`svn_parser::script_tag_expression_spans`]), not with the Svelte
+//! [`svn_parser::svelte2tsx_script_spans`]), not with the Svelte
 //! parser: an opening `<script …>` tag, the shortest run of text after
 //! it, and a literal `</script>`. Comments are skipped. A block the
 //! Svelte parser accepts but the expression misses — `</script\n>`,
@@ -17,7 +17,7 @@ use svn_core::Range;
 /// The source spans (opening `<` through the closing `>`) of the script
 /// blocks svelte2tsx's expression matches, in source order.
 pub(crate) fn recognised_script_spans(source: &str) -> Vec<(usize, usize)> {
-    svn_parser::script_tag_expression_spans(source)
+    svn_parser::svelte2tsx_script_spans(source)
 }
 
 /// The document as svelte2tsx sees its scripts when its expression runs

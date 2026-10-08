@@ -563,6 +563,28 @@ mod tests {
     }
 
     #[test]
+    fn script_tag_text_inside_style_does_not_claim_the_script() {
+        // A style body is raw text: a `<script>` mentioned in a CSS
+        // comment is not a tag, and the real script after the style
+        // is still the instance script.
+        let src = "<style>\n\t/* see the <script> block */\n</style>\n\n<script lang=\"ts\">\n\tlet a = 1;\n</script>\n";
+        let doc = parse_ok(src);
+        let instance = doc.instance_script.expect("instance script claimed");
+        assert_eq!(instance.content, "\n\tlet a = 1;\n");
+        let style = doc.style.expect("style claimed");
+        assert_eq!(style.content, "\n\t/* see the <script> block */\n");
+    }
+
+    #[test]
+    fn style_tag_text_inside_script_does_not_claim_the_style() {
+        let src = "<script lang=\"ts\">\n\t// see the <style> block\n</script>\n\n<style>p{color:red}</style>";
+        let doc = parse_ok(src);
+        let instance = doc.instance_script.expect("instance script claimed");
+        assert_eq!(instance.content, "\n\t// see the <style> block\n");
+        assert_eq!(doc.style.expect("style claimed").content, "p{color:red}");
+    }
+
+    #[test]
     fn in_tag_line_comment_hides_tag_close_until_newline() {
         let src = "<div // > {#each xs as x}\n  class=\"x\">hi</div>\n<script>let a = 1;</script>";
         let doc = parse_ok(src);

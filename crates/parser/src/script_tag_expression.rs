@@ -1,5 +1,5 @@
-//! Where the regular expression svelte2tsx and the compiler's
-//! `preprocess` use to find `<script>` blocks matches.
+//! Where the regular expressions svelte2tsx and the compiler's
+//! `preprocess` use to find `<script>` blocks match.
 //!
 //! Both find a component's script blocks with a regular expression
 //! (svelte2tsx `utils/htmlxparser.ts` `scriptRegex`, the compiler's
@@ -8,10 +8,27 @@
 //! it, and a literal `</script>`. Comments are skipped. A block the
 //! Svelte parser closes some other way — `</script >` with a space,
 //! say — is either missed, or runs on to the next literal `</script>`.
+//!
+//! They differ on `<style>`. svelte2tsx searches for script and style
+//! blocks in one pass and takes whichever opens first, so `<script>`
+//! text inside a style block (a CSS comment naming it, say) is part of
+//! that style. The compiler's `preprocess` looks for scripts alone, so
+//! the same text opens a script there.
 
-/// The source spans (opening `<` through the closing `>`) of the script
-/// blocks svelte2tsx's expression matches, in source order.
+/// The script blocks the compiler's `preprocess` expression matches:
+/// source spans, opening `<` through the closing `>`, in source order.
 pub fn script_tag_expression_spans(source: &str) -> Vec<(usize, usize)> {
+    verbatim_spans(source, false)
+}
+
+/// The script blocks svelte2tsx recognises (`findVerbatimElements`):
+/// script and style blocks are matched in one pass, so `<script>` text
+/// inside a style block opens nothing.
+pub fn svelte2tsx_script_spans(source: &str) -> Vec<(usize, usize)> {
+    verbatim_spans(source, true)
+}
+
+fn verbatim_spans(source: &str, styles_shadow_scripts: bool) -> Vec<(usize, usize)> {
     let bytes = source.as_bytes();
     let mut spans = Vec::new();
     let mut i = 0;
@@ -25,18 +42,30 @@ pub fn script_tag_expression_spans(source: &str) -> Vec<(usize, usize)> {
                 i = i + 4 + end + 3;
                 continue;
             }
-        } else if source[i..].starts_with("<script")
-            && let Some(open_end) = open_tag_end(bytes, i + "<script".len())
-            && let Some(close) = source[open_end..].find("</script>")
-        {
-            let end = open_end + close + "</script>".len();
+        } else if let Some(end) = block_end(source, i, "<script", "</script>") {
             spans.push((i, end));
+            i = end;
+            continue;
+        } else if styles_shadow_scripts
+            && let Some(end) = block_end(source, i, "<style", "</style>")
+        {
             i = end;
             continue;
         }
         i += 1;
     }
     spans
+}
+
+/// The end of a `<TAG …>…</TAG>` block opening at `at`: just past the
+/// first literal close tag after the opening tag.
+fn block_end(source: &str, at: usize, open: &str, close: &str) -> Option<usize> {
+    if !source[at..].starts_with(open) {
+        return None;
+    }
+    let open_end = open_tag_end(source.as_bytes(), at + open.len())?;
+    let close_at = source[open_end..].find(close)?;
+    Some(open_end + close_at + close.len())
 }
 
 /// Match `(?:\s+NAME=(?:"…"|'…'|[^>\s]+)|\s+NAME)*\s*>` at `pos`, where
@@ -138,6 +167,28 @@ mod tests {
         assert_eq!(typescript_regex_end("</script >\nx", 1), 10);
         assert_eq!(typescript_regex_end("</script ></b>", 1), 13);
         assert_eq!(typescript_regex_end("/[/]x/g;", 0), 7);
+    }
+
+    #[test]
+    fn script_text_in_a_style_block_opens_no_script_for_svelte2tsx() {
+        let src =
+            "<style>\n/* see the <script> block */\n</style>\n<script lang=\"ts\">let a;</script>";
+        let real = src.find("<script lang").unwrap();
+        assert_eq!(svelte2tsx_script_spans(src), vec![(real, src.len())]);
+        // The compiler's preprocess has no style pass: its match opens in
+        // the comment and runs on to the real close tag.
+        let in_comment = src.find("<script>").unwrap();
+        assert_eq!(
+            script_tag_expression_spans(src),
+            vec![(in_comment, src.len())]
+        );
+    }
+
+    #[test]
+    fn style_text_in_a_script_block_is_script_content() {
+        let src = "<script lang=\"ts\">\n// see the <style> block\n</script>\n<style>p{}</style>";
+        let end = src.find("</script>").unwrap() + "</script>".len();
+        assert_eq!(svelte2tsx_script_spans(src), vec![(0, end)]);
     }
 
     #[test]

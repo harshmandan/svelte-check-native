@@ -22,7 +22,7 @@ use clap::Parser;
 use rayon::prelude::*;
 
 use discovery::{discover_relevant_files, discover_svelte_files, path_is_under_node_modules};
-use output::{print_diagnostics, print_machine_failure};
+use output::print_diagnostics;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -1633,7 +1633,6 @@ fn run_typecheck(
     match check_project(
         workspace,
         tsconfig,
-        output_format,
         sources,
         compiler_overrides,
         timings,
@@ -1657,11 +1656,22 @@ fn run_typecheck(
     }
 }
 
+/// A run that could not complete: the compiler crashed or was killed,
+/// or the check cache could not be set up. svelte-check lets the error
+/// reach its top-level handler, which prints it and `svelte-check
+/// failed` to stderr and exits 1 so CI cannot mistake it for a clean
+/// run. Nothing goes to stdout: its writer only starts once the
+/// compiler has finished.
+fn run_failed(err: &svn_typecheck::CheckError) -> ExitCode {
+    eprintln!("Error: {err}");
+    eprintln!("svelte-check failed");
+    ExitCode::from(1)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn check_project(
     workspace: &Path,
     tsconfig: &Path,
-    output_format: &str,
     sources: DiagnosticSources,
     compiler_overrides: &std::collections::HashMap<String, CompilerWarningOverride>,
     timings: bool,
@@ -1947,14 +1957,7 @@ fn check_project(
         // whole emit phase instead of just the overlay writes.
         let session = match svn_typecheck::CheckSession::new(workspace) {
             Ok(session) => session,
-            Err(err) => {
-                let message = format!("type-check failed: {err}");
-                eprintln!("svelte-check-native: {message}");
-                // Machine consumers key off a FAILURE line; emit one so
-                // a fatal check error isn't a silent stop on stdout.
-                print_machine_failure(output_format, &message);
-                return Err(ExitCode::from(2));
-            }
+            Err(err) => return Err(run_failed(&err)),
         };
         let session_ref = &session;
         // TSGO-ENHANCEMENT: shared `.svelte`-import resolver, built once
@@ -2174,14 +2177,7 @@ fn check_project(
             });
         match outcome {
             Ok(out) => (out.diagnostics, out.extended_diagnostics),
-            Err(err) => {
-                let message = format!("type-check failed: {err}");
-                eprintln!("svelte-check-native: {message}");
-                // Machine consumers key off a FAILURE line; emit one so
-                // a fatal check error isn't a silent stop on stdout.
-                print_machine_failure(output_format, &message);
-                return Err(ExitCode::from(2));
-            }
+            Err(err) => return Err(run_failed(&err)),
         }
     } else {
         (Vec::new(), None)

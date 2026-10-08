@@ -35,17 +35,19 @@ const DEFAULT_TSGO_TIMEOUT_SECS: u64 = 600;
 pub enum RunError {
     #[error("failed to spawn tsgo: {0}")]
     Spawn(#[source] std::io::Error),
-    /// tsgo exited abnormally (killed by a signal, or an exit code
-    /// other than 0/1) AND produced no parseable diagnostics. We treat
-    /// this as a hard failure rather than a clean 0-error run — a
-    /// crashing/OOMing tsgo that we report as "clean" is the worst
-    /// failure mode for a checker (false-clean in CI).
+    /// The compiler did not complete a run: it was killed by a signal,
+    /// or exited non-zero without printing a diagnostic we could parse
+    /// (see [`run_failed`]). Reporting either as a clean run is the
+    /// worst failure mode for a checker (false-clean in CI).
     #[error(
-        "tsgo exited abnormally{} without producing diagnostics{}",
-        match .code { Some(c) => format!(" (exit code {c})"), None => " (killed by signal)".into() },
-        if .stderr.is_empty() { String::new() } else { format!(":\n{}", .stderr) }
+        "The TypeScript compiler process {}.{}",
+        match .code {
+            Some(c) => format!("exited with code {c} without a parseable diagnostic"),
+            None => "was killed by a signal".into(),
+        },
+        if .output.is_empty() { String::new() } else { format!("\n{}", .output) }
     )]
-    Failed { code: Option<i32>, stderr: String },
+    Failed { code: Option<i32>, output: String },
     /// tsgo did not finish within the configured timeout and was killed.
     #[error("tsgo timed out after {}s and was killed", .0.as_secs())]
     Timeout(Duration),
@@ -58,16 +60,19 @@ pub enum RunError {
     AllDiagnosticsFiltered(String),
 }
 
-/// tsc/tsgo exit-code semantics (`ExitStatus`): `0` = success, `1` =
-/// diagnostics reported with outputs skipped (the normal "found errors"
-/// path under our forced `noEmit`), `2` = diagnostics reported with outputs
-/// generated, `3`+ = invalid project / fatal. We force `noEmit` in the
-/// overlay, so a diagnostics run exits `1`, never `2`; treating `2` as
-/// abnormal is therefore safe (and the `diagnostics.is_empty()` guard at the
-/// call site keeps any stray code-2 run with diagnostics on the `Ok` path).
-/// `None` (death by signal) likewise means tsgo failed to complete.
-fn exited_abnormally(code: Option<i32>) -> bool {
-    !matches!(code, Some(0) | Some(1))
+/// Did the compiler fail to complete the run? svelte-check's rule
+/// (`incremental.ts` `runTypeScriptDiagnostics`): death by a signal
+/// (`None` on Unix) always fails, since the run did not finish and
+/// anything it printed is partial. A non-zero exit fails only when
+/// nothing parseable came out, because the compilers also exit non-zero
+/// just to say they reported diagnostics — and the engines disagree on
+/// the code for that, so no specific code can be trusted.
+fn run_failed(code: Option<i32>, parsed_any: bool) -> bool {
+    match code {
+        None => true,
+        Some(0) => false,
+        Some(_) => !parsed_any,
+    }
 }
 
 /// What `run` returns: the parsed diagnostics and an optional
@@ -217,18 +222,10 @@ pub fn run(
 
     let diagnostics = parse_output(&combined);
 
-    // A non-zero/abnormal exit that yielded NO diagnostics is a tsgo
-    // crash, not a clean run — surface it (caller maps RunError to
-    // exit 2) instead of silently reporting 0 errors. We deliberately
-    // keep diagnostics from a normal exit-1 ("found errors") run, and
-    // also keep whatever partial diagnostics an abnormal exit managed
-    // to print rather than discarding a near-complete stream.
-    let abnormal = exited_abnormally(status.code());
-    if abnormal && diagnostics.is_empty() {
-        let tail = stderr_tail(&stderr);
+    if run_failed(status.code(), !diagnostics.is_empty()) {
         return Err(RunError::Failed {
             code: status.code(),
-            stderr: tail,
+            output: failure_output(&stdout, &stderr),
         });
     }
 
@@ -269,10 +266,18 @@ fn tsgo_timeout() -> Duration {
 
 /// Last few stderr lines, for the failure message. tsgo's panic/abort
 /// output lands on stderr; the tail is the actionable part.
-fn stderr_tail(stderr: &str) -> String {
-    let lines: Vec<&str> = stderr.lines().filter(|l| !l.trim().is_empty()).collect();
-    let start = lines.len().saturating_sub(8);
-    lines[start..].join("\n")
+/// What the compiler printed, for the failure message: unparsed output
+/// such as a global error or an unknown compiler option is often the
+/// only explanation. The `--listFiles` paths are dropped, and the text
+/// is capped at the 2000 characters svelte-check shows.
+fn failure_output(stdout: &str, stderr: &str) -> String {
+    let listed: std::collections::HashSet<PathBuf> = listed_files(stdout).into_iter().collect();
+    let text: Vec<&str> = stdout
+        .lines()
+        .chain(stderr.lines())
+        .filter(|l| !l.trim().is_empty() && !listed.contains(Path::new(l.trim())))
+        .collect();
+    text.join("\n").chars().take(2000).collect()
 }
 
 /// Result of draining a child to completion (or killing it on timeout).
@@ -424,27 +429,42 @@ Total time:            1.237s
     }
 
     #[test]
-    fn exit_0_and_1_are_normal() {
-        // 0 = clean, 1 = diagnostics reported. Neither is a crash.
-        assert!(!exited_abnormally(Some(0)));
-        assert!(!exited_abnormally(Some(1)));
+    fn clean_exit_never_fails() {
+        assert!(!run_failed(Some(0), false));
+        assert!(!run_failed(Some(0), true));
     }
 
     #[test]
-    fn other_codes_and_signals_are_abnormal() {
-        // Code 2 (diagnostics + outputs generated) never happens under forced
-        // noEmit, so we classify it as abnormal; code 3 (invalid project) and
-        // death by signal (None) are genuine failures.
-        assert!(exited_abnormally(Some(2)));
-        assert!(exited_abnormally(Some(3)));
-        assert!(exited_abnormally(Some(139))); // 128 + SIGSEGV
-        assert!(exited_abnormally(None));
+    fn nonzero_exit_fails_only_without_diagnostics() {
+        // Exit 1 or 2 is how the engines say "found errors".
+        assert!(!run_failed(Some(1), true));
+        assert!(!run_failed(Some(2), true));
+        // The same codes with nothing parsed: a global error, an unknown
+        // option, or a crash reported as a code (as Windows reports kills).
+        assert!(run_failed(Some(1), false));
+        assert!(run_failed(Some(139), false));
     }
 
     #[test]
-    fn stderr_tail_keeps_last_lines_drops_blanks() {
-        let stderr = "\n\nline a\nline b\n\nline c\n";
-        let got = stderr_tail(stderr);
-        assert_eq!(got, "line a\nline b\nline c");
+    fn signal_always_fails() {
+        // A killed run is partial even if it printed diagnostics first.
+        assert!(run_failed(None, false));
+        assert!(run_failed(None, true));
+    }
+
+    #[test]
+    fn failure_output_drops_listed_files_and_blanks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let listed = tmp.path().join("a.ts");
+        std::fs::write(&listed, "").unwrap();
+        let stdout = format!(
+            "\n{}\nerror TS5023: Unknown compiler option 'x'.\n",
+            listed.display()
+        );
+        let got = failure_output(&stdout, "\nfatal: out of memory\n");
+        assert_eq!(
+            got,
+            "error TS5023: Unknown compiler option 'x'.\nfatal: out of memory"
+        );
     }
 }

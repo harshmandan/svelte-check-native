@@ -314,24 +314,6 @@ fn print_machine_completed(
     );
 }
 
-/// Emit a machine-output `FAILURE` line for a fatal check error,
-/// mirroring upstream's `MachineFriendlyWriter.failure`
-/// (`FAILURE ${JSON.stringify(err.message)}`). Machine consumers key
-/// off this line; without it a crash looks like a silent stop. No-op
-/// for human formats (the caller prints to stderr there).
-pub(crate) fn print_machine_failure(output_format: &str, message: &str) {
-    if output_format != "machine" && output_format != "machine-verbose" {
-        return;
-    }
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let msg = serde_json::to_string(message).unwrap_or_else(|_| format!("\"{message}\""));
-    let mut out = std::io::stdout().lock();
-    outln!(out, "{now_ms} FAILURE {msg}");
-}
-
 /// `human` / `human-verbose` body — per-diagnostic block.
 fn print_human(
     out: &mut impl Write,

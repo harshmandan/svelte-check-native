@@ -36,6 +36,12 @@ function isUpstreamSvelteCheckCli(candidate) {
 
 const realExecFileSync = child_process.execFileSync;
 
+/** Did the caller ask for the child's stderr to be piped back to it? */
+function capturesStderr(opts) {
+    const stdio = opts && opts.stdio;
+    return Array.isArray(stdio) && stdio[2] === 'pipe';
+}
+
 // The binary forces `--output machine` when it sees CLAUDECODE / GEMINI_CLI /
 // CODEX_CI set to `"1"` in its environment (see crates/cli/src/main.rs).
 // Upstream's test-sanity.js requests `--output machine-verbose` and parses
@@ -64,8 +70,17 @@ child_process.execFileSync = function patchedExecFileSync(file, args, opts) {
             // binary) leaves stdout empty; upstream would silently count it
             // as zero diagnostics and `passed++` against a clean expected
             // list. Fail the whole run loudly instead.
+            //
+            // The exception: a caller that captures stderr is checking HOW
+            // the run failed (upstream's crashed-compiler tests), so it can
+            // tell a reported failure from a clean run — hand it back. A
+            // missing binary or a binary killed by a signal still fails
+            // loudly either way.
             const e = /** @type {any} */ (err);
             if (e && e.stdout && e.stdout.length > 0) {
+                throw err;
+            }
+            if (e && typeof e.status === 'number' && capturesStderr(opts)) {
                 throw err;
             }
             console.error(

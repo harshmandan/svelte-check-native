@@ -41,13 +41,18 @@ pub enum RunError {
     /// worst failure mode for a checker (false-clean in CI).
     #[error(
         "The TypeScript compiler process {}.{}",
-        match .code {
-            Some(c) => format!("exited with code {c} without a parseable diagnostic"),
-            None => "was killed by a signal".into(),
+        match (.code, .signal) {
+            (Some(c), _) => format!("exited with code {c} without a parseable diagnostic"),
+            (None, Some(sig)) => format!("was killed by signal {}", signal_name(*sig)),
+            (None, None) => "was killed by a signal".into(),
         },
         if .output.is_empty() { String::new() } else { format!("\n{}", .output) }
     )]
-    Failed { code: Option<i32>, output: String },
+    Failed {
+        code: Option<i32>,
+        signal: Option<i32>,
+        output: String,
+    },
     /// tsgo did not finish within the configured timeout and was killed.
     #[error("tsgo timed out after {}s and was killed", .0.as_secs())]
     Timeout(Duration),
@@ -225,6 +230,7 @@ pub fn run(
     if run_failed(status.code(), !diagnostics.is_empty()) {
         return Err(RunError::Failed {
             code: status.code(),
+            signal: exit_signal(&status),
             output: failure_output(&stdout, &stderr),
         });
     }
@@ -266,6 +272,35 @@ fn tsgo_timeout() -> Duration {
 
 /// Last few stderr lines, for the failure message. tsgo's panic/abort
 /// output lands on stderr; the tail is the actionable part.
+#[cfg(unix)]
+fn exit_signal(status: &ExitStatus) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt;
+    status.signal()
+}
+
+#[cfg(not(unix))]
+fn exit_signal(_status: &ExitStatus) -> Option<i32> {
+    None
+}
+
+/// The name Node gives a signal (`SIGKILL`), which svelte-check puts
+/// in its message. Only signals numbered the same on every Unix are
+/// named; any other prints as its number.
+fn signal_name(sig: i32) -> String {
+    let name = match sig {
+        1 => "SIGHUP",
+        2 => "SIGINT",
+        3 => "SIGQUIT",
+        6 => "SIGABRT",
+        9 => "SIGKILL",
+        11 => "SIGSEGV",
+        13 => "SIGPIPE",
+        15 => "SIGTERM",
+        _ => return sig.to_string(),
+    };
+    name.to_string()
+}
+
 /// What the compiler printed, for the failure message: unparsed output
 /// such as a global error or an unknown compiler option is often the
 /// only explanation. The `--listFiles` paths are dropped, and the text

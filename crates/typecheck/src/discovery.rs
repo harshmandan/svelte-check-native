@@ -149,7 +149,11 @@ pub fn discover(workspace: &Path) -> Result<TsgoBinary, DiscoveryError> {
                 });
             }
         }
-        let preview_wrapper = dir.join("node_modules/@typescript/native-preview/bin/tsgo.js");
+        let preview_wrapper = package_bin(
+            &dir.join("node_modules/@typescript/native-preview"),
+            "tsgo",
+            "bin/tsgo.js",
+        );
         if preview_wrapper.is_file() {
             // Symlinked-store installs (pnpm, bun) hoist only the
             // wrapper package; its platform-native sibling lives next
@@ -194,12 +198,12 @@ pub fn discover(workspace: &Path) -> Result<TsgoBinary, DiscoveryError> {
 /// real `typescript` package on disk, so the same layout and version
 /// gate apply verbatim.
 fn stable_typescript_wrapper(dir: &Path, pkg_dir: &str) -> Option<TsgoBinary> {
-    let wrapper = dir.join("node_modules").join(pkg_dir).join("bin/tsc");
+    let pkg_root = dir.join("node_modules").join(pkg_dir);
+    let wrapper = package_bin(&pkg_root, "tsc", "bin/tsc");
     if !wrapper.is_file() {
         return None;
     }
-    let manifest = dir.join("node_modules").join(pkg_dir).join("package.json");
-    let text = std::fs::read_to_string(manifest).ok()?;
+    let text = std::fs::read_to_string(pkg_root.join("package.json")).ok()?;
     let pkg: serde_json::Value = serde_json::from_str(&text).ok()?;
     let version = semver::Version::parse(pkg.get("version")?.as_str()?).ok()?;
     if version.major < 7 {
@@ -209,6 +213,18 @@ fn stable_typescript_wrapper(dir: &Path, pkg_dir: &str) -> Option<TsgoBinary> {
         path: wrapper,
         needs_node: true,
     })
+}
+
+/// The executable a package declares under `bin.<name>` in its
+/// package.json, which is how svelte-check finds the compiler
+/// (`getTsGoBinPath`). `default` is the path the real packages declare,
+/// used when the manifest is missing, unreadable, or names no such bin.
+fn package_bin(pkg_root: &Path, name: &str, default: &str) -> PathBuf {
+    let declared = std::fs::read_to_string(pkg_root.join("package.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|pkg| pkg.get("bin")?.get(name)?.as_str().map(str::to_string));
+    pkg_root.join(declared.as_deref().unwrap_or(default))
 }
 
 /// Look for stable `typescript@<version>` and
@@ -420,6 +436,24 @@ mod tests {
 
         let found = discover(tmp.path()).unwrap();
         assert_eq!(found.path, tsgo);
+        assert!(found.needs_node);
+    }
+
+    #[test]
+    fn preview_wrapper_comes_from_the_declared_bin() {
+        let tmp = tempdir().unwrap();
+        let pkg = tmp.path().join("node_modules/@typescript/native-preview");
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(
+            pkg.join("package.json"),
+            r#"{"name":"@typescript/native-preview","version":"7.0.0","bin":{"tsgo":"./fake-tsgo.js"}}"#,
+        )
+        .unwrap();
+        fs::write(pkg.join("fake-tsgo.js"), "// stub").unwrap();
+
+        let found = discover(tmp.path()).unwrap();
+        assert!(found.path.ends_with("fake-tsgo.js"), "{found:?}");
+        assert!(found.path.is_file());
         assert!(found.needs_node);
     }
 

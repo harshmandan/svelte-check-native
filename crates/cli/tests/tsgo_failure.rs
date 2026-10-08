@@ -4,6 +4,7 @@
 //! as `TSGO_BIN`) plays the crash.
 
 #![cfg(unix)]
+#![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -61,5 +62,5 @@ fn nonzero_exit_without_a_diagnostic_fails() {
 #[test]
 fn killed_compiler_fails() {
     let out = run_with_compiler("#!/bin/sh\nkill -9 $$\n");
-    assert_failed(&out, "was killed by a signal");
+    assert_failed(&out, "was killed by signal SIGKILL");
 }

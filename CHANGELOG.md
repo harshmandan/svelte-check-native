@@ -6,6 +6,24 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`svelte-kit sync && svelte-check-native` reuses the last result.**
+  `svelte-kit sync` rewrites every generated `.svelte-kit/` file on
+  each run, even when nothing changed. The no-change cache compared
+  file times, so it missed every time and re-ran the full type-check.
+  It now compares file contents when only the time moved.
+
+### Changed
+
+- **Faster file discovery.** Directories are read in parallel. This
+  matters most in workspaces with a large tree beside `src/`, such as
+  a native `android/` project: 0.6s → 0.28s on a 145k-file tree. The
+  file order and `FILES` count are unchanged.
+- **Faster check for a user `declare module '*.svelte'`.** This scan
+  also walked the whole workspace on one thread before any component
+  was processed. It now runs in parallel.
+
 ## [1.8.0]
 
 Adds Android (Termux) support and updates oxc.

@@ -7,8 +7,8 @@
 # manual review pass confirms no behavior gap or test gap.
 
 [language-tools]
-sha = "0bab63aeb29da335c96480701d8f16f592b4a529"
-note = "svelte-check@4.7.4 — SvelteKit 3 support: kit options merged at the top level of the vite plugin config (#3104), hooks types imported from @sveltejs/kit/hooks (#3106), tsgo located via the @typescript/native npm alias (#3073)"
+sha = "af7c6a505a8aa631f5ca7794f41163e46cb0bc33"
+note = "svelte-check@4.7.6+ — a compiler process that dies or exits non-zero without a parseable diagnostic fails the run with exit 1 (#3133); svelte2tsx finds script and style blocks in one pass (#3079)"
 
 [svelte-compiler]
 # The Svelte compiler repo tracked locally under

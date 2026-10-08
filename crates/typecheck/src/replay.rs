@@ -27,6 +27,13 @@
 //!   (`--listFiles`: the closure it actually loaded, including
 //!   node_modules `.d.ts`), stat-compared by `(mtime, size)`. Catches
 //!   edits to any file already in the program.
+//! - **Content hashes behind the stats** — a file whose mtime moved
+//!   but whose bytes did not still matches: `svelte-kit sync`
+//!   rewrites every generated `.svelte-kit/` file on each run with
+//!   identical content, and a `sync && check` script would otherwise
+//!   never replay. The hash is recorded only when the file still has
+//!   the stat it was fingerprinted with, so it always describes the
+//!   content tsgo saw.
 //! - **Include-root directory walks** — the buildinfo only lists
 //!   files that EXISTED last run. A newly created file matched by an
 //!   include glob joins the program without any listed file
@@ -74,7 +81,7 @@ use crate::output::RawDiagnostic;
 
 /// Bump when the fingerprint structure or semantics change — a
 /// mismatched schema is treated as no cache.
-const SCHEMA: u32 = 2;
+const SCHEMA: u32 = 3;
 
 /// File extensions that can enter a TypeScript program through an
 /// include-glob walk. Broader than strictly necessary — extra
@@ -89,9 +96,36 @@ struct FileStat {
     /// Milliseconds since epoch; 0 when the platform gives no mtime.
     mtime_ms: u128,
     size: u64,
+    /// Hash of the bytes, filled in when the cache is saved. `None`
+    /// while computing a fresh fingerprint, or when the file changed
+    /// between being statted and being hashed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    content_hash: Option<u64>,
 }
 
-#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+impl FileStat {
+    /// Does this stored stat describe the file `current` statted now?
+    /// Same path and size, and either the same mtime or — when only
+    /// the mtime moved — the same bytes.
+    fn matches(&self, current: &FileStat) -> bool {
+        self.path == current.path
+            && self.size == current.size
+            && (self.mtime_ms == current.mtime_ms
+                || self
+                    .content_hash
+                    .is_some_and(|h| content_hash(Path::new(&current.path)) == Some(h)))
+    }
+}
+
+fn stats_match(stored: &[FileStat], current: &[FileStat]) -> bool {
+    stored.len() == current.len()
+        && stored
+            .par_iter()
+            .zip(current.par_iter())
+            .all(|(s, c)| s.matches(c))
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct Fingerprint {
     schema: u32,
     cli_version: String,
@@ -105,6 +139,40 @@ struct Fingerprint {
     manifests: Vec<FileStat>,
     program: Vec<FileStat>,
     walked: Vec<FileStat>,
+}
+
+impl Fingerprint {
+    fn matches(&self, current: &Fingerprint) -> bool {
+        self.schema == current.schema
+            && self.cli_version == current.cli_version
+            && self.tsgo.matches(&current.tsgo)
+            && self.include_suggestions == current.include_suggestions
+            && self.tsgo_env == current.tsgo_env
+            && self.overlay_tsconfig_hash == current.overlay_tsconfig_hash
+            && stats_match(&self.chain, &current.chain)
+            && stats_match(&self.manifests, &current.manifests)
+            && stats_match(&self.program, &current.program)
+            && stats_match(&self.walked, &current.walked)
+    }
+
+    fn record_content_hashes(&mut self) {
+        for stats in [
+            &mut self.chain,
+            &mut self.manifests,
+            &mut self.program,
+            &mut self.walked,
+        ] {
+            stats.par_iter_mut().for_each(|s| {
+                let path = Path::new(&s.path);
+                let hash = content_hash(path);
+                // Hash first, re-stat second: if the stat still matches,
+                // the bytes hashed are the bytes the stat describes.
+                let unchanged = stat_file(path)
+                    .is_some_and(|now| now.mtime_ms == s.mtime_ms && now.size == s.size);
+                s.content_hash = hash.filter(|_| unchanged);
+            });
+        }
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -167,11 +235,14 @@ impl ReplayContext {
     }
 
     /// Load the persisted cache and return its diagnostics iff the
-    /// stored fingerprint matches the freshly computed one exactly.
+    /// stored fingerprint matches the freshly computed one.
     pub(crate) fn try_load(&self) -> Option<Vec<RawDiagnostic>> {
         let text = std::fs::read_to_string(&self.cache_path).ok()?;
         let cache: ReplayCache = serde_json::from_str(&text).ok()?;
-        (cache.fingerprint == self.fingerprint).then_some(cache.diagnostics)
+        cache
+            .fingerprint
+            .matches(&self.fingerprint)
+            .then_some(cache.diagnostics)
     }
 
     /// Persist this run's diagnostics under the computed fingerprint,
@@ -182,6 +253,7 @@ impl ReplayContext {
             return;
         }
         self.fingerprint.program = stat_all(program_files.iter().map(PathBuf::as_path));
+        self.fingerprint.record_content_hashes();
         let cache = ReplayCache {
             fingerprint: self.fingerprint,
             diagnostics: diagnostics.to_vec(),
@@ -207,7 +279,15 @@ fn stat_file(path: &Path) -> Option<FileStat> {
         path: path.to_string_lossy().into_owned(),
         mtime_ms,
         size: meta.len(),
+        content_hash: None,
     })
+}
+
+fn content_hash(path: &Path) -> Option<u64> {
+    let bytes = std::fs::read(path).ok()?;
+    let mut hasher = std::hash::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    Some(hasher.finish())
 }
 
 /// Re-stat the program files recorded by the previous run. A listed
@@ -391,6 +471,77 @@ mod tests {
         std::fs::write(&f, "export const a = 12;").unwrap();
         let s3 = stat_file(&f).unwrap();
         assert_ne!(s1, s3);
+    }
+
+    /// Sets a file's mtime to `ms` past the epoch, so tests don't
+    /// depend on the filesystem's timestamp granularity.
+    fn set_mtime(path: &Path, ms: u64) {
+        let file = std::fs::File::options().write(true).open(path).unwrap();
+        file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms))
+            .unwrap();
+    }
+
+    fn fingerprint_of(path: &Path) -> Fingerprint {
+        Fingerprint {
+            schema: SCHEMA,
+            cli_version: String::new(),
+            tsgo: stat_file(path).unwrap(),
+            include_suggestions: false,
+            tsgo_env: Vec::new(),
+            overlay_tsconfig_hash: 0,
+            chain: Vec::new(),
+            manifests: Vec::new(),
+            program: vec![stat_file(path).unwrap()],
+            walked: Vec::new(),
+        }
+    }
+
+    fn recorded(path: &Path) -> FileStat {
+        let mut fp = fingerprint_of(path);
+        fp.record_content_hashes();
+        fp.program.remove(0)
+    }
+
+    #[test]
+    fn identical_rewrite_still_matches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("ambient.d.ts");
+        std::fs::write(&f, "declare const a: 1;").unwrap();
+        set_mtime(&f, 1_000);
+        let stored = recorded(&f);
+        assert!(stored.content_hash.is_some());
+
+        std::fs::write(&f, "declare const a: 1;").unwrap();
+        set_mtime(&f, 2_000);
+        assert!(stored.matches(&stat_file(&f).unwrap()));
+    }
+
+    #[test]
+    fn same_size_different_bytes_does_not_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("a.ts");
+        std::fs::write(&f, "export const a = 1;").unwrap();
+        set_mtime(&f, 1_000);
+        let stored = recorded(&f);
+
+        std::fs::write(&f, "export const a = 2;").unwrap();
+        set_mtime(&f, 2_000);
+        assert!(!stored.matches(&stat_file(&f).unwrap()));
+    }
+
+    #[test]
+    fn hash_dropped_when_file_changed_after_stat() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("a.ts");
+        std::fs::write(&f, "export const a = 1;").unwrap();
+        set_mtime(&f, 1_000);
+        let mut fp = fingerprint_of(&f);
+        // Edited between the stat and the save: the hash would describe
+        // bytes the stored mtime never saw.
+        std::fs::write(&f, "export const a = 2;").unwrap();
+        set_mtime(&f, 2_000);
+        fp.record_content_hashes();
+        assert_eq!(fp.program[0].content_hash, None);
     }
 
     #[test]

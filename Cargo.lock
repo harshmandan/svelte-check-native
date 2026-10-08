@@ -1223,10 +1223,10 @@ dependencies = [
  "oxc_ast",
  "oxc_ast_visit",
  "oxc_resolver",
+ "rayon",
  "svn-core",
  "svn-parser",
  "tempfile",
- "walkdir",
 ]
 
 [[package]]

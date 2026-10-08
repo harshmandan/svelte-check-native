@@ -440,26 +440,55 @@ fn normalise(p: &Path) -> PathBuf {
     out
 }
 
-/// Does any `.d.ts` under `dir` declare the wildcard?
+/// Does any `.d.ts` under `dir` declare the wildcard? Directories are
+/// read in parallel: the walk covers the whole workspace, which can hold
+/// a native-app tree (100k+ files) beside `src/`.
 fn dir_declares_svelte_wildcard(dir: &Path) -> bool {
-    let skip = |name: &str| {
-        matches!(
-            name,
-            "node_modules" | ".svelte-kit" | ".git" | ".cache" | ".svelte-check"
-        )
+    let skipped = dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(is_skipped_scan_dir);
+    !skipped && subtree_declares_svelte_wildcard(dir)
+}
+
+fn is_skipped_scan_dir(name: &str) -> bool {
+    matches!(
+        name,
+        "node_modules" | ".svelte-kit" | ".git" | ".cache" | ".svelte-check"
+    )
+}
+
+fn subtree_declares_svelte_wildcard(dir: &Path) -> bool {
+    use rayon::prelude::*;
+
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return false;
     };
-    walkdir::WalkDir::new(dir)
-        .into_iter()
-        .filter_entry(|e| !(e.file_type().is_dir() && e.file_name().to_str().is_some_and(skip)))
-        .filter_map(Result::ok)
-        .filter(|e| {
-            e.file_type().is_file() && e.file_name().to_str().is_some_and(|n| n.ends_with(".d.ts"))
-        })
-        .any(|e| {
-            std::fs::read_to_string(e.path())
+    let mut subdirs = Vec::new();
+    for entry in read.filter_map(Result::ok) {
+        // Not followed: a symlinked directory is not descended and a
+        // symlinked `.d.ts` is not read.
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        let name = entry.file_name();
+        let name = name.to_str();
+        if file_type.is_dir() {
+            if !name.is_some_and(is_skipped_scan_dir) {
+                subdirs.push(entry.path());
+            }
+        } else if file_type.is_file()
+            && name.is_some_and(|n| n.ends_with(".d.ts"))
+            && std::fs::read_to_string(entry.path())
                 .ok()
                 .is_some_and(|src| declares_svelte_wildcard(&src))
-        })
+        {
+            return true;
+        }
+    }
+    subdirs
+        .par_iter()
+        .any(|d| subtree_declares_svelte_wildcard(d))
 }
 
 /// Cheap textual check for `declare module '*.svelte'` / `"*.svelte"`. A

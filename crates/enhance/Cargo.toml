@@ -18,7 +18,7 @@ oxc_ast_visit.workspace = true
 # package.json `exports`) so we resolve `.svelte` specifiers of every
 # form the way tsgo would — no hand-rolled resolution. See crate docs.
 oxc_resolver = "11"
-walkdir.workspace = true
+rayon.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

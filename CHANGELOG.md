@@ -6,8 +6,43 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.9.0]
+
+SvelteKit 3 support and a faster no-change run. Components imported
+through `#lib` now carry their types, failed compiler runs fail the
+check the way svelte-check 4.7.6 does, and an unchanged
+`svelte-kit sync && svelte-check-native` run on a 1100-component app
+drops from ~6s to under 1s. Upstream `language-tools` pin moves to
+`af7c6a50`.
+
+### Added
+
+- **`.svelte` files imported through package.json `imports`.**
+  SvelteKit 3 replaces the `$lib` alias with `#lib/*`. A component
+  imported as `#lib/Card.svelte` used to fall through to svelte's
+  `*.svelte` wildcard, so every named import from it was TS2614 and its
+  props went untyped. It now resolves to the component's types, as the
+  default svelte-check engine does (`svelte-check --tsgo` has the same
+  gap). On a 1100-component SvelteKit 3 app: 308 errors → 0, matching
+  the default engine. Part of the tsgo-mode enhancements, so
+  `--disable-enhance` turns it off.
+
 ### Fixed
 
+- **A compiler run that does not complete fails the check** (#3133
+  upstream). A compiler killed by a signal fails even if it printed
+  diagnostics first, and a non-zero exit with nothing parseable fails
+  instead of reporting a clean run. The error and `svelte-check failed`
+  go to stderr and the exit code is 1, as svelte-check does; it was 2,
+  with a machine `FAILURE` line upstream never writes here. The message
+  now includes what the compiler printed.
+- **`<script>` text inside a `<style>` block no longer swallows the
+  real script** (#3079 upstream). A CSS comment such as `/* see the
+  <script> block */` opened a script that ran on to the real
+  `</script>`, so the component's script was never type-checked.
+- **The compiler is found through its package's `bin` entry**, as
+  svelte-check finds it, before the usual `bin/tsgo.js` / `bin/tsc`
+  paths.
 - **`svelte-kit sync && svelte-check-native` reuses the last result.**
   `svelte-kit sync` rewrites every generated `.svelte-kit/` file on
   each run, even when nothing changed. The no-change cache compared

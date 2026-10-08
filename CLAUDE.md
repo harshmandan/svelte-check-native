@@ -701,7 +701,9 @@ runnable; bench-wide sweeps stay interactive (bench isn't part of
 ## Exit codes
 
 - `0` — no errors (and no warnings if `--fail-on-warnings`)
-- `1` — errors detected (or warnings with `--fail-on-warnings`)
+- `1` — errors detected (or warnings with `--fail-on-warnings`), or the
+  TypeScript compiler did not complete (killed, or exited without a
+  diagnostic), as svelte-check reports it
 - `2` — invocation error (bad flag, missing tsconfig, missing tsgo)
 
 ## Release workflow

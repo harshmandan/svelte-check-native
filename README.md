@@ -139,7 +139,9 @@ Or point `TSGO_BIN` at any Linux arm64 `tsc`/`tsgo` binary.
 ## Exit codes
 
 - `0` — no errors (and no warnings if `--fail-on-warnings`)
-- `1` — errors detected (or warnings with `--fail-on-warnings`)
+- `1` — errors detected (or warnings with `--fail-on-warnings`), or the
+  TypeScript compiler did not complete (killed, or exited without a
+  diagnostic), as svelte-check reports it
 - `2` — invocation error (bad flag, missing tsconfig, TypeScript not found)
 
 ## Roadmap

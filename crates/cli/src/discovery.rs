@@ -62,45 +62,76 @@ pub(crate) fn discover_relevant_files_with_settings(
     // name (libuv's scandir), a directory's files are taken when its
     // listing arrives, and its subdirectories are listed after every
     // directory already queued, so shallower files come first.
-    let mut queue = std::collections::VecDeque::from([workspace.to_path_buf()]);
-    let mut files: Vec<PathBuf> = Vec::new();
-    while let Some(dir) = queue.pop_front() {
-        let Ok(read) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        let mut entries: Vec<(std::ffi::OsString, std::fs::FileType)> = read
-            .filter_map(Result::ok)
-            .filter_map(|e| e.file_type().ok().map(|t| (e.file_name(), t)))
-            .collect();
-        entries.sort_by(|a, b| a.0.as_encoded_bytes().cmp(b.0.as_encoded_bytes()));
-        for (name, file_type) in entries {
-            let path = dir.join(&name);
-            // A symlink POINTING AT a file counts as a file: `fdir`
-            // admits an entry when `isFile() || isSymbolicLink()` without
-            // resolving it. Symlinked directories are never descended.
-            if file_type.is_dir() {
-                if !is_excluded_dir(&path) {
-                    queue.push_back(path);
+    //
+    // The listings themselves are read in parallel (a workspace with a
+    // native-app tree beside `src/` can hold 100k+ files the crawl has
+    // to visit), then replayed breadth-first so the order is the same
+    // as reading them one at a time.
+    let root = read_listing(workspace.to_path_buf());
+    let mut queue = std::collections::VecDeque::from([&root]);
+    while let Some(listing) = queue.pop_front() {
+        for path in &listing.files {
+            match path.extension().and_then(|s| s.to_str()) {
+                Some("svelte") => svelte_files.push(path.clone()),
+                // Any classify hit on a `.ts`/`.js` is a kit file — route
+                // components are `.svelte` and never reach this branch.
+                // See `svn_core::sveltekit::classify`.
+                Some("ts" | "js") if classify(path, kit_settings).is_some() => {
+                    kit_files.push(path.clone());
                 }
-            } else if file_type.is_file() || file_type.is_symlink() {
-                files.push(path);
+                _ => {}
             }
         }
-    }
-    for path in &files {
-        let ext = path.extension().and_then(|s| s.to_str());
-        match ext {
-            Some("svelte") => svelte_files.push(path.to_path_buf()),
-            // Any classify hit on a `.ts`/`.js` is a kit file — route
-            // components are `.svelte` and never reach this branch.
-            // See `svn_core::sveltekit::classify`.
-            Some("ts" | "js") if classify(path, kit_settings).is_some() => {
-                kit_files.push(path.to_path_buf());
-            }
-            _ => {}
-        }
+        queue.extend(listing.subdirs.iter());
     }
     (svelte_files, kit_files)
+}
+
+/// One directory's name-sorted contents: the files discovery can use,
+/// and the listings of the subdirectories it descends into.
+struct Listing {
+    files: Vec<PathBuf>,
+    subdirs: Vec<Listing>,
+}
+
+fn read_listing(dir: PathBuf) -> Listing {
+    use rayon::prelude::*;
+
+    let Ok(read) = std::fs::read_dir(&dir) else {
+        return Listing {
+            files: Vec::new(),
+            subdirs: Vec::new(),
+        };
+    };
+    let mut entries: Vec<(std::ffi::OsString, std::fs::FileType)> = read
+        .filter_map(Result::ok)
+        .filter_map(|e| e.file_type().ok().map(|t| (e.file_name(), t)))
+        .collect();
+    entries.sort_by(|a, b| a.0.as_encoded_bytes().cmp(b.0.as_encoded_bytes()));
+    let mut files = Vec::new();
+    let mut subdir_paths = Vec::new();
+    for (name, file_type) in entries {
+        let path = dir.join(&name);
+        // A symlink POINTING AT a file counts as a file: `fdir`
+        // admits an entry when `isFile() || isSymbolicLink()` without
+        // resolving it. Symlinked directories are never descended.
+        if file_type.is_dir() {
+            if !is_excluded_dir(&path) {
+                subdir_paths.push(path);
+            }
+        } else if (file_type.is_file() || file_type.is_symlink())
+            && matches!(
+                path.extension().and_then(|s| s.to_str()),
+                Some("svelte" | "ts" | "js")
+            )
+        {
+            files.push(path);
+        }
+    }
+    Listing {
+        files,
+        subdirs: subdir_paths.into_par_iter().map(read_listing).collect(),
+    }
 }
 
 /// Lexically normalize a path, collapsing `.` and `..` segments

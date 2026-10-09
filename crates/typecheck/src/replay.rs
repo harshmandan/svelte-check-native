@@ -38,7 +38,9 @@
 //!   files that EXISTED last run. A newly created file matched by an
 //!   include glob joins the program without any listed file
 //!   changing, so we walk the non-glob prefix of every `include`
-//!   pattern (and stat non-glob include entries directly),
+//!   pattern — and the whole of a bare directory entry such as
+//!   SvelteKit 3's `"src"`, which TypeScript reads as `src/**/*` —
+//!   and stat the remaining non-glob entries directly as files,
 //!   collecting `(path, mtime, size)` for every program-candidate
 //!   extension. Deletions surface the same way (the walk list
 //!   shrinks). Roots whose path contains `node_modules` are walked
@@ -422,11 +424,24 @@ enum GlobPrefix {
 }
 
 /// Longest directory prefix of an include pattern before the first
-/// glob metacharacter; patterns without metacharacters are single
-/// files (TypeScript treats a non-glob include as a file reference).
+/// glob metacharacter. A pattern without metacharacters is a directory
+/// when its last segment has no `.`, `*` or `?` — TypeScript's
+/// `isImplicitGlob`, which reads `"src"` as `"src/**/*"` — and a single
+/// file otherwise.
 fn glob_prefix(pattern: &str) -> GlobPrefix {
     match pattern.find(['*', '?', '{', '[']) {
-        None => GlobPrefix::File(PathBuf::from(pattern)),
+        None => {
+            let last = pattern
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap_or("");
+            if last.contains('.') {
+                GlobPrefix::File(PathBuf::from(pattern))
+            } else {
+                GlobPrefix::Dir(PathBuf::from(pattern.trim_end_matches('/')))
+            }
+        }
         Some(idx) => {
             let prefix = &pattern[..idx];
             let dir = match prefix.rfind('/') {
@@ -456,6 +471,34 @@ mod tests {
             panic!("expected file");
         };
         assert_eq!(f, Path::new("/ws/.svelte-kit/ambient.d.ts"));
+        // A bare directory entry (SvelteKit 3's `"include": ["src"]`) is
+        // everything under it, so a file created there must be seen.
+        let GlobPrefix::Dir(d) = glob_prefix("/ws/src") else {
+            panic!("expected dir");
+        };
+        assert_eq!(d, Path::new("/ws/src"));
+        let GlobPrefix::Dir(d) = glob_prefix("/ws/src/") else {
+            panic!("expected dir");
+        };
+        assert_eq!(d, Path::new("/ws/src"));
+        let GlobPrefix::File(f) = glob_prefix("/ws/vite.config.ts") else {
+            panic!("expected file");
+        };
+        assert_eq!(f, Path::new("/ws/vite.config.ts"));
+    }
+
+    #[test]
+    fn file_created_under_a_bare_include_directory_changes_the_walk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("a.ts"), "export const a = 1;").unwrap();
+        let layout = CacheLayout::for_workspace(tmp.path());
+        let overlay = serde_json::json!({ "include": [src.to_string_lossy()] });
+        let before = walk_include_roots(&overlay, &layout);
+        std::fs::write(src.join("b.test.ts"), "export const b: number = '';").unwrap();
+        let after = walk_include_roots(&overlay, &layout);
+        assert!(!stats_match(&before, &after));
     }
 
     #[test]

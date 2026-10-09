@@ -107,11 +107,8 @@ fn open_tag_end(bytes: &[u8], mut pos: usize) -> Option<usize> {
                     (k > value_start).then_some(k)
                 }
             };
-            match value_end {
-                Some(end) => j = end,
-                // `NAME` alone matched; the `=` then fails the tag.
-                None => return None,
-            }
+            // `NAME` alone matched; the `=` then fails the tag.
+            j = value_end?;
         }
         pos = j;
     }

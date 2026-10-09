@@ -15,7 +15,7 @@ members = [
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.96"
+rust-version = "1.97"
 license = "MIT"
 repository = "https://github.com/harshmandan/svelte-check-native"
 authors = ["Harsh Mandan <harshsinghmandan@gmail.com>"]
@@ -62,7 +62,7 @@ phf = { version = "0.14", features = ["macros"] }
 # {@const} names, use: directives, component instantiations) — in
 # typical components these have 0-2 elements, so the heap alloc was
 # wasted on the common case.
-smallvec = "2.0.0-alpha.12"
+smallvec = "2.0.0-beta.2"
 # Tolerant JSON for tsconfig.json (comments + trailing commas).
 json5 = "1"
 # ECMAScript ID_Start / ID_Continue tables — exact Unicode identifier
@@ -99,17 +99,17 @@ semver = "1"
 # JS/TS parser. Architecture rule: embedded JS/TS is parsed once into
 # a real AST and walked structurally — never scanned character-by-
 # character. oxc is the only parser in the workspace for this reason.
-oxc_allocator = "0.149"
-oxc_ast = "0.149"
-oxc_ast_visit = "0.149"
-oxc_diagnostics = "0.149"
-oxc_parser = "0.149"
-oxc_regular_expression = "0.149"
-oxc_span = "0.149"
+oxc_allocator = "0.153"
+oxc_ast = "0.153"
+oxc_ast_visit = "0.153"
+oxc_diagnostics = "0.153"
+oxc_parser = "0.153"
+oxc_regular_expression = "0.153"
+oxc_span = "0.153"
 # Unicode identifier tables (is_identifier_start/part) — already in the
 # dependency tree via oxc_parser, exposed directly for the template
 # parser's identifier reads (full-Unicode like upstream read_identifier).
-oxc_syntax = "0.149"
+oxc_syntax = "0.153"
 
 # Testing
 insta = { version = "1", features = ["yaml", "filters"] }

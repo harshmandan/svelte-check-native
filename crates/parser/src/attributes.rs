@@ -348,10 +348,7 @@ fn parse_named_attribute(
     let value = if scanner.peek_byte() == Some(b'=') {
         scanner.advance_byte();
         scanner.skip_ascii_whitespace();
-        match parse_attr_value(scanner, errors) {
-            Some(v) => Some(v),
-            None => return None,
-        }
+        Some(parse_attr_value(scanner, errors)?)
     } else {
         // Boolean attribute — restore the scanner to just after the
         // name so the attribute-list loop sees the trailing whitespace

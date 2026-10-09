@@ -605,7 +605,7 @@ fn run_debug_paths(workspace: &Path, tsconfig: Option<&Path>) -> ExitCode {
         None => println!("tsconfig:         <none>"),
     }
     match svn_typecheck::discover(workspace) {
-        Ok(bin) => println!("tsgo:             {}", &bin.path.display()),
+        Ok(bin) => println!("tsgo:             {}", bin.path.display()),
         Err(e) => println!("tsgo:             <not found> ({e})"),
     }
     // The svelte-compiler crate keeps its discovery internal; report
@@ -633,7 +633,7 @@ fn run_tsgo_version(workspace: &Path) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    println!("tsgo binary: {}", &bin.path.display());
+    println!("tsgo binary: {}", bin.path.display());
     // The discovery layer flags JS-wrapper installs (`tsc` under
     // node_modules/typescript/bin/) with
     // `needs_node = true`. Those can't be exec'd directly — we have

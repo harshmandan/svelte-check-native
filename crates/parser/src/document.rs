@@ -212,12 +212,9 @@ fn script_tag_attrs(text: &str, at: usize) -> Option<&str> {
                 }
                 None => None,
             };
-            match len {
-                Some(len) => end += 1 + len,
-                // `=` with no value: the optional group can't match, and
-                // `=` can't start the closing `\s*>` either.
-                None => return None,
-            }
+            // `=` with no value: the optional group can't match, and
+            // `=` can't start the closing `\s*>` either.
+            end += 1 + len?;
         }
         pos = end;
     }

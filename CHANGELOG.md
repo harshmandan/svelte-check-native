@@ -6,6 +6,26 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.9.1]
+
+Fixes a gap in the no-change cache that let a new file go unchecked,
+and updates oxc.
+
+### Fixed
+
+- **A new file is checked on the next run.** The no-change cache
+  watches the directories a tsconfig `include` names so that a newly
+  created file forces a real check. An entry without a glob was taken
+  as a single file, so SvelteKit 3's `"include": ["src", …]` left
+  `src/` unwatched: a new `.ts` file, and any error in it, went
+  unchecked until the cache was cleared. A bare directory entry now
+  covers everything under it, as TypeScript reads it. Fresh CI runs
+  were not affected.
+
+### Changed
+
+- oxc 0.149 → 0.153. Building from source now needs Rust 1.97.
+
 ## [1.9.0]
 
 SvelteKit 3 support and a faster no-change run. Components imported

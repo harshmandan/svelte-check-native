@@ -7,8 +7,8 @@
 # manual review pass confirms no behavior gap or test gap.
 
 [language-tools]
-sha = "af7c6a505a8aa631f5ca7794f41163e46cb0bc33"
-note = "svelte-check@4.7.6+ — a compiler process that dies or exits non-zero without a parseable diagnostic fails the run with exit 1 (#3133); svelte2tsx finds script and style blocks in one pass (#3079)"
+sha = "b1ab06379bca7d96f64f4c2063ffc3c28c060148"
+note = "svelte-check@4.7.7+ — elements typed from the installed svelte-html.d.ts (#3141); a $props type argument is reported, not moved into the alias (#3126); include defaults to **/* when the tsconfig has neither include nor files (#3138)"
 
 [svelte-compiler]
 # The Svelte compiler repo tracked locally under

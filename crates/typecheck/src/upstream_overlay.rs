@@ -112,7 +112,7 @@ pub(crate) fn overlay(inputs: &Inputs<'_>) -> Value {
     for spec in raw_files.iter().filter(|s| !s.ends_with(".svelte")) {
         push_unique(&mut files, rebase(spec));
     }
-    for spec in raw_files.iter().filter(|s| s.ends_with(".svelte")) {
+    for spec in &raw_files {
         push_unique(&mut files, virtual_spec(spec));
     }
     // svelte2tsx's shim declarations, then the element typings: the

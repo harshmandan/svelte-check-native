@@ -112,14 +112,27 @@ pub(crate) fn overlay(inputs: &Inputs<'_>) -> Value {
     for spec in raw_files.iter().filter(|s| !s.ends_with(".svelte")) {
         push_unique(&mut files, rebase(spec));
     }
-    for spec in &raw_files {
+    for spec in raw_files.iter().filter(|s| s.ends_with(".svelte")) {
         push_unique(&mut files, virtual_spec(spec));
     }
-    // svelte2tsx's two shim declarations.
+    // svelte2tsx's shim declarations, then the element typings: the
+    // installed svelte's `svelte-html.d.ts` when it ships one, else
+    // svelte2tsx's `svelte-jsx-v4.d.ts`.
     push_unique(&mut files, "svelte-shims-v4.d.ts".into());
-    push_unique(&mut files, "svelte-jsx-v4.d.ts".into());
+    match crate::svelte_html_types(inputs.workspace) {
+        Some(svelte_html) => push_unique(&mut files, rel(&svelte_html)),
+        None => push_unique(&mut files, "svelte-jsx-v4.d.ts".into()),
+    }
 
-    let raw_include = entry.and_then(|e| e.include.clone());
+    // With neither `include` nor `files` in the chain svelte-check
+    // writes the compiler's default `include` out, since its `files`
+    // would otherwise turn it into "include nothing".
+    let no_specs = svn_core::tsconfig::winning_patterns(inputs.chain, |f| f.include.as_deref())
+        .is_none()
+        && svn_core::tsconfig::winning_patterns(inputs.chain, |f| f.files.as_deref()).is_none();
+    let raw_include = entry
+        .and_then(|e| e.include.clone())
+        .or_else(|| no_specs.then(|| vec!["**/*".to_string()]));
     let raw_exclude = entry.and_then(|e| e.exclude.clone());
     let mut include: Vec<String> = Vec::new();
     if let Some(specs) = &raw_include {

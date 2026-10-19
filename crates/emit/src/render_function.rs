@@ -455,8 +455,8 @@ pub(crate) fn emit_render_body_return(
 /// Mirrors upstream svelte2tsx's `createBindingsStr`
 /// (`ExportedNames.ts:764-771`):
 ///
-/// - Runes mode (`PropsSource::RuneAnnotation` /
-///   `PropsSource::RuneGeneric`): collect every destructure entry with
+/// - Runes mode (`PropsSource::RuneAnnotation` or a destructure the
+///   props are synthesised from): collect every destructure entry with
 ///   `is_bindable: true` (the `$bindable()` marker on the default) and
 ///   emit `__svn_$$bindings('a', 'b')`. The shim returns
 ///   `Bindings[number]`, i.e. the literal-string union `'a' | 'b'`.
@@ -475,7 +475,6 @@ fn build_bindings_field(props_info: &svn_analyze::PropsInfo, is_ts: bool) -> Str
     let is_runes = matches!(
         props_info.source,
         svn_analyze::PropsSource::RuneAnnotation
-            | svn_analyze::PropsSource::RuneGeneric
             | svn_analyze::PropsSource::SynthesisedFromDestructure
     );
     if !is_runes {

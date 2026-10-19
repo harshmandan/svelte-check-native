@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 1,
+            "column": 23,
+            "code": 2558
+        },
+        {
+            "file": "Whole.svelte",
+            "line": 1,
+            "column": 23,
+            "code": 2558
+        }
+    ],
+    "_note": "`$props` takes no type arguments (Svelte declares `function $props(): any`), so a type argument on the call is TS2558 \"Expected 0 type arguments, but got 1\" at the argument. svelte2tsx once moved a literal type argument into the `$$ComponentProps` alias and hid the error; svelte-check 4.7.7 leaves the call as written, types the props from the destructure as for an untyped `$props()`, and reports it."
+}

@@ -365,8 +365,10 @@ declare namespace $effect {
     function pending(): number;
 }
 
-/** `$props<T>()` declares the component's prop bag. */
-declare function $props<T = Record<string, any>>(): T;
+/** `$props()` declares the component's prop bag. Like Svelte's own
+ * declaration it takes no type argument: the props are typed by
+ * annotating the declaration (`let { a }: Props = $props()`). */
+declare function $props(): any;
 declare namespace $props {
     function id(): string;
 }

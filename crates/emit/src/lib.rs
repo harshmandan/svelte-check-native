@@ -236,10 +236,9 @@ fn hoist_context(
     let (generic_names, generic_constraints) =
         util::generic_hoist_inputs(generics, instance_content);
     let props_type = match (&props_info.source, props_info.type_text.as_deref()) {
-        (
-            svn_analyze::PropsSource::RuneAnnotation | svn_analyze::PropsSource::RuneGeneric,
-            Some(text),
-        ) => PropsTypeShape::from_type_text(text),
+        (svn_analyze::PropsSource::RuneAnnotation, Some(text)) => {
+            PropsTypeShape::from_type_text(text)
+        }
         _ => PropsTypeShape::Untyped,
     };
     HoistContext {
@@ -1056,9 +1055,7 @@ fn emit_document_with_render_name(
         .is_some_and(|t| t.trim_start().starts_with('{'))
         && match props_info.source {
             svn_analyze::PropsSource::SynthesisedFromDestructure => is_ts,
-            svn_analyze::PropsSource::RuneAnnotation | svn_analyze::PropsSource::RuneGeneric => {
-                true
-            }
+            svn_analyze::PropsSource::RuneAnnotation => true,
             _ => false,
         };
     // SVELTE-4-COMPAT: when `type NAME = $$Generic[<args>];` declarations
@@ -1240,16 +1237,14 @@ fn emit_document_with_render_name(
         .type_text
         .as_deref()
         .is_some_and(|t| t.trim_start().starts_with('{'));
-    // svelte2tsx moves a `$props()` annotation or type argument into the
+    // svelte2tsx moves a `$props()` annotation into the
     // alias whatever the script's language: in a JavaScript component
     // the alias is itself type syntax (TS8008 on its name), and the
     // annotation it replaces is fenced off.
     let should_alias = ty_is_literal
         && match props_info.source {
             svn_analyze::PropsSource::SynthesisedFromDestructure => is_ts,
-            svn_analyze::PropsSource::RuneAnnotation | svn_analyze::PropsSource::RuneGeneric => {
-                true
-            }
+            svn_analyze::PropsSource::RuneAnnotation => true,
             _ => false,
         };
     // Alias placement: ALWAYS body-local when emitting `type

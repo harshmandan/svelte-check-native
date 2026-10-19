@@ -1,0 +1,25 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 1,
+            "column": 24,
+            "code": 2558
+        },
+        {
+            "file": "input.svelte",
+            "line": 2,
+            "column": 7,
+            "code": 2552
+        }
+    ],
+    "warnings": [
+        {
+            "file": "input.svelte",
+            "line": 5,
+            "column": 20,
+            "code": "state_referenced_locally"
+        }
+    ],
+    "_note": "`$props` takes no type argument, so the literal one here is TS2558 at its start. It is still a type, and checked as one: `nmber` reports TS2552. svelte-check before 4.7.7 moved the argument into the `$$ComponentProps` alias and hid the TS2558."
+}

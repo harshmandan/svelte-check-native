@@ -30,6 +30,7 @@
 //! - `let { foo, ...rest } = $props()`                 → locals = `foo`, `rest`
 //! - `let { foo }: FooProps = $props()`                → local = `foo`
 //! - `let { foo } = $props<Props>()`                   → local = `foo`
+//!   (the type argument is not a type source — `$props` takes none)
 //!
 //! Nested destructuring (`let { foo: { bar } } = $props()`) is walked
 //! recursively; every leaf identifier is recorded.
@@ -39,15 +40,14 @@
 //! First match wins:
 //!
 //! 1. `let { ... }: PropType = $props()` → PropType source slice.
-//! 2. `let { ... } = $props<PropType>()` → PropType source slice.
-//! 3. `interface $$Props { ... }` or `type $$Props = ...`, exported or
+//! 2. `interface $$Props { ... }` or `type $$Props = ...`, exported or
 //!    not, at the top of the instance script → the literal string
 //!    `"$$Props"`.
-//! 4. `export let foo: T; export let bar = 42;` (Svelte-4) →
+//! 3. `export let foo: T; export let bar = 42;` (Svelte-4) →
 //!    synthesize `{ foo: T; bar?: any; ... }` from each top-level
 //!    `export let`/`export const` declaration (plus `export { alias }`
 //!    specifiers).
-//! 5. None of the above → `PropsSource::None`; emit falls back to
+//! 4. None of the above → `PropsSource::None`; emit falls back to
 //!    `any`.
 
 use oxc_ast::ast::{
@@ -132,8 +132,6 @@ pub enum PropsSource {
     /// `let { ... }: PropType = $props()` — annotation on the
     /// destructure binding.
     RuneAnnotation,
-    /// `let { ... } = $props<PropType>()` — generic arg on the call.
-    RuneGeneric,
     /// Svelte-4 `interface $$Props { ... }` at module scope.
     LegacyInterface,
     /// Synthesised from `export let` / `export const` declarations
@@ -299,17 +297,6 @@ impl PropsInfo {
                         type_span = Some((span.start, span.end));
                         props_source = PropsSource::RuneAnnotation;
                         continue;
-                    }
-                }
-                if let Expression::CallExpression(call) = init
-                    && let Some(tp) = call.type_arguments.as_ref()
-                    && let Some(arg) = tp.params.first()
-                {
-                    let span = arg.span();
-                    if let Some(slice) = source.get(span.start as usize..span.end as usize) {
-                        type_text = Some(slice.to_string());
-                        type_span = Some((span.start, span.end));
-                        props_source = PropsSource::RuneGeneric;
                     }
                 }
             }
@@ -1262,9 +1249,12 @@ mod tests {
     }
 
     #[test]
-    fn props_type_from_generic_arg() {
+    fn props_type_ignores_type_argument() {
+        // `$props` takes no type argument; svelte2tsx types the props
+        // from the destructure as for an untyped call, and the compiler
+        // reports the argument.
         let src = "let { foo } = $props<{ foo: string }>();";
-        assert_eq!(props_type(src).as_deref(), Some("{ foo: string }"));
+        assert_eq!(props_type(src), props_type("let { foo } = $props();"));
     }
 
     #[test]
@@ -1578,27 +1568,18 @@ mod tests {
     }
 
     #[test]
-    fn props_info_rune_generic_source() {
-        let info = build("let { a, b } = $props<Props>();");
-        assert_eq!(info.source, PropsSource::RuneGeneric);
-        assert_eq!(info.type_text.as_deref(), Some("Props"));
-        assert_eq!(info.type_root_name.as_deref(), Some("Props"));
-        let names: Vec<&str> = info
+    fn props_info_type_argument_is_not_a_type_source() {
+        let typed = build("let { a, b } = $props<Props>();");
+        let untyped = build("let { a, b } = $props();");
+        assert_eq!(typed.source, untyped.source);
+        assert_eq!(typed.type_text, untyped.type_text);
+        assert_eq!(typed.type_root_name, untyped.type_root_name);
+        let names: Vec<&str> = typed
             .destructures
             .iter()
             .map(|p| p.local_name.as_str())
             .collect();
         assert_eq!(names, vec!["a", "b"]);
-    }
-
-    #[test]
-    fn props_info_rune_generic_with_type_parameters() {
-        // Generic-instantiated Props type → type_root_name should
-        // still be the leading identifier, not include the `<T>` part.
-        let info = build("let { items } = $props<ListProps<string>>();");
-        assert_eq!(info.source, PropsSource::RuneGeneric);
-        assert_eq!(info.type_text.as_deref(), Some("ListProps<string>"));
-        assert_eq!(info.type_root_name.as_deref(), Some("ListProps"));
     }
 
     #[test]

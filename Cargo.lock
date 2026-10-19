@@ -1410,6 +1410,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "camino",
+ "dunce",
  "oxc_allocator",
  "oxc_ast",
  "oxc_ast_visit",

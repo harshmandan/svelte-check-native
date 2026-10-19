@@ -66,6 +66,11 @@ pub fn build(
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
     files.push(layout.svelte_shims.to_string_lossy().into_owned());
+    // The installed svelte's element typings, when it ships them; the
+    // shim's vendored copy of the namespace is blanked in that case.
+    if let Some(svelte_html) = crate::svelte_html_types(&layout.workspace) {
+        files.push(svelte_html.to_string_lossy().into_owned());
+    }
     // The user's own `files` entries are appended further down, once the
     // extends chain has been loaded — see `user_files`. They cannot be
     // left to inherit: `files` is replace-on-child, so the array we write

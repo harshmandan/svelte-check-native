@@ -1033,24 +1033,26 @@ declare function __svn_ensure_type<T1, T2>(
     el: T1 | T2 | undefined | null,
 ): {};
 
-// Ambient `svelteHTML` namespace — VENDORED VERBATIM from upstream
-// language-tools/packages/svelte2tsx/svelte-jsx-v4.d.ts (MIT-licensed).
-// Mirrors upstream svelte-check's bundled `svelte-jsx-v4.d.ts` so the
-// DOM-element emit (`svelteHTML.createElement("tag", { …attrs })`)
-// resolves with full per-element attribute typing.
+// Ambient `svelteHTML` namespace — VENDORED from Svelte's own
+// `svelte-html.d.ts` (svelte@5.55.4, MIT-licensed). svelte-check
+// loads that file from the installed `svelte` package (falling back
+// to svelte2tsx's `svelte-jsx-v4.d.ts` only when the package has
+// none), so DOM-element emit (`svelteHTML.createElement("tag",
+// { …attrs })`) is typed from `svelte/elements`: every key of
+// `SvelteHTMLElements`, including `<svelte:boundary>` and the user's
+// own augmentations of that interface, reaches
+// `IntrinsicElements` through the `extends` clause.
 //
-// Why vendor instead of referencing user's `svelte/svelte-html.d.ts`:
-// svelte's package.json doesn't expose svelte-html.d.ts through its
-// `exports` map (by design — "deliberately not exposed through the
-// exports map" per its header). Upstream `svelte-check` vendors this
-// same file; we follow suit.
-//
-// Per-element attribute types resolve through
-// `import('svelte/elements').SvelteHTMLElements[K]`. When the user has
-// svelte installed, real attribute catalogs flow through (full
-// per-element typing: `button.type: "button"|"reset"|"submit"|...`).
-// Without svelte, our fallback resolves `HTMLAttributes<T> = any` and
-// the check degrades gracefully.
+// The runtime (typecheck/src/lib.rs) does the same: when the
+// workspace's svelte ships `svelte-html.d.ts`, the block between the
+// `SVELTE_HTML` begin/end markers below is blanked and that file
+// goes into the overlay's `files` instead, so the element typings
+// track the user's Svelte version exactly (5.19 still lists the
+// `svelte:*` keys itself; 5.55 inherits them). This copy is what a
+// workspace without such a file gets.
+// @@SVELTE_HTML_BEGIN@@
+
+type __svn_SvelteHTMLElements = import('svelte/elements').SvelteHTMLElements;
 
 declare namespace svelteHTML {
     function mapElementTag<K extends keyof ElementTagNameMap>(
@@ -1085,7 +1087,7 @@ declare namespace svelteHTML {
     type HTMLProps<Property extends keyof import('svelte/elements').SvelteHTMLElements, Override> =
         Omit<import('svelte/elements').SvelteHTMLElements[Property], keyof Override> & Override;
 
-    interface IntrinsicElements {
+    interface IntrinsicElements extends __svn_SvelteHTMLElements {
         a: HTMLProps<'a', HTMLAttributes>;
         abbr: HTMLProps<'abbr', HTMLAttributes>;
         address: HTMLProps<'address', HTMLAttributes>;
@@ -1263,25 +1265,10 @@ declare namespace svelteHTML {
         use: HTMLProps<'use', SVGAttributes>;
         view: HTMLProps<'view', SVGAttributes>;
 
-        // Svelte specific
-        'svelte:window': HTMLProps<'svelte:window', HTMLAttributes>;
-        'svelte:body': HTMLProps<'svelte:body', HTMLAttributes>;
-        'svelte:document': HTMLProps<'svelte:document', HTMLAttributes>;
-        'svelte:fragment': { slot?: string };
-        'svelte:options': { [name: string]: any };
-        'svelte:head': { [name: string]: any };
-        // `<svelte:boundary onerror={…} />` (Svelte 5.3+). Mirrors
-        // svelte/elements' `'svelte:boundary'` shape so the boundary's
-        // callback signatures and snippet shapes type-check at use.
-        'svelte:boundary': {
-            onerror?: (error: unknown, reset: () => void) => void;
-            failed?: import('svelte').Snippet<[error: unknown, reset: () => void]>;
-            pending?: import('svelte').Snippet;
-        };
-
         [name: string]: { [name: string]: any };
     }
 }
+// @@SVELTE_HTML_END@@
 
 // ---------- asset side-effect imports ----------
 //
@@ -2443,13 +2430,22 @@ declare module 'svelte/elements' {
         tspan: SVGAttributes<SVGElement>;
         use: SVGAttributes<SVGElement>;
         view: SVGAttributes<SVGElement>;
-        // Svelte-specific element keys (also enumerated in svelteHTML.IntrinsicElements).
+        // Svelte-specific element keys. `svelteHTML.IntrinsicElements`
+        // inherits these (it doesn't list them), so they carry the
+        // shapes real svelte/elements gives them.
         'svelte:window': HTMLAttributes<HTMLElement>;
-        'svelte:body': HTMLAttributes<HTMLElement>;
         'svelte:document': HTMLAttributes<HTMLElement>;
-        'svelte:fragment': HTMLAttributes<HTMLElement>;
-        'svelte:options': HTMLAttributes<HTMLElement>;
-        'svelte:head': HTMLAttributes<HTMLElement>;
+        'svelte:body': HTMLAttributes<HTMLElement>;
+        'svelte:fragment': { slot?: string };
+        'svelte:options': { [name: string]: any };
+        'svelte:head': { [name: string]: any };
+        'svelte:boundary': {
+            onerror?: (error: unknown, reset: () => void) => void;
+            failed?: import('svelte').Snippet<[error: unknown, reset: () => void]>;
+            pending?: import('svelte').Snippet;
+        };
+
+        [name: string]: { [name: string]: any };
     }
 }
 

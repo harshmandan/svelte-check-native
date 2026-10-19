@@ -70,6 +70,8 @@ const FALLBACK_BEGIN: &str = "// @@FALLBACK_BEGIN@@";
 const FALLBACK_END: &str = "// @@FALLBACK_END@@";
 const STATE_AMBIENTS_BEGIN: &str = "// @@STATE_AMBIENTS_BEGIN@@";
 const STATE_AMBIENTS_END: &str = "// @@STATE_AMBIENTS_END@@";
+const SVELTE_HTML_BEGIN: &str = "// @@SVELTE_HTML_BEGIN@@";
+const SVELTE_HTML_END: &str = "// @@SVELTE_HTML_END@@";
 
 /// Marker pair used by emit to wrap emit-synthesised scaffolding
 /// bytes that should never produce user-visible diagnostics. Mirrors
@@ -95,13 +97,19 @@ const STATE_AMBIENTS_END: &str = "// @@STATE_AMBIENTS_END@@";
 /// turns each into a two-overload set — a mismatch then reports TS2769
 /// "No overload matches this call" instead of the direct assignability
 /// diagnostic upstream reports.
-fn resolve_shim_text(keep_fallback: bool) -> String {
-    if keep_fallback {
-        return SVELTE_SHIMS.to_string();
-    }
+///
+/// The vendored `svelteHTML` namespace is stripped separately, when
+/// `keep_svelte_html` is false: the installed svelte's own
+/// `svelte-html.d.ts` (see [`svelte_html_types`]) declares it instead.
+fn resolve_shim_text(keep_fallback: bool, keep_svelte_html: bool) -> String {
     let mut out = SVELTE_SHIMS.to_string();
-    out = strip_range_blanking(&out, FALLBACK_BEGIN, FALLBACK_END);
-    out = strip_range_blanking(&out, STATE_AMBIENTS_BEGIN, STATE_AMBIENTS_END);
+    if !keep_fallback {
+        out = strip_range_blanking(&out, FALLBACK_BEGIN, FALLBACK_END);
+        out = strip_range_blanking(&out, STATE_AMBIENTS_BEGIN, STATE_AMBIENTS_END);
+    }
+    if !keep_svelte_html {
+        out = strip_range_blanking(&out, SVELTE_HTML_BEGIN, SVELTE_HTML_END);
+    }
     out
 }
 
@@ -138,6 +146,29 @@ pub(crate) fn has_real_svelte(workspace: &Path) -> bool {
             .then_some(())
     })
     .is_some()
+}
+
+/// The installed svelte's `svelte-html.d.ts`, which declares the
+/// `svelteHTML` namespace element emit type-checks against. svelte-check
+/// loads it in place of svelte2tsx's `svelte-jsx-v4.d.ts` whenever the
+/// package ships one, so elements are typed from `svelte/elements` —
+/// `<svelte:boundary>`, and any `SvelteHTMLElements` augmentation the
+/// user declares, included. The file is deliberately left out of the
+/// package's `exports` map, so it is found on disk, not resolved.
+///
+/// The path is the real one, symlinks resolved, as `require.resolve`
+/// returns it. Under pnpm `node_modules/svelte` is a symlink, and the
+/// compiler resolves `svelte/elements` to the real file: listing this
+/// one by its symlinked path would load a second copy of
+/// `elements.d.ts` beside it, and a user augmentation of
+/// `SvelteHTMLElements` would reach only the copy elements aren't
+/// typed from.
+pub(crate) fn svelte_html_types(workspace: &Path) -> Option<PathBuf> {
+    svn_core::walk_up_dirs(workspace, |dir| {
+        let svelte = dir.join(svn_core::NODE_MODULES_DIR).join("svelte");
+        svelte.join("package.json").is_file().then_some(svelte)
+    })
+    .and_then(|svelte| dunce::canonicalize(svelte.join("svelte-html.d.ts")).ok())
 }
 
 /// True when the user has authored their own ambient declaration
@@ -354,7 +385,10 @@ impl CheckSession {
         // would shadow the richer real types (e.g. svelte/elements
         // re-exports HTMLAnchorAttributes, HTMLInputAttributes, ClassValue
         // from clsx, etc., none of which the fallback enumerates).
-        let shim_text = resolve_shim_text(/* keep_fallback */ !has_real_svelte(workspace));
+        let shim_text = resolve_shim_text(
+            /* keep_fallback */ !has_real_svelte(workspace),
+            /* keep_svelte_html */ svelte_html_types(workspace).is_none(),
+        );
         write_if_changed(&layout.svelte_shims, &shim_text)?;
 
         Ok(Self {
@@ -1772,7 +1806,7 @@ mod tests {
 
     #[test]
     fn shim_keeps_fallback_when_asked() {
-        let full = resolve_shim_text(true);
+        let full = resolve_shim_text(true, true);
         assert!(full.contains(FALLBACK_BEGIN));
         assert!(full.contains(FALLBACK_END));
         assert!(full.contains("declare module 'svelte'"));
@@ -1786,7 +1820,7 @@ mod tests {
 
     #[test]
     fn shim_strips_fallback_when_real_svelte_present() {
-        let stripped = resolve_shim_text(false);
+        let stripped = resolve_shim_text(false, true);
         assert!(!stripped.contains("declare module 'svelte'"));
         assert!(!stripped.contains("declare module 'svelte/elements'"));
         // Svelte's installed declarations are authoritative for the
@@ -1796,9 +1830,19 @@ mod tests {
         assert!(!stripped.contains("function raw<T>"));
         // Line count preserved so diagnostic positions in the shim
         // stay stable across the two modes.
-        let full_lines = resolve_shim_text(true).lines().count();
+        let full_lines = resolve_shim_text(true, true).lines().count();
         let stripped_lines = stripped.lines().count();
         assert_eq!(full_lines, stripped_lines);
+    }
+
+    #[test]
+    fn shim_strips_svelte_html_when_svelte_ships_its_own() {
+        let kept = resolve_shim_text(false, true);
+        assert!(kept.contains("declare namespace svelteHTML"));
+        let stripped = resolve_shim_text(false, false);
+        assert!(!stripped.contains("declare namespace svelteHTML"));
+        assert!(!stripped.contains("__svn_SvelteHTMLElements"));
+        assert_eq!(kept.lines().count(), stripped.lines().count());
     }
 
     #[test]

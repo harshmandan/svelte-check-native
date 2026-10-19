@@ -42,6 +42,11 @@
 //                            and source patches that let upstream
 //                            --tsgo type-check the rig at all).
 //   --quiet                  Suppress per-run timing lines (CSV still prints).
+//   $UPSTREAM_SVELTE_CHECK   Parity mode: the upstream `svelte-check` bin
+//                            to compare against, instead of the one found
+//                            in the target's node_modules — e.g. a newer
+//                            release installed elsewhere to measure it
+//                            before the target upgrades.
 //   --diagnostic-detail      Parity mode: capture every per-diagnostic
 //                            ERROR/WARNING line via `--output
 //                            machine-verbose` and print symmetric-diff
@@ -154,8 +159,9 @@ function runParityMode() {
     if (!args.quiet) console.error(`  running ours…`);
     const oursResult = runOursForCountsWithStderr();
     const effectiveWorkspace = oursResult.redirectedTo ?? targetAbs;
-    const upstream = findUpstreamSvelteCheck(effectiveWorkspace)
-        ?? findUpstreamSvelteCheck(targetAbs);
+    const upstream = process.env.UPSTREAM_SVELTE_CHECK
+        || findUpstreamSvelteCheck(effectiveWorkspace)
+        || findUpstreamSvelteCheck(targetAbs);
     const rows = [
         { tool: 'ours', ...oursResult.counts, diagnostics: oursResult.diagnostics },
     ];

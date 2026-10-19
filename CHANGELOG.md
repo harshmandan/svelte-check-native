@@ -6,6 +6,43 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.10.0]
+
+Matches svelte-check 4.7.7. Elements are typed from Svelte's own
+`svelte-html.d.ts`, a type argument on `$props()` is reported, and a
+tsconfig without `include` checks every module. Expect new errors in
+projects that hit any of these: svelte-check 4.7.7 reports the same
+ones. On both control-rig apps the diagnostics are identical to
+`svelte-check --tsgo` 4.7.7. Upstream `language-tools` pin moves to
+`b1ab0637` (svelte-check 4.7.7).
+
+### Fixed
+
+- **`<svelte:boundary>` and custom elements are typed from
+  `svelte/elements`** (#3141 upstream, thanks @AdamAugustinsky in #73).
+  Elements now get their attribute types from the installed svelte's
+  `svelte-html.d.ts`, as svelte-check 4.7.7 does, in place of
+  svelte2tsx's JSX typings. A `{#snippet failed(error, reset)}` or
+  `onerror={(error) => …}` no longer reports implicit `any` (TS7006)
+  under `strict`, a wrong-shaped `onerror` handler is an error, and an
+  element you add to `SvelteHTMLElements` with
+  `declare module 'svelte/elements'` has its attributes checked.
+- **A type argument on `$props()` is reported** (#3126 upstream).
+  `$props` takes none, so `let { a } = $props<{ a: string }>()` is
+  TS2558 "Expected 0 type arguments", and the props are typed from the
+  destructure as for an untyped `$props()`. Type them by annotating the
+  declaration instead: `let { a }: { a: string } = $props()`. The error
+  used to be hidden.
+- **A tsconfig with no `include` checks every module** (#3138
+  upstream). With neither `include` nor `files` anywhere in the
+  tsconfig chain, TypeScript checks every file beside the tsconfig. The
+  generated tsconfig's own `files` list turned that into "nothing", so
+  a `.ts` file no component imported went unchecked.
+
+### Changed
+
+- serde_json 1.0.151 → 1.0.154, unicode-ident 1.0.26 → 1.0.27 (#74).
+
 ## [1.9.1]
 
 Fixes a gap in the no-change cache that let a new file go unchecked,

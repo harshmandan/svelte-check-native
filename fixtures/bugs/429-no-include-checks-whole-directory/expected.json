@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "src/A.svelte",
+            "line": 1,
+            "column": 8,
+            "code": 2322
+        },
+        {
+            "file": "src/t.ts",
+            "line": 0,
+            "column": 13,
+            "code": 2322
+        }
+    ],
+    "_note": "No `include` and no `files` anywhere in the tsconfig chain: the compiler defaults `include` to `**/*`, so the component and `src/t.ts`, which no component imports, are both checked, and `exclude` still keeps `dist` out. The overlay tsconfig always sets `files` (the shim declarations), which would turn that default into an empty `include`, so the overlay writes `**/*` out. svelte-check --tsgo does the same since 4.7.7; before it, it checked nothing here."
+}

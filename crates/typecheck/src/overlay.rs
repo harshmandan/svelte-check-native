@@ -454,6 +454,19 @@ pub fn build(
     // `.svelte` sources into the program. Mirrors upstream
     // (`incremental.ts:417` keeps user `include` patterns as-is).
     let mut user_includes = winning_patterns_absolute(&chain, |f| f.include.as_deref());
+    // With neither `include` nor `files` anywhere in the chain the
+    // compiler defaults `include` to `**/*` beside the entry config. The
+    // overlay always sets `files`, which would turn that default into
+    // "include nothing" and leave every module no component imports
+    // unchecked, so the default is written out. svelte-check does the
+    // same since 4.7.7.
+    if svn_core::tsconfig::winning_patterns(&chain, |f| f.include.as_deref()).is_none()
+        && svn_core::tsconfig::winning_patterns(&chain, |f| f.files.as_deref()).is_none()
+        && let Some(entry) = chain.first()
+    {
+        let default = normalize(&entry.config_dir().join("**/*"));
+        user_includes.push(default.to_string_lossy().into_owned());
+    }
     // Redirect `.svelte-kit/types/**/$types.d.ts` includes to the
     // cache mirror (when present). Load-bearing companion to the
     // mirror+rootDirs setup: without this redirect the user's
@@ -1171,5 +1184,46 @@ mod tests {
             overlay_types_entry("/abs/globals.d.ts", dir),
             "/abs/globals.d.ts"
         );
+    }
+
+    fn overlay_include(ws: &Path) -> Option<Vec<String>> {
+        let layout = CacheLayout::for_workspace(ws);
+        let overlay = build(&layout, &ws.join("tsconfig.json"), &[], &[], &[], None, &[]);
+        overlay["include"]
+            .as_array()
+            .map(|a| a.iter().map(|v| v.as_str().unwrap().to_string()).collect())
+    }
+
+    #[test]
+    fn build_overlay_spells_out_default_include() {
+        let tmp = tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        write_file(
+            &ws.join("tsconfig.json"),
+            r#"{ "compilerOptions": { "strict": true } }"#,
+        );
+        let include = overlay_include(&ws).expect("default include written");
+        let default = ws.join("**/*").to_string_lossy().into_owned();
+        assert_eq!(include.first(), Some(&default));
+    }
+
+    #[test]
+    fn build_overlay_keeps_files_only_project_closed() {
+        let tmp = tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        write_file(&ws.join("tsconfig.json"), r#"{ "files": ["./main.ts"] }"#);
+        assert_eq!(overlay_include(&ws), None);
+    }
+
+    #[test]
+    fn build_overlay_takes_include_inherited_through_extends() {
+        let tmp = tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        write_file(&ws.join("base.json"), r#"{ "include": ["src/**/*"] }"#);
+        write_file(&ws.join("tsconfig.json"), r#"{ "extends": "./base.json" }"#);
+        let include = overlay_include(&ws).expect("inherited include written");
+        let inherited = ws.join("src/**/*").to_string_lossy().into_owned();
+        assert_eq!(include.first(), Some(&inherited));
+        assert!(!include.contains(&ws.join("**/*").to_string_lossy().into_owned()));
     }
 }

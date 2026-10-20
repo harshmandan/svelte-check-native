@@ -1,5 +1,4 @@
-import Gone, { NotListed } from './Gone.svelte';
-import Real from 'nopkg/Gone.svelte';
+import Gone from './Gone.svelte';
 
 export const s: string = 1;
-export const v = [Gone, NotListed, Real];
+export const v = [Gone];

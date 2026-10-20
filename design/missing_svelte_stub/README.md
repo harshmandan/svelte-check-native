@@ -3,23 +3,22 @@
 Locks the stub declaration the overlay writes for a `.svelte` import
 that resolves to no file (TSGO-ENHANCEMENT layer).
 
-The default svelte-check engine leaves such an import unresolved: it
-reports TS2307 and every binding from it is `any`, in value AND type
-position, so nothing else fires. Under tsgo, svelte's `declare module
-'*.svelte'` wildcard (`ambient.d.ts` here) resolves it instead, and the
-bindings take the wildcard's shape: a value-only `Component<any>`
-default and no named exports. That produces TS2614, TS2749, TS2339,
-TS2322, TS2554 and TS6196 that the default engine never reports.
+The default svelte-check engine blanks svelte's `declare module
+'*.svelte'` block when it loads svelte's types
+(`language-server/src/plugins/typescript/DocumentSnapshot.ts`,
+`fromNonSvelteFilePath`), so a missing module stays unresolved: TS2307
+at each reference and an `any`-like error type for every use — value,
+type, namespace member, generic, qualified name — with nothing else
+reported. Under tsgo that wildcard (`ambient.d.ts` here) resolves the
+import instead, and its value-only `Component<any>` default with no
+named exports fires TS2614, TS2749, TS2694, TS2339, TS7053, TS2322,
+TS2554 and TS6196.
 
-`cache/` stands in for the overlay. Each missing target gets a stub
-that exports `any` in both spaces under every name its importers use:
-
-```ts
-declare const __svn_missing: any;
-type __svn_missing = any;
-export default __svn_missing;
-export { __svn_missing as Named, __svn_missing as thing };
-```
+The stub is a comment-only declaration file: a script, not a module.
+The compiler resolves the import to it, reports TS2306 "File '…' is not
+a module" at the specifier and then treats the import exactly as
+unresolved — the wildcard is never consulted. The pipeline drops each
+TS2306 that names a stub (its own TS2307 stands in its place).
 
 A relative target is reached through `rootDirs` (the stub sits at the
 target's `.d.svelte.ts` mirror path); an aliased or bare specifier
@@ -31,8 +30,8 @@ tsgo -p design/missing_svelte_stub/cache/tsconfig.nostub.json  # today
 tsgo -p design/missing_svelte_stub/cache/tsconfig.json         # with stubs
 ```
 
-Expected without stubs: `clean.ts` fires TS2614 ×3, TS6196, TS2749 ×3,
-TS2322 ×2, TS2554 and TS2339. With stubs: `clean.ts` silent;
-`broken.ts` fires TS2614 at 1:16 (a name the stub does not list — the
-real overlay lists every imported name) and TS2322 at 4:14 (an
-unrelated error the stubs must not hide), in both runs.
+Expected without stubs: `clean.ts` fires the wildcard errors listed
+above. With stubs: only TS2306 at each `.svelte` specifier (1:42, 2:21,
+3:27, 4:23, 5:18, 13:25, 17:52, 18:15, 19:22, 21:26 in `clean.ts`;
+1:18 in `broken.ts`), and `broken.ts`'s unrelated TS2322 at 3:14, which
+the stub must not hide.

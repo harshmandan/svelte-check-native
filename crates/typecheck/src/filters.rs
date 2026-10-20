@@ -332,7 +332,7 @@ pub(crate) fn adjust_message_if_necessary(code: u32, message: &mut String, svelt
 /// `"version"` major. Unknown (no svelte install, unreadable
 /// manifest) reports `false`, mirroring upstream's
 /// `isSvelte5Plus = Number(undefined) >= 5` fallthrough.
-pub fn workspace_svelte_is_5_plus(workspace: &Path) -> bool {
+pub(crate) fn workspace_svelte_is_5_plus(workspace: &Path) -> bool {
     workspace_svelte_major(workspace).is_some_and(|major| major >= 5)
 }
 

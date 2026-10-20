@@ -14,7 +14,7 @@ here with the evidence attached.
 
 | experiment | question it answered |
 |---|---|
-| [`svelte-lsp-spike/`](svelte-lsp-spike/README.md) | Can a Svelte language server be built on tsgo without holding a whole-workspace TypeScript program in memory? |
+| `svelte-lsp-spike/` (removed; see below) | Can a Svelte language server be built on tsgo without holding a whole-workspace TypeScript program in memory? |
 
 ## svelte-lsp-spike
 
@@ -51,3 +51,7 @@ gap between this and something installable is not the type-checking pipeline —
 that part works — it is a total source map (rename cannot use a partial one
 without silently skipping occurrences) and Svelte-aware completion, which is
 where the existing implementations spend their effort too.
+
+The code was removed once it stopped building against the type-check crate.
+`git log -- experiments/svelte-lsp-spike` finds it, with its own README and
+the full numbers.

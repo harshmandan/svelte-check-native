@@ -43,7 +43,7 @@ use rayon::prelude::*;
 
 pub use cache::{CacheLayout, write_if_changed};
 pub use discovery::{DiscoveryError, TsgoBinary, discover};
-pub use filters::{workspace_svelte_is_5_plus, workspace_svelte_major};
+pub use filters::workspace_svelte_major;
 pub use output::{RawDiagnostic, Severity, parse as parse_output};
 pub use runner::{RunError, run as run_tsgo};
 pub use types::{
@@ -1363,39 +1363,6 @@ fn restore_types_entry_spelling(message: &mut String, reanchored: &[(String, Str
             }
         }
     }
-}
-
-/// Map raw tsgo diagnostics into `.svelte` source coordinates.
-///
-/// [`check`] does this internally right after it runs tsgo. This entry exists
-/// for callers that obtain the same diagnostics some other way, so that they
-/// do not have to reimplement any of it. Position mapping is only half the
-/// job: which diagnostics a user ever sees is decided by a set of
-/// upstream-parity filters (emit-ignore regions, the Svelte-4 reactive-label
-/// label, duplicate element-attribute keys, transition-callback arity, pug
-/// containers, plus the message rewrites), and a second implementation of
-/// those would drift from this one silently.
-///
-/// `map_data` is keyed by generated overlay path, as
-/// [`CacheLayout::generated_path_with_lang`] produces it.
-pub fn map_raw_diagnostics(
-    layout: &CacheLayout,
-    map_data: &std::collections::HashMap<PathBuf, MapData>,
-    raws: Vec<RawDiagnostic>,
-    svelte5_plus: bool,
-) -> Vec<CheckDiagnostic> {
-    let no_excluded_kit_sources = std::collections::HashSet::new();
-    raws.into_iter()
-        .filter_map(|raw| {
-            map_diagnostic(
-                raw,
-                layout,
-                map_data,
-                &no_excluded_kit_sources,
-                svelte5_plus,
-            )
-        })
-        .collect()
 }
 
 fn map_diagnostic(

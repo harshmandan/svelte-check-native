@@ -3,9 +3,9 @@
         {
             "file": "App.svelte",
             "line": 1,
-            "column": 14,
+            "column": 43,
             "code": 2307
         }
     ],
-    "_note": "Two `.svelte` imports on ONE source line, second missing (`./B.svelte`). No `svelte` install here, so no `*.svelte` wildcard: tsgo reports the 2307 itself, but the overlay line-map collapses the second statement's column onto the first's — while our native TSGO-ENHANCEMENT check maps to the true opening quote. A (path,line,column) dedup key would miss that mismatch and double-report; keying on (path,line,message) pins the module and collapses to the single expected error. Regression lock for the dedup-key fix."
+    "_note": "Two `.svelte` imports on ONE source line, second missing (`./B.svelte`). The default svelte-check engine (4.7.7) reports TS2307 at the true opening quote, column 43. No `svelte` install here, so no `*.svelte` wildcard: without the TSGO-ENHANCEMENT stub for the missing module, tsgo reports the 2307 itself, but the overlay line-map collapses the second statement's column onto the first's (14), and the (path,line,message) dedup keeps tsgo's copy. The stub makes the module resolve, so tsgo stays quiet and the enhancement's true-quote position is the one reported."
 }

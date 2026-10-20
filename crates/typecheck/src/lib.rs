@@ -354,6 +354,22 @@ pub struct CheckSession {
     /// Extra `paths` entries for the overlay tsconfig; see
     /// [`Self::set_path_aliases`].
     path_aliases: Vec<(String, PathBuf)>,
+    /// Stub files [`Self::add_module_stubs`] wrote, kept by the cache GC.
+    stub_paths: Vec<PathBuf>,
+}
+
+/// TSGO-ENHANCEMENT: a declaration standing in for a module that does
+/// not exist, so the compiler resolves the import to it instead of a
+/// `declare module` wildcard. The text comes from the caller.
+pub enum ModuleStub {
+    /// A missing `.svelte` file named by a relative specifier: written
+    /// where that component's generated declaration would be, which the
+    /// overlay's `rootDirs` already reaches from every importer.
+    SvelteFile { source: PathBuf, text: String },
+    /// An aliased or bare specifier: written under the cache and mapped
+    /// with an exact-match `paths` entry, which takes precedence over
+    /// wildcard patterns.
+    Specifier { specifier: String, text: String },
 }
 
 impl CheckSession {
@@ -395,6 +411,7 @@ impl CheckSession {
             layout,
             kit_types_mirror_task,
             path_aliases: Vec::new(),
+            stub_paths: Vec::new(),
         })
     }
 
@@ -406,6 +423,34 @@ impl CheckSession {
     /// is left to the user's entry.
     pub fn set_path_aliases(&mut self, aliases: Vec<(String, PathBuf)>) {
         self.path_aliases = aliases;
+    }
+
+    /// TSGO-ENHANCEMENT: write declaration stubs for missing modules (see
+    /// [`ModuleStub`]). Specifier stubs are numbered in the order given,
+    /// so a stable input order keeps the overlay tsconfig stable.
+    pub fn add_module_stubs(&mut self, stubs: Vec<ModuleStub>) -> Result<(), CheckError> {
+        let mut specifier_count = 0usize;
+        for stub in stubs {
+            match stub {
+                ModuleStub::SvelteFile { source, text } => {
+                    let path = self.layout.ambient_path(&source);
+                    write_if_changed(&path, &text)?;
+                    self.stub_paths.push(path);
+                }
+                ModuleStub::Specifier { specifier, text } => {
+                    let path = self
+                        .layout
+                        .svelte_dir
+                        .join("__svn_missing")
+                        .join(format!("{specifier_count}.d.ts"));
+                    specifier_count += 1;
+                    write_if_changed(&path, &text)?;
+                    self.path_aliases.push((specifier, path.clone()));
+                    self.stub_paths.push(path);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Write one input's generated TS (and ambient sidecar) into the
@@ -656,6 +701,7 @@ impl CheckSession {
         let mut written_paths: std::collections::HashSet<PathBuf> =
             std::collections::HashSet::with_capacity(prepared.len() * 2);
 
+        written_paths.extend(self.stub_paths.iter().cloned());
         let mut js_overlay_paths: Vec<PathBuf> = Vec::new();
         // Fold the per-input results in input order.
         for p in prepared {

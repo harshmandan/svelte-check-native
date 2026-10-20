@@ -39,7 +39,8 @@
 //!
 //! - `missing_svelte_imports`: TS2307 for a `.svelte` import that
 //!   resolves to no file — in components and in plain `.ts`/`.js`
-//!   modules alike.
+//!   modules alike — plus the stub declarations that keep svelte's
+//!   `*.svelte` wildcard from typing the missing module.
 //! - `package_imports`: `.svelte` files imported through package.json
 //!   `imports` (SvelteKit 3's `#lib`), which `--tsgo` sends to svelte's
 //!   `*.svelte` wildcard instead of the component's types.
@@ -57,7 +58,7 @@ mod missing_svelte_imports;
 mod package_imports;
 
 pub use missing_svelte_imports::{
-    EnhancementDiagnostic, SvelteImportResolver, missing_svelte_import_diagnostics,
-    missing_svelte_import_diagnostics_in_script,
+    EnhancementDiagnostic, MissingImports, MissingModule, StubTarget, SvelteImportResolver,
+    missing_svelte_import_diagnostics, missing_svelte_import_diagnostics_in_script, module_stubs,
 };
 pub use package_imports::package_import_aliases;

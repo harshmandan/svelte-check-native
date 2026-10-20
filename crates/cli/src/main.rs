@@ -1160,19 +1160,21 @@ fn carry_bidi_regex(
 // `None` for a `.ts`/`.js` file). The detection lives in the isolated
 // `svn-enhance` crate (droppable once TS7.1's module-resolution API lands
 // upstream — see that crate's docs); here we only lift its
-// position-mapped results into `CheckDiagnostic`.
+// position-mapped results into `CheckDiagnostic`. The missing modules
+// pass through untouched, for the stubs written before tsgo runs.
 fn missing_svelte_import_diagnostics(
     file: &Path,
     source: &str,
     doc: Option<&svn_parser::Document<'_>>,
     resolver: &svn_enhance::SvelteImportResolver,
-) -> Vec<svn_typecheck::CheckDiagnostic> {
+) -> MissingImportsFound {
     let script_is_ts = svn_parser::is_ts_svelte(source);
     let found = match doc {
         Some(doc) => svn_enhance::missing_svelte_import_diagnostics(file, source, doc, resolver),
         None => svn_enhance::missing_svelte_import_diagnostics_in_script(file, source, resolver),
     };
-    found
+    let diagnostics = found
+        .diagnostics
         .into_iter()
         .map(|d| svn_typecheck::CheckDiagnostic {
             // Same `ts`/`js` rule as the tsgo-mapped diagnostics: on a
@@ -1190,8 +1192,16 @@ fn missing_svelte_import_diagnostics(
             code_description_url: None,
             position_unknown: false,
         })
-        .collect()
+        .collect();
+    (diagnostics, found.modules)
 }
+
+// TSGO-ENHANCEMENT: one file's missing-import TS2307s and the modules
+// behind them.
+type MissingImportsFound = (
+    Vec<svn_typecheck::CheckDiagnostic>,
+    Vec<svn_enhance::MissingModule>,
+);
 
 /// Merge per-file native diagnostics into the output vec in the
 /// two-phase emission order documented on [`NativeFileDiagnostics`].
@@ -1978,6 +1988,9 @@ fn check_project(
     // the diagnostics stream after tsgo, since it's a `js`-source error.
     let mut missing_import_diags: Vec<svn_typecheck::CheckDiagnostic> = Vec::new();
     {
+        // TSGO-ENHANCEMENT: the modules behind those TS2307s, stubbed
+        // before tsgo runs so svelte's `*.svelte` wildcard doesn't type them.
+        let mut missing_modules: Vec<svn_enhance::MissingModule> = Vec::new();
         // Cache-global setup (cache dir, type shims) plus the
         // background `.svelte-kit/types/` mirror start here, BEFORE
         // the emit fan-out, so the mirror's tree walk overlaps the
@@ -2029,7 +2042,7 @@ fn check_project(
                     || svn_lint::script_tag_rejected(&doc)
                     || svn_lint::template_parse_rejected(&fragment, source, doc.script_lang())
                 {
-                    return (None, (None, Vec::new(), Some(file.clone())));
+                    return (None, (None, (Vec::new(), Vec::new()), Some(file.clone())));
                 }
                 // Fused native pass: derive fatal/lint diagnostics from
                 // THIS parse instead of re-parsing the corpus after
@@ -2061,17 +2074,16 @@ fn check_project(
                 // TSGO-ENHANCEMENT: missing `.svelte` imports (TS2307) —
                 // in-scope files only; the aux tail is present solely for
                 // tsgo's import-following and isn't reported on.
-                let missing: Vec<svn_typecheck::CheckDiagnostic> =
-                    if idx < svelte_sources_in_scope_end {
-                        missing_svelte_import_diagnostics(
-                            file,
-                            source,
-                            Some(&doc),
-                            svelte_import_resolver_ref,
-                        )
-                    } else {
-                        Vec::new()
-                    };
+                let missing = if idx < svelte_sources_in_scope_end {
+                    missing_svelte_import_diagnostics(
+                        file,
+                        source,
+                        Some(&doc),
+                        svelte_import_resolver_ref,
+                    )
+                } else {
+                    (Vec::new(), Vec::new())
+                };
                 let summary = svn_analyze::walk_template(&fragment, source);
                 // Overlay extension mirrors upstream svelte-check's
                 // `isTsSvelte(text)` per-file dispatch
@@ -2092,7 +2104,7 @@ fn check_project(
                 // Leaving it out of the session also lets the cache GC
                 // remove an overlay an earlier run wrote for it.
                 if emitted.rejected_by_svelte2tsx {
-                    return (None, (None, Vec::new(), Some(file.clone())));
+                    return (None, (None, (Vec::new(), Vec::new()), Some(file.clone())));
                 }
                 let kind = if idx < svelte_sources_in_scope_end {
                     svn_typecheck::InputKind::Svelte
@@ -2120,36 +2132,36 @@ fn check_project(
         // flattening the missing-import diagnostics into one stream.
         let natives: Vec<(
             Option<NativeFileDiagnostics>,
-            Vec<svn_typecheck::CheckDiagnostic>,
+            MissingImportsFound,
             Option<PathBuf>,
         )> = natives;
         native_results = Vec::with_capacity(natives.len());
-        for (native, missing, dropped) in natives {
+        for (native, (missing, modules), dropped) in natives {
             native_results.push(native);
             missing_import_diags.extend(missing);
+            missing_modules.extend(modules);
             dropped_files.extend(dropped);
         }
         // TSGO-ENHANCEMENT: missing `.svelte` imports in the program's
         // TS/JS modules (kit files included, checked against the source
         // as written, before any `$types` injection).
         if svelte_import_resolver.is_enabled() {
-            missing_import_diags.extend(
-                script_files
-                    .par_iter()
-                    .flat_map_iter(|file| {
-                        std::fs::read_to_string(file)
-                            .map(|source| {
-                                missing_svelte_import_diagnostics(
-                                    file,
-                                    &source,
-                                    None,
-                                    svelte_import_resolver_ref,
-                                )
-                            })
-                            .unwrap_or_default()
-                    })
-                    .collect::<Vec<_>>(),
-            );
+            let found: Vec<_> = script_files
+                .par_iter()
+                .filter_map(|file| {
+                    let source = std::fs::read_to_string(file).ok()?;
+                    Some(missing_svelte_import_diagnostics(
+                        file,
+                        &source,
+                        None,
+                        svelte_import_resolver_ref,
+                    ))
+                })
+                .collect();
+            for (missing, modules) in found {
+                missing_import_diags.extend(missing);
+                missing_modules.extend(modules);
+            }
         }
         if let Some(compat) = native_compat {
             let native = NativeLint {
@@ -2213,6 +2225,26 @@ fn check_project(
                 .collect::<Vec<_>>(),
         );
 
+        // TSGO-ENHANCEMENT: one stub per missing module, exporting every
+        // name its importers read as `any` — the unresolved-module typing
+        // the default svelte-check engine gives them.
+        if !missing_modules.is_empty() {
+            let stubs = svn_enhance::module_stubs(missing_modules)
+                .into_iter()
+                .map(|(target, text)| match target {
+                    svn_enhance::StubTarget::SvelteFile(source) => {
+                        svn_typecheck::ModuleStub::SvelteFile { source, text }
+                    }
+                    svn_enhance::StubTarget::Specifier(specifier) => {
+                        svn_typecheck::ModuleStub::Specifier { specifier, text }
+                    }
+                })
+                .collect();
+            if let Err(err) = session.add_module_stubs(stubs) {
+                return Err(run_failed(&err));
+            }
+        }
+
         checker = Some((session, prepared));
     }
     let t_emit = mark.elapsed();
@@ -2243,9 +2275,11 @@ fn check_project(
     // (empty unless the js/ts source ran). tsgo usually can't see these —
     // svelte's own `declare module '*.svelte'` wildcard swallows the
     // unresolved specifier — so this is what keeps us at parity with the default
-    // `svelte-check`. But when that wildcard ISN'T in scope (a minimal
-    // project that never imports `svelte`), tsgo reports the 2307 itself;
-    // dedup against tsgo's own diagnostics so we never double-report.
+    // `svelte-check`. When that wildcard ISN'T in scope (a minimal
+    // project that never imports `svelte`), tsgo would report the 2307
+    // itself; the module stubs written above normally make the import
+    // resolve so it doesn't, and this dedup guards any import a stub does
+    // not reach, so we never double-report.
     //
     // Key on (path, line, message), NOT column: tsgo's column comes back
     // through the overlay line-map, which collapses a second same-line

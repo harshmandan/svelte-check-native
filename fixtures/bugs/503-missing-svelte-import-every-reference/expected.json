@@ -1,0 +1,21 @@
+{
+    "errors": [
+        { "file": "src/Check.svelte", "line": 2, "column": 21, "code": 2307 },
+        { "file": "src/Check.svelte", "line": 3, "column": 22, "code": 2307 },
+        { "file": "src/Tpl.svelte", "line": 1, "column": 24, "code": 2307 },
+        { "file": "src/Tpl.svelte", "line": 7, "column": 15, "code": 2307 },
+        { "file": "src/Tpl.svelte", "line": 8, "column": 20, "code": 2307 },
+        { "file": "src/Tpl.svelte", "line": 9, "column": 22, "code": 2307 },
+        { "file": "src/Tpl.svelte", "line": 11, "column": 23, "code": 2307 },
+        { "file": "src/doc.js", "line": 1, "column": 27, "code": 2307 },
+        { "file": "src/doc.js", "line": 2, "column": 18, "code": 2307 },
+        { "file": "src/doc.js", "line": 6, "column": 15, "code": 2307 },
+        { "file": "src/doc.js", "line": 12, "column": 20, "code": 2307 },
+        { "file": "src/types.ts", "line": 0, "column": 28, "code": 2307 },
+        { "file": "src/types.ts", "line": 1, "column": 30, "code": 2307 },
+        { "file": "src/types.ts", "line": 2, "column": 23, "code": 2307 },
+        { "file": "src/types.ts", "line": 3, "column": 0, "code": 1202 },
+        { "file": "src/types.ts", "line": 3, "column": 21, "code": 2307 }
+    ],
+    "_note": "Every way a missing `.svelte` module can be referenced, and which files the default svelte-check engine (4.7.7) checks at all. It reports TS2307 at: a string-literal import name, `typeof import()` and `import().X<T>` types, `import x = require()` (beside tsgo's own TS1202), JSDoc `@import` / `@type` / multi-line `@typedef` / `@returns` import types in a `// @ts-check` .js file, a JSDoc import type in a `// @ts-check` plain-JS component, and template expressions: `{#await import()}`, an attribute value, a snippet parameter's type, `{@const}`. Namespace members read in the template (`<Ns.Comp>`, `{Ns.value}`) add nothing: an unresolved module is `any`. Nothing is reported for an unchecked .js file, a plain-JS component with `checkJs` off, or a `// @ts-nocheck` TS component. Expected list copied from the default engine run on this tree."
+}

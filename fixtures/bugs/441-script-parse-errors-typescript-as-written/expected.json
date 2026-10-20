@@ -53,8 +53,14 @@
             "line": 12,
             "column": 14,
             "code": "typescript_invalid_feature"
+        },
+        {
+            "file": "tsconfig.json",
+            "line": 0,
+            "column": 0,
+            "code": 2318
         }
     ],
     "warnings": [],
-    "_note": "With `vitePreprocess()` and no `script: true`, a `<script lang=\"ts\">` reaches the compiler as written and acorn-typescript parses it. It rejects a parameter modifier outside a method (`private` is a reserved word there), `using` declarations and a repeated type alias, reports an incompatible `static accessor` at the file offset equal to the modifier's column, and after an overload signature reads the rest of the script as if inside a plain function, so a top-level `await` fails. Interface merging, overloads and constructor parameter properties parse (the latter then fails TypeScript stripping). Verified against upstream svelte-check."
+    "_note": "With `vitePreprocess()` and no `script: true`, a `<script lang=\"ts\">` reaches the compiler as written and acorn-typescript parses it. It rejects a parameter modifier outside a method (`private` is a reserved word there), `using` declarations and a repeated type alias, reports an incompatible `static accessor` at the file offset equal to the modifier's column, and after an overload signature reads the rest of the script as if inside a plain function, so a top-level `await` fails. Interface merging, overloads and constructor parameter properties parse (the latter then fails TypeScript stripping). Verified against upstream svelte-check. The `using` declaration also needs the `Disposable` global, which the configured lib lacks; tsgo reports that as a TS2318 with no file or position, which svelte-check --tsgo 4.7.7 reports on the project tsconfig at 1:1."
 }

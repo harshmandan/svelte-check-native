@@ -1,4 +1,11 @@
 {
-    "clean": true,
-    "_note": "User's tsconfig includes a `types` entry pointing at a build-time-generated .d.ts that doesn't exist on disk yet (e.g. `unplugin-auto-import` output before the first build). tsgo treats a missing `types` entry as fatal TS2688 — once that fires, downstream files in the program go un-diagnosed. Our overlay must filter the inherited `types` array to drop entries that don't resolve, so the rest of the project still gets checked."
+    "errors": [
+        {
+            "file": "tsconfig.json",
+            "line": 0,
+            "column": 0,
+            "code": 2688
+        }
+    ],
+    "_note": "A `types` entry points at a build-time-generated .d.ts that does not exist yet (e.g. `unplugin-auto-import` output before the first build). The entry is inherited as written, as svelte-check's overlay inherits it, and tsgo reports a TS2688 with no file or position. svelte-check --tsgo 4.7.7 reports it on the project tsconfig at 1:1, quoting the entry as written, and so do we."
 }

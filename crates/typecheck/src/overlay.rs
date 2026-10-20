@@ -313,9 +313,10 @@ pub fn build(
     // laxer than upstream, and this was laxer.
     compiler_options.insert("rootDirs".into(), json!(root_dirs));
     // `types` is inherited as written, the way svelte-check's overlay
-    // inherits it. An entry that does not resolve is a fatal TS2688 there:
-    // the compiler abandons the program and svelte-check reports nothing,
-    // and so do we.
+    // inherits it. An entry that does not resolve is a TS2688 with no
+    // file or position; svelte-check reports it on the user's tsconfig
+    // at 1:1, and so do we (see `reanchored_types_entries` for its
+    // message).
     //
     // TypeScript resolves a path-shaped entry against the directory of
     // the ROOT config it compiles — `types` is not one of the options
@@ -730,6 +731,26 @@ where
             normalize(&resolved).to_string_lossy().into_owned()
         })
         .collect()
+}
+
+/// `(as the overlay writes it, as the user wrote it)` for every
+/// path-shaped `types` entry the overlay re-anchors. A TS2688 for such
+/// an entry quotes the overlay's spelling, while svelte-check's overlay
+/// inherits the user's own, so its message quotes that.
+pub(crate) fn reanchored_types_entries(
+    layout: &CacheLayout,
+    user_tsconfig: &Path,
+) -> Vec<(String, String)> {
+    let chain: Vec<TsConfigFile> = load_chain(user_tsconfig).unwrap_or_default();
+    let anchor = crate::upstream_overlay::cache_dir(&layout.workspace);
+    svn_core::tsconfig::winning_field(&chain, |f| f.compiler_options.types.as_deref())
+        .map(|(_, list)| {
+            list.iter()
+                .map(|t| (overlay_types_entry(t, &anchor), t.clone()))
+                .filter(|(written, original)| written != original)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Rewrite one `types` entry into the form the overlay tsconfig must

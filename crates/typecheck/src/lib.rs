@@ -732,7 +732,7 @@ impl CheckSession {
             include_suggestions,
             extended_diagnostics,
         );
-        let mut run = match replay_ctx.as_ref().and_then(|ctx| ctx.try_load()) {
+        let run = match replay_ctx.as_ref().and_then(|ctx| ctx.try_load()) {
             Some(diagnostics) => runner::RunOutput {
                 diagnostics,
                 extended_diagnostics: None,
@@ -804,28 +804,39 @@ impl CheckSession {
         // comparing, exactly as `map_diagnostic` does: tsgo's relative
         // paths can carry `..` segments, and an unnormalised join never
         // prefix-matches `layout.root`.
-        // Bare-form diagnostics (config-level, no file/position — e.g.
-        // TS2688 for an unresolvable `types` entry) are dropped before
-        // anything counts them, because upstream observably drops them:
-        // its mapper has a tsconfig-attribution fallback in the code,
-        // but the diagnostic never reaches its output — verified on a
-        // real workspace where raw tsgo fires the bare TS2688 against
-        // upstream's own generated tsconfig and `svelte-check --tsgo`
-        // still reports 0 errors while the check completes in full.
-        // POSITION-ANCHORED config errors are different: upstream
-        // reports those against its overlay path, and so do we (the
-        // fatal-config-error fixture locks that). Dropping before the
-        // user-diagnostic count keeps the everything-was-filtered guard
-        // meaningful: a run whose only diagnostic was a bare config
-        // note DID check the program, and upstream reports it clean.
-        run.diagnostics.retain(|d| !d.file.as_os_str().is_empty());
-        let raw_user_diagnostic_count = run
+        // Bare-form diagnostics (no file or position — e.g. TS2688 for
+        // an unresolvable `types` entry, or TS18068 for `contentMappers`
+        // without `--runExternalCode`) are reported on the user's
+        // tsconfig at 1:1, as svelte-check does: its parser accepts a
+        // header with no location and its mapper falls back to the
+        // project tsconfig (`diagnostic.filePath ?? tsconfigPath`).
+        // They skip `map_diagnostic` — no filter there applies to a
+        // tsconfig — and always surface, so counting them as user
+        // diagnostics leaves the everything-was-filtered guard as it
+        // was.
+        let (bare, located): (Vec<RawDiagnostic>, Vec<RawDiagnostic>) = run
             .diagnostics
-            .iter()
-            .filter(|d| counts_as_user_diagnostic(&d.file, layout, &excluded_kit_sources))
-            .count();
-        let mut diagnostics: Vec<CheckDiagnostic> = run
-            .diagnostics
+            .into_iter()
+            .partition(|d| d.file.as_os_str().is_empty());
+        let raw_user_diagnostic_count = bare.len()
+            + located
+                .iter()
+                .filter(|d| counts_as_user_diagnostic(&d.file, layout, &excluded_kit_sources))
+                .count();
+        let user_tsconfig_path =
+            path_utils::lexical_normalise(&layout.workspace.join(user_tsconfig));
+        let reanchored_types = if bare.iter().any(|d| d.code == 2688) {
+            overlay::reanchored_types_entries(layout, user_tsconfig)
+        } else {
+            Vec::new()
+        };
+        let bare = bare.into_iter().map(|mut d| {
+            if d.code == 2688 {
+                restore_types_entry_spelling(&mut d.message, &reanchored_types);
+            }
+            bare_diagnostic(d, &user_tsconfig_path)
+        });
+        let mut diagnostics: Vec<CheckDiagnostic> = located
             .into_iter()
             .filter_map(|d| {
                 map_diagnostic(d, layout, &map_data, &excluded_kit_sources, svelte5_plus)
@@ -858,6 +869,7 @@ impl CheckSession {
                 }
                 d
             })
+            .chain(bare)
             .collect();
 
         // A diagnostic on our overlay tsconfig is reported where
@@ -1249,6 +1261,7 @@ fn overlay_syntax_failures(
                 ),
                 source: DiagnosticSource::Js,
                 code_description_url: None,
+                position_unknown: false,
             })
         })
         .collect()
@@ -1316,6 +1329,40 @@ fn counts_as_user_diagnostic(
     };
     let abs = path_utils::lexical_normalise(&abs);
     !abs.starts_with(&layout.root) && !excluded_kit_sources.contains(&abs)
+}
+
+/// A diagnostic tsgo printed with no file or position, reported on the
+/// user's tsconfig at 1:1. svelte-check reads the missing position as
+/// line 0, column 0 and gives every diagnostic a length of 1 when no
+/// underline follows; we count from 1.
+fn bare_diagnostic(raw: RawDiagnostic, user_tsconfig: &Path) -> CheckDiagnostic {
+    CheckDiagnostic {
+        source: diagnostic_source(user_tsconfig, false),
+        source_path: user_tsconfig.to_path_buf(),
+        line: 1,
+        column: 1,
+        end_line: 1,
+        end_column: 2,
+        severity: raw.severity,
+        code: DiagnosticCode::Numeric(raw.code),
+        message: raw.message,
+        code_description_url: None,
+        position_unknown: true,
+    }
+}
+
+/// Put the user's spelling of a re-anchored `types` entry back into a
+/// TS2688 message ("Cannot find type definition file for '…'.").
+fn restore_types_entry_spelling(message: &mut String, reanchored: &[(String, String)]) {
+    for (written, original) in reanchored {
+        for spelling in [written.clone(), written.replace('\\', "/")] {
+            let quoted = format!("'{spelling}'");
+            if message.contains(&quoted) {
+                *message = message.replacen(&quoted, &format!("'{original}'"), 1);
+                return;
+            }
+        }
+    }
 }
 
 /// Map raw tsgo diagnostics into `.svelte` source coordinates.
@@ -1713,6 +1760,7 @@ fn map_diagnostic(
         // empty for now — IDEs that want links can derive them from
         // the numeric code.
         code_description_url: None,
+        position_unknown: false,
     })
 }
 
@@ -1732,6 +1780,54 @@ mod tests {
             splice_all(text, &[(9, "pre".to_string())]),
             "012345678pre9abcdefghijklmnopqrstuvwxyz\nline two\n"
         );
+    }
+
+    /// tsgo prints a config error inherited through `extends` with no
+    /// file or position. svelte-check --tsgo reports it on the project
+    /// tsconfig at 1:1 with a one-character range, labelled `js`.
+    #[test]
+    fn bare_diagnostic_lands_on_the_user_tsconfig_at_one_one() {
+        // tsgo 7.1-dev, `contentMappers` in the tsconfig our overlay extends.
+        let stdout = "\x1b[91merror\x1b[0m\x1b[90m TS18068: \x1b[0mContent mappers require \
+                      the '--runExternalCode' command line flag to be enabled.\n\n\
+                      Found 1 error.\n";
+        let raws = output::parse(stdout);
+        assert_eq!(raws.len(), 1);
+        assert!(raws[0].file.as_os_str().is_empty());
+        let d = bare_diagnostic(raws[0].clone(), Path::new("/w/tsconfig.json"));
+        assert_eq!(d.source_path, Path::new("/w/tsconfig.json"));
+        assert_eq!((d.line, d.column, d.end_line, d.end_column), (1, 1, 1, 2));
+        assert!(matches!(d.code, DiagnosticCode::Numeric(18068)));
+        assert_eq!(
+            d.message,
+            "Content mappers require the '--runExternalCode' command line flag to be enabled."
+        );
+        assert_eq!(d.source, DiagnosticSource::Js);
+        assert!(d.position_unknown);
+    }
+
+    /// svelte-check's overlay inherits a relative `types` entry as
+    /// written, so its TS2688 quotes the user's spelling, not the
+    /// absolute path our overlay carries.
+    #[test]
+    fn ts2688_quotes_the_types_entry_as_the_user_wrote_it() {
+        let reanchored = vec![
+            (
+                "/w/.svelte-check/x.d.ts".to_string(),
+                "./x.d.ts".to_string(),
+            ),
+            ("/w/shared/g".to_string(), "../shared/g".to_string()),
+        ];
+        let mut message = "Cannot find type definition file for '/w/shared/g'.".to_string();
+        restore_types_entry_spelling(&mut message, &reanchored);
+        assert_eq!(
+            message,
+            "Cannot find type definition file for '../shared/g'."
+        );
+
+        let mut untouched = "Cannot find type definition file for 'node'.".to_string();
+        restore_types_entry_spelling(&mut untouched, &reanchored);
+        assert_eq!(untouched, "Cannot find type definition file for 'node'.");
     }
 
     /// The `(ts)` / `(js)` label upstream puts on each diagnostic. A

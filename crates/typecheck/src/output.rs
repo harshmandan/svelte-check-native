@@ -89,11 +89,9 @@ pub fn parse(stdout: &str) -> Vec<RawDiagnostic> {
 ///    config-level errors that can't be tied to a single position (e.g.
 ///    TS18003 "No inputs were found in config file '...'"). The returned
 ///    `file` is empty (`PathBuf::new()`); `line` and `column` are 0.
-///    Callers attribute these to a tsconfig path of their choosing —
-///    `crate::check` substitutes the user's tsconfig before downstream
-///    mapping, mirroring upstream svelte-check's
-///    `mapCliDiagnosticsToLsp(.., tsconfigPath)` fallback at
-///    `packages/svelte-check/src/incremental.ts:565`.
+///    `crate::check` reports them on the user's tsconfig at 1:1, as
+///    svelte-check's `mapCliDiagnosticsToLsp` falls back to the project
+///    tsconfig (`diagnostic.filePath ?? tsconfigPath`).
 fn parse_header(line: &str) -> Option<RawDiagnostic> {
     // Find ` - error TS` or ` - warning TS` somewhere in the line.
     if let Some(idx) = line.find(" - error TS") {

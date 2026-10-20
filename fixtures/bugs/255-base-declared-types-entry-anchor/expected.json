@@ -1,4 +1,11 @@
 {
-    "clean": true,
-    "_note": "A path-shaped `types` entry anchors on the directory of the root config being compiled, not on the directory of whichever config in the extends chain wrote it. Here the base config in cfg/ writes `./typedefs/amb.d.ts`, which resolves only from the entry tsconfig's own directory one level up. Anchoring on the declaring directory instead looked for cfg/typedefs/amb.d.ts, dropped the entry as unresolvable, and emitted an empty `types` array — which additionally suppresses every automatic @types package, so the ambient vanished and each use of it became a spurious TS2304."
+    "errors": [
+        {
+            "file": "tsconfig.json",
+            "line": 0,
+            "column": 0,
+            "code": 2688
+        }
+    ],
+    "_note": "A path-shaped `types` entry anchors on the directory of the root config being compiled, not on the directory of whichever config in the extends chain wrote it. Under svelte-check that root is its overlay in `.svelte-check/`, so the base config's `./typedefs/amb.d.ts` does not resolve there: tsgo prints a TS2688 with no file or position, and svelte-check --tsgo 4.7.7 reports it on the project tsconfig at 1:1, quoting the entry as written. Our overlay re-anchors the entry on that same directory, so it fails the same way, and the message gets the user's spelling back."
 }

@@ -1,4 +1,11 @@
 {
-    "clean": true,
-    "_note": "A path-shaped `types` entry is inherited as written, and TypeScript resolves it against the directory of the root config it compiles. Under svelte-check that root is its overlay in `.svelte-check/`, where `./worker-configuration.d.ts` does not exist: the entry is a fatal TS2688, which svelte-check does not print, and the compiler abandons the program, so the assignability error in the component is never reported. The entry is re-anchored on svelte-check's overlay directory so it fails the same way here. Verified against svelte-check --tsgo."
+    "errors": [
+        {
+            "file": "tsconfig.json",
+            "line": 0,
+            "column": 0,
+            "code": 2688
+        }
+    ],
+    "_note": "A path-shaped `types` entry is inherited as written, and TypeScript resolves it against the directory of the root config it compiles. Under svelte-check that root is its overlay in `.svelte-check/`, where `./worker-configuration.d.ts` does not exist: tsgo prints a TS2688 with no file or position and abandons the program, so the assignability error in the component is never reported. svelte-check --tsgo 4.7.7 reports only the TS2688, on the project tsconfig at 1:1. Our overlay re-anchors the entry on svelte-check's overlay directory so it fails the same way."
 }

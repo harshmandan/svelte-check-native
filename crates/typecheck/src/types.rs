@@ -243,6 +243,10 @@ pub struct CheckDiagnostic {
     /// integrations render it as a clickable link in the problems
     /// panel.
     pub code_description_url: Option<String>,
+    /// The compiler gave no position, so `line`/`column` are a 1:1
+    /// placeholder on the tsconfig. The human writer then prints no
+    /// code frame, as svelte-check does for its `positionUnknown`.
+    pub position_unknown: bool,
 }
 
 /// Polymorphic diagnostic code: TypeScript uses numbers, the Svelte

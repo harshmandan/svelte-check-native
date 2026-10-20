@@ -1,0 +1,6 @@
+{
+    "errors": [
+        { "file": "tsconfig.json", "line": 0, "column": 0, "code": 2688 }
+    ],
+    "_note": "An unresolvable `types` entry makes tsgo print a bare `error TS2688:` line with no file or position. svelte-check --tsgo (4.4.7 and later) parses that header and reports it on the project's tsconfig at 1:1; verified against 4.7.7 with this fixture's tsconfig, including when the package sits only in pnpm's hidden `node_modules/.pnpm/node_modules/@types`, which tsgo does not search. svelte-check 4.4.6 and earlier dropped bare lines, which is why this fixture once expected a clean run."
+}

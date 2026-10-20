@@ -901,6 +901,7 @@ fn native_diagnostics_for_parsed(
                 message: err.to_string(),
                 source: svn_typecheck::DiagnosticSource::Svelte,
                 code_description_url: None,
+                position_unknown: false,
             }],
             broken: true,
             warnings: Vec::new(),
@@ -942,6 +943,7 @@ fn native_diagnostics_for_parsed(
             message,
             source: svn_typecheck::DiagnosticSource::Svelte,
             code_description_url: None,
+            position_unknown: false,
         })
         .into_iter()
         .collect();
@@ -1186,6 +1188,7 @@ fn missing_svelte_import_diagnostics(
             code: svn_typecheck::DiagnosticCode::Numeric(d.code),
             message: d.message,
             code_description_url: None,
+            position_unknown: false,
         })
         .collect()
 }
@@ -1246,6 +1249,7 @@ fn merge_native_diagnostics(
                 message: w.message,
                 source: svn_typecheck::DiagnosticSource::Svelte,
                 code_description_url: href,
+                position_unknown: false,
             });
         }
     }
@@ -2344,6 +2348,7 @@ fn check_project(
                                 message: w.message,
                                 source: svn_typecheck::DiagnosticSource::Svelte,
                                 code_description_url: href,
+                                position_unknown: false,
                             });
                         }
                     }

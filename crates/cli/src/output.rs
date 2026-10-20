@@ -369,7 +369,7 @@ fn print_human(
                 ));
             }
             let frame = match &frame_source {
-                Some((_, Some(text))) => code_frame(text, d, color),
+                Some((_, Some(text))) if !d.position_unknown => code_frame(text, d, color),
                 _ => String::new(),
             };
             outln!(
@@ -523,6 +523,7 @@ mod tests {
             message: String::new(),
             source: svn_typecheck::DiagnosticSource::Ts,
             code_description_url: None,
+            position_unknown: false,
         }
     }
 

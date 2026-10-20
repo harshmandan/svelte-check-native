@@ -1,4 +1,11 @@
 {
-    "clean": true,
-    "_note": "A `types` entry that does not resolve is inherited as written. The compiler reports a fatal TS2688 without a file, which svelte-check does not print, and abandons the program, so the component's assignability error is never reported: svelte-check --tsgo reports a clean run here, and so do we."
+    "errors": [
+        {
+            "file": "tsconfig.json",
+            "line": 0,
+            "column": 0,
+            "code": 2688
+        }
+    ],
+    "_note": "A `types` entry that does not resolve is inherited as written. tsgo prints a TS2688 with no file or position and abandons the program, so the component's assignability error is never reported. svelte-check --tsgo 4.7.7 reports only that TS2688, on the project tsconfig at 1:1, and so do we."
 }

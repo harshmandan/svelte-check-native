@@ -1,0 +1,27 @@
+{
+    "compilerOptions": {
+        "target": "ES2022",
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "strict": true,
+        "noUnusedLocals": true,
+        "skipLibCheck": true,
+        "isolatedModules": true,
+        "verbatimModuleSyntax": true,
+        "noEmit": true,
+        "allowArbitraryExtensions": true,
+        "rootDirs": [
+            ".."
+        ],
+        "paths": {
+            "$lib/*": [
+                "../src/lib/*"
+            ]
+        }
+    },
+    "files": [
+        "../ambient.d.ts",
+        "../src/clean.ts",
+        "../src/broken.ts"
+    ]
+}

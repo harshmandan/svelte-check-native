@@ -1,0 +1,21 @@
+{
+    "compilerOptions": {
+        "target": "ES2022",
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "strict": true,
+        "noUnusedLocals": true,
+        "skipLibCheck": true,
+        "isolatedModules": true,
+        "verbatimModuleSyntax": true,
+        "noEmit": true,
+        "allowArbitraryExtensions": true,
+        "rootDirs": ["..", "./svelte"],
+        "paths": {
+            "$lib/Gone.svelte": ["./svelte/__svn_missing/0.d.ts"],
+            "nopkg/Gone.svelte": ["./svelte/__svn_missing/1.d.ts"],
+            "$lib/*": ["../src/lib/*", "./svelte/src/lib/*"]
+        }
+    },
+    "files": ["../ambient.d.ts", "../src/clean.ts", "../src/broken.ts"]
+}

@@ -1,0 +1,14 @@
+import Typed from './A.svelte';
+import { Named, Other } from './B.svelte';
+import * as Ns from './C.svelte';
+import Num from './D.svelte';
+import Call from './E.svelte';
+import type TypeOnly from './G.svelte';
+export type T1 = Typed;
+export const v1 = Named;
+export type T2 = Other;
+export const v3 = Ns.thing;
+export const n: number = Num;
+export const c = Call();
+export type T7 = TypeOnly;
+export { default as Again, Named as Renamed } from './B.svelte';

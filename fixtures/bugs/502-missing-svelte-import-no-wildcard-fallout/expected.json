@@ -1,0 +1,18 @@
+{
+    "errors": [
+        { "file": "src/App.svelte", "line": 1, "column": 21, "code": 2307 },
+        { "file": "src/App.svelte", "line": 2, "column": 26, "code": 2307 },
+        { "file": "src/App.svelte", "line": 3, "column": 26, "code": 2307 },
+        { "file": "src/App.svelte", "line": 4, "column": 26, "code": 2307 },
+        { "file": "src/alias.ts", "line": 0, "column": 22, "code": 2307 },
+        { "file": "src/alias.ts", "line": 1, "column": 27, "code": 2307 },
+        { "file": "src/main.ts", "line": 0, "column": 18, "code": 2307 },
+        { "file": "src/main.ts", "line": 1, "column": 29, "code": 2307 },
+        { "file": "src/main.ts", "line": 2, "column": 20, "code": 2307 },
+        { "file": "src/main.ts", "line": 3, "column": 16, "code": 2307 },
+        { "file": "src/main.ts", "line": 4, "column": 17, "code": 2307 },
+        { "file": "src/main.ts", "line": 5, "column": 26, "code": 2307 },
+        { "file": "src/main.ts", "line": 13, "column": 51, "code": 2307 }
+    ],
+    "_note": "A missing `.svelte` import used every way that trips svelte's `declare module '*.svelte'` wildcard under tsgo: a default import used as a type, named imports, a namespace member, a default assigned to `number` or called, a type-only import, in `.ts` and `.svelte` importers, through relative, `$lib` (tsconfig `paths`) and bare specifiers. The default svelte-check engine (4.7.7) leaves the module unresolved, so it reports TS2307 at each specifier and nothing else: every binding is `any`. Under tsgo the wildcard gives the bindings a value-only `Component<any>` default and no named exports, which fired TS2614, TS2749, TS2339, TS2322, TS2554 and TS6133/TS6196. The TSGO-ENHANCEMENT layer writes a stub declaration for each missing target exporting `any` in value and type space under every name its importers use (`B.svelte` is imported with different names from `main.ts` and `App.svelte`), reached through `rootDirs` for relative specifiers and an exact `paths` entry otherwise. Expected list copied from the default engine run on this exact tree."
+}

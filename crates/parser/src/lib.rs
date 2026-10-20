@@ -33,6 +33,7 @@ mod script;
 mod script_tag_expression;
 mod sections;
 mod template;
+mod ts_check;
 
 pub use ast::{
     AttrValue, AttrValuePart, Attribute, AwaitBlock, CatchBranch, Comment, Component, Directive,
@@ -52,3 +53,4 @@ pub use script_tag_expression::{
 };
 pub use sections::parse_sections;
 pub use template::{parse_all_template_runs, parse_template};
+pub use ts_check::ts_check_directive;

@@ -781,6 +781,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxc_jsdoc"
+version = "0.153.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06313218fe92eaf710e2a0a3a6b292a45eece17e607fd2820bef19088943ae27"
+dependencies = [
+ "oxc_ast",
+ "oxc_span",
+ "rustc-hash",
+]
+
+[[package]]
 name = "oxc_parser"
 version = "0.153.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1344,11 +1355,14 @@ dependencies = [
  "oxc_allocator",
  "oxc_ast",
  "oxc_ast_visit",
+ "oxc_jsdoc",
  "oxc_parser",
  "oxc_resolver",
  "oxc_span",
  "rayon",
  "serde_json",
+ "smol_str",
+ "svn-analyze",
  "svn-core",
  "svn-parser",
  "tempfile",

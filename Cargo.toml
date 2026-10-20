@@ -105,6 +105,8 @@ oxc_ast_visit = "0.153"
 oxc_diagnostics = "0.153"
 oxc_parser = "0.153"
 oxc_regular_expression = "0.153"
+# JSDoc parsing (tags, `{type}` parts) for import types in checked JS.
+oxc_jsdoc = "0.153"
 oxc_span = "0.153"
 # Unicode identifier tables (is_identifier_start/part) — already in the
 # dependency tree via oxc_parser, exposed directly for the template

@@ -39,8 +39,8 @@
 //!
 //! - `missing_svelte_imports`: TS2307 for a `.svelte` import that
 //!   resolves to no file — in components and in plain `.ts`/`.js`
-//!   modules alike — plus the stub declarations that keep svelte's
-//!   `*.svelte` wildcard from typing the missing module.
+//!   modules alike, at every kind of reference — plus the stub that
+//!   keeps svelte's `*.svelte` wildcard from typing the missing module.
 //! - `package_imports`: `.svelte` files imported through package.json
 //!   `imports` (SvelteKit 3's `#lib`), which `--tsgo` sends to svelte's
 //!   `*.svelte` wildcard instead of the component's types.
@@ -56,9 +56,10 @@
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 mod missing_svelte_imports;
 mod package_imports;
+mod svelte_refs;
 
 pub use missing_svelte_imports::{
-    EnhancementDiagnostic, MissingImports, MissingModule, StubTarget, SvelteImportResolver,
+    EnhancementDiagnostic, MISSING_MODULE_STUB, MissingImports, StubTarget, SvelteImportResolver,
     missing_svelte_import_diagnostics, missing_svelte_import_diagnostics_in_script, module_stubs,
 };
 pub use package_imports::package_import_aliases;

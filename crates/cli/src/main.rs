@@ -1165,12 +1165,14 @@ fn carry_bidi_regex(
 fn missing_svelte_import_diagnostics(
     file: &Path,
     source: &str,
-    doc: Option<&svn_parser::Document<'_>>,
+    component: Option<(&svn_parser::Document<'_>, &svn_parser::Fragment)>,
     resolver: &svn_enhance::SvelteImportResolver,
 ) -> MissingImportsFound {
     let script_is_ts = svn_parser::is_ts_svelte(source);
-    let found = match doc {
-        Some(doc) => svn_enhance::missing_svelte_import_diagnostics(file, source, doc, resolver),
+    let found = match component {
+        Some((doc, fragment)) => {
+            svn_enhance::missing_svelte_import_diagnostics(file, source, doc, fragment, resolver)
+        }
         None => svn_enhance::missing_svelte_import_diagnostics_in_script(file, source, resolver),
     };
     let diagnostics = found
@@ -1193,14 +1195,14 @@ fn missing_svelte_import_diagnostics(
             position_unknown: false,
         })
         .collect();
-    (diagnostics, found.modules)
+    (diagnostics, found.stub_targets)
 }
 
 // TSGO-ENHANCEMENT: one file's missing-import TS2307s and the modules
 // behind them.
 type MissingImportsFound = (
     Vec<svn_typecheck::CheckDiagnostic>,
-    Vec<svn_enhance::MissingModule>,
+    Vec<svn_enhance::StubTarget>,
 );
 
 /// Merge per-file native diagnostics into the output vec in the
@@ -1987,10 +1989,13 @@ fn check_project(
     // imports. Collected during the emit fan-out (below) and merged into
     // the diagnostics stream after tsgo, since it's a `js`-source error.
     let mut missing_import_diags: Vec<svn_typecheck::CheckDiagnostic> = Vec::new();
+    // TSGO-ENHANCEMENT: the stub files written for those modules, whose
+    // TS2306 "is not a module" is dropped after tsgo.
+    let mut module_stub_paths: Vec<PathBuf> = Vec::new();
     {
         // TSGO-ENHANCEMENT: the modules behind those TS2307s, stubbed
         // before tsgo runs so svelte's `*.svelte` wildcard doesn't type them.
-        let mut missing_modules: Vec<svn_enhance::MissingModule> = Vec::new();
+        let mut missing_modules: Vec<svn_enhance::StubTarget> = Vec::new();
         // Cache-global setup (cache dir, type shims) plus the
         // background `.svelte-kit/types/` mirror start here, BEFORE
         // the emit fan-out, so the mirror's tree walk overlaps the
@@ -2078,7 +2083,7 @@ fn check_project(
                     missing_svelte_import_diagnostics(
                         file,
                         source,
-                        Some(&doc),
+                        Some((&doc, &fragment)),
                         svelte_import_resolver_ref,
                     )
                 } else {
@@ -2225,24 +2230,28 @@ fn check_project(
                 .collect::<Vec<_>>(),
         );
 
-        // TSGO-ENHANCEMENT: one stub per missing module, exporting every
-        // name its importers read as `any` — the unresolved-module typing
-        // the default svelte-check engine gives them.
+        // TSGO-ENHANCEMENT: one stub per missing module, so the import
+        // is unresolved for tsgo the way it is for the default
+        // svelte-check engine instead of typed by svelte's wildcard.
         if !missing_modules.is_empty() {
             let stubs = svn_enhance::module_stubs(missing_modules)
                 .into_iter()
-                .map(|(target, text)| match target {
-                    svn_enhance::StubTarget::SvelteFile(source) => {
-                        svn_typecheck::ModuleStub::SvelteFile { source, text }
-                    }
-                    svn_enhance::StubTarget::Specifier(specifier) => {
-                        svn_typecheck::ModuleStub::Specifier { specifier, text }
+                .map(|(target, text)| {
+                    let text = text.to_string();
+                    match target {
+                        svn_enhance::StubTarget::SvelteFile(source) => {
+                            svn_typecheck::ModuleStub::SvelteFile { source, text }
+                        }
+                        svn_enhance::StubTarget::Specifier(specifier) => {
+                            svn_typecheck::ModuleStub::Specifier { specifier, text }
+                        }
                     }
                 })
                 .collect();
             if let Err(err) = session.add_module_stubs(stubs) {
                 return Err(run_failed(&err));
             }
+            module_stub_paths = session.module_stub_paths().to_vec();
         }
 
         checker = Some((session, prepared));
@@ -2290,6 +2299,24 @@ fn check_project(
     // unrelated missing-module 2307. Placed before the broken-file filter
     // below so a missing import inside a syntactically broken file is
     // dropped along with tsgo's other noise.
+    //
+    // An import that reaches one of our stubs draws TS2306 "File '…' is
+    // not a module" at the specifier — the stub is a script by design, so
+    // the compiler treats the import as unresolved. The TS2307 above
+    // stands in its place, so drop it. tsgo names the file by its
+    // absolute path with forward slashes.
+    if !module_stub_paths.is_empty() {
+        let stub_names: Vec<String> = module_stub_paths
+            .iter()
+            .map(|p| format!("'{}'", p.to_string_lossy().replace('\\', "/")))
+            .collect();
+        diagnostics.retain(|d| {
+            !(matches!(d.code, svn_typecheck::DiagnosticCode::Numeric(2306))
+                && stub_names
+                    .iter()
+                    .any(|name| d.message.contains(name.as_str())))
+        });
+    }
     if !missing_import_diags.is_empty() {
         let existing_2307: std::collections::HashSet<(&PathBuf, u32, &str)> = diagnostics
             .iter()

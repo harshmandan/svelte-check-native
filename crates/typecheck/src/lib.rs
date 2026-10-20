@@ -425,6 +425,11 @@ impl CheckSession {
         self.path_aliases = aliases;
     }
 
+    /// TSGO-ENHANCEMENT: the stub files [`Self::add_module_stubs`] wrote.
+    pub fn module_stub_paths(&self) -> &[PathBuf] {
+        &self.stub_paths
+    }
+
     /// TSGO-ENHANCEMENT: write declaration stubs for missing modules (see
     /// [`ModuleStub`]). Specifier stubs are numbered in the order given,
     /// so a stable input order keeps the overlay tsconfig stable.

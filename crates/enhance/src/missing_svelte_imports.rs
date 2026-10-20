@@ -43,41 +43,41 @@
 //! [`missing_svelte_import_diagnostics_in_script`] applies TypeScript's
 //! own rules (see [`script_is_type_checked`]): a TS file unless it opts
 //! out with `// @ts-nocheck`; a JS file only under `checkJs` or a leading
-//! `// @ts-check`; a declaration file only without `skipLibCheck`.
+//! `// @ts-check`; a declaration file only without `skipLibCheck`. A
+//! component follows svelte-check's version of the same rule (see
+//! [`component_is_type_checked`]). Every kind of reference counts, from
+//! JSDoc import types to template expressions — see `svelte_refs`.
 //!
 //! ## Stubs: no wildcard fallout
 //!
-//! Reporting the `TS2307` is half the job. The default engine leaves the
-//! module unresolved, so every binding imported from it is `any` — in
-//! value and type position — and nothing else fires. Under tsgo the same
-//! import still lands on svelte's wildcard, whose shape (a value-only
-//! `Component` default, no named exports) fires errors the default engine
-//! never reports: a named import has no such export, the default used as
-//! a type "refers to a value", the default assigned to `number` is not
-//! assignable. So each missing target also gets a stub declaration
-//! ([`module_stubs`]) exporting `any` in both spaces under every name its
-//! importers use; the overlay makes tsgo resolve the specifier to it
-//! instead of the wildcard (see [`StubTarget`]).
+//! Reporting the `TS2307` is half the job. The default engine blanks
+//! svelte's wildcard out of svelte's types when it loads them
+//! (`DocumentSnapshot.fromNonSvelteFilePath` in the language server), so
+//! a missing module stays unresolved: every use of it is the compiler's
+//! error type and nothing else fires. Under tsgo the same import lands on
+//! the wildcard, whose shape (a value-only `Component` default, no named
+//! exports) fires errors the default engine never reports. So each
+//! missing target also gets a stub ([`MISSING_MODULE_STUB`]): a
+//! declaration file with no imports or exports, i.e. a script, not a
+//! module. The overlay makes tsgo resolve the specifier to it (see
+//! [`StubTarget`]); the compiler then reports TS2306 "is not a module" at
+//! the specifier — which the pipeline drops, our TS2307 standing in its
+//! place — and treats the import exactly as unresolved.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use oxc_allocator::Allocator;
-use std::collections::{BTreeMap, BTreeSet};
-
 use oxc_ast::ast::Program;
-use oxc_ast::ast::{
-    ExportAllDeclaration, ExportFromDeclaration, Expression, ImportDeclaration,
-    ImportDeclarationSpecifier, ImportExpression, ModuleExportName, StaticMemberExpression,
-    StringLiteral,
-};
-use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
 use oxc_resolver::{
     ResolveOptions, Resolver, TsconfigDiscovery, TsconfigOptions, TsconfigReferences,
 };
 use oxc_span::{GetSpan, SourceType};
 use svn_core::{PositionMap, Range};
-use svn_parser::{Document, parse_script_body};
+use svn_parser::{Document, Fragment};
+
+use crate::svelte_refs::{self, SvelteImportRef};
 
 /// A position-mapped enhancement diagnostic, ready for the caller to lift
 /// into its own diagnostic type. Positions are 1-based (line and column),
@@ -95,17 +95,10 @@ pub struct EnhancementDiagnostic {
 /// What the missing-import pass found in one file.
 #[derive(Default)]
 pub struct MissingImports {
-    /// One `TS2307` per unresolvable `.svelte` specifier.
+    /// One `TS2307` per unresolvable `.svelte` reference.
     pub diagnostics: Vec<EnhancementDiagnostic>,
-    /// The modules behind those specifiers, with the names this file
-    /// imports from each — the input to [`module_stubs`].
-    pub modules: Vec<MissingModule>,
-}
-
-/// A missing module and the export names one importer uses from it.
-pub struct MissingModule {
-    pub target: StubTarget,
-    pub names: Vec<String>,
+    /// The modules behind them — the input to [`module_stubs`].
+    pub stub_targets: Vec<StubTarget>,
 }
 
 /// Where a missing module's stub has to be reachable from.
@@ -122,37 +115,22 @@ pub enum StubTarget {
     Specifier(String),
 }
 
-/// Merge every importer's [`MissingModule`]s and render one stub per
-/// target: `any` in value and type space, exported as `default` and under
-/// every other name any importer uses. Sorted by target, so the output is
-/// stable across runs.
-pub fn module_stubs(modules: impl IntoIterator<Item = MissingModule>) -> Vec<(StubTarget, String)> {
-    let mut merged: BTreeMap<StubTarget, BTreeSet<String>> = BTreeMap::new();
-    for module in modules {
-        merged
-            .entry(module.target)
-            .or_default()
-            .extend(module.names);
-    }
-    merged
+/// The stub every missing module resolves to. No `import` or `export`,
+/// so the compiler loads it as a script: an import that resolves to it
+/// draws TS2306 and is then unresolved, the way the default engine sees
+/// a missing module.
+pub const MISSING_MODULE_STUB: &str = "// generated by svelte-check-native; do not edit\n";
+
+/// One stub per distinct target across every importer, sorted, so the
+/// output is stable across runs.
+pub fn module_stubs(
+    targets: impl IntoIterator<Item = StubTarget>,
+) -> Vec<(StubTarget, &'static str)> {
+    targets
         .into_iter()
-        .map(|(target, names)| {
-            let mut text = String::from(
-                "// generated by svelte-check-native; do not edit\n\
-                 declare const __svn_missing: any;\n\
-                 type __svn_missing = any;\n\
-                 export default __svn_missing;\n",
-            );
-            let named: Vec<String> = names
-                .iter()
-                .filter(|n| *n != "default")
-                .map(|n| format!("__svn_missing as {n}"))
-                .collect();
-            if !named.is_empty() {
-                text.push_str(&format!("export {{ {} }};\n", named.join(", ")));
-            }
-            (target, text)
-        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|target| (target, MISSING_MODULE_STUB))
         .collect()
 }
 
@@ -259,22 +237,41 @@ impl SvelteImportResolver {
     }
 }
 
-/// Produce a `TS2307` for every `.svelte` import in `doc` whose target
-/// module doesn't resolve on disk — via `oxc_resolver`, so relative,
-/// aliased, and bare specifiers are all covered faithfully. Fires only on
-/// a genuine resolution failure, so it can't false-positive on a
-/// resolvable import.
+/// Produce a `TS2307` for every `.svelte` reference in a component —
+/// scripts and template — whose target module doesn't resolve on disk —
+/// via `oxc_resolver`, so relative, aliased, and bare specifiers are all
+/// covered faithfully. Fires only on a genuine resolution failure, so it
+/// can't false-positive on a resolvable import, and only in a component
+/// the compiler checks (see [`component_is_type_checked`]).
 pub fn missing_svelte_import_diagnostics(
     file: &Path,
     source: &str,
     doc: &Document<'_>,
+    fragment: &Fragment,
     resolver: &SvelteImportResolver,
 ) -> MissingImports {
-    if resolver.inner.is_none() {
+    if resolver.inner.is_none() || !source.contains(".svelte") {
         return MissingImports::default();
     }
-    let refs = collect_svelte_imports(doc);
+    let is_ts = svn_parser::is_ts_svelte(source);
+    if !component_is_type_checked(doc, is_ts, resolver.check_js) {
+        return MissingImports::default();
+    }
+    let refs = svelte_refs::collect_component(doc, fragment, source, is_ts);
     missing_imports(file, source, refs, resolver)
+}
+
+/// Whether svelte-check type-checks a component at all. It prepends the
+/// `// @ts-check` / `// @ts-nocheck` its script opens with to the
+/// generated code (see [`svn_parser::ts_check_directive`]), so that
+/// directive decides; otherwise a TS component is checked and a
+/// JavaScript one only under `checkJs: true`.
+fn component_is_type_checked(doc: &Document<'_>, is_ts: bool, check_js: Option<bool>) -> bool {
+    let script = doc.instance_script.as_ref().or(doc.module_script.as_ref());
+    match script.and_then(|s| svn_parser::ts_check_directive(s.content)) {
+        Some(directive) => directive == "@ts-check",
+        None => is_ts || check_js == Some(true),
+    }
 }
 
 /// [`missing_svelte_import_diagnostics`] for a plain TS/JS module of the
@@ -308,8 +305,7 @@ pub fn missing_svelte_import_diagnostics_in_script(
     {
         return MissingImports::default();
     }
-    let mut refs = Vec::new();
-    collect_from_program(&parsed.program, 0, &mut refs);
+    let refs = svelte_refs::collect_module(&parsed.program, source_type.is_javascript());
     missing_imports(file, source, refs, resolver)
 }
 
@@ -345,15 +341,13 @@ fn missing_imports(
                 r.specifier
             ),
         });
-        let target = if is_relative_specifier(&r.specifier) {
-            StubTarget::SvelteFile(normalise(&dir.join(&r.specifier)))
-        } else {
-            StubTarget::Specifier(r.specifier)
-        };
-        found.modules.push(MissingModule {
-            target,
-            names: r.names,
-        });
+        found
+            .stub_targets
+            .push(if is_relative_specifier(&r.specifier) {
+                StubTarget::SvelteFile(normalise(&dir.join(&r.specifier)))
+            } else {
+                StubTarget::Specifier(r.specifier)
+            });
     }
     found
 }
@@ -366,183 +360,6 @@ fn is_relative_specifier(specifier: &str) -> bool {
         || specifier.starts_with("./")
         || specifier.starts_with("../")
         || Path::new(specifier).is_absolute()
-}
-
-/// A `.svelte` module specifier imported (or re-exported) by a component
-/// or module, carrying the byte span of its string literal — including
-/// the surrounding quotes — in the ORIGINAL source file.
-struct SvelteImportRef {
-    specifier: String,
-    start: u32,
-    end: u32,
-    /// The export names read from the module: `default`, each named
-    /// import or re-export, and each `ns.member` read through a namespace
-    /// import. Names written as string literals are left out.
-    names: Vec<String>,
-}
-
-/// Collect every `.svelte` specifier imported or re-exported anywhere in
-/// the instance and module scripts.
-///
-/// Covers static `import … from '…'`, `export … from '…'`, `export * from
-/// '…'`, AND dynamic `import('…')` (which can appear nested in any
-/// expression, so an AST walk — not a top-level statement scan — is
-/// required). Type-only imports are included: `import type X from
-/// './Missing.svelte'` fires `TS2307` upstream just like a value import.
-fn collect_svelte_imports(doc: &Document<'_>) -> Vec<SvelteImportRef> {
-    let mut out = Vec::new();
-    for section in [doc.instance_script.as_ref(), doc.module_script.as_ref()]
-        .into_iter()
-        .flatten()
-    {
-        let allocator = Allocator::default();
-        let parsed = parse_script_body(&allocator, section.content, section.lang);
-        if parsed.panicked {
-            // A syntactically broken script yields a garbage AST; the
-            // caller reports the parse error separately. Skip.
-            continue;
-        }
-        // oxc spans are relative to the script `content`; the section's
-        // `content_range.start` translates them back to the full source.
-        collect_from_program(&parsed.program, section.content_range.start, &mut out);
-    }
-    out
-}
-
-/// Run [`ImportCollector`] over one program, then fill in the members
-/// read through each namespace import.
-fn collect_from_program(program: &Program<'_>, base: u32, out: &mut Vec<SvelteImportRef>) {
-    let first = out.len();
-    let mut collector = ImportCollector {
-        base,
-        out,
-        namespaces: Vec::new(),
-    };
-    collector.visit_program(program);
-    let namespaces = collector.namespaces;
-    if namespaces.is_empty() {
-        return;
-    }
-    let mut members = NamespaceMembers {
-        namespaces: &namespaces,
-        found: Vec::new(),
-    };
-    members.visit_program(program);
-    for (index, name) in members.found {
-        out[first + index].names.push(name);
-    }
-}
-
-/// AST visitor that records every `.svelte` module specifier — static and
-/// dynamic — with its byte span translated back to the original source.
-struct ImportCollector<'o> {
-    /// `content_range.start` of the script section this program came from.
-    base: u32,
-    out: &'o mut Vec<SvelteImportRef>,
-    /// Namespace-import locals, each with the index (counted from this
-    /// program's first ref) of the ref it reads from.
-    namespaces: Vec<(String, usize)>,
-}
-
-impl ImportCollector<'_> {
-    /// Record `lit` if it names a `.svelte` module; returns the ref's
-    /// index among this program's refs.
-    fn record(&mut self, lit: &StringLiteral<'_>, names: Vec<String>) -> Option<usize> {
-        let spec = lit.value.as_str();
-        if !is_svelte_specifier(spec) {
-            return None;
-        }
-        self.out.push(SvelteImportRef {
-            specifier: spec.to_string(),
-            start: self.base + lit.span.start,
-            end: self.base + lit.span.end,
-            names,
-        });
-        Some(self.out.len() - 1)
-    }
-}
-
-/// The name a module export is read under, unless it is written as a
-/// string literal.
-fn export_name(name: &ModuleExportName<'_>) -> Option<String> {
-    match name {
-        ModuleExportName::IdentifierName(n) => Some(n.name.to_string()),
-        ModuleExportName::IdentifierReference(n) => Some(n.name.to_string()),
-        ModuleExportName::StringLiteral(_) => None,
-    }
-}
-
-impl<'a> Visit<'a> for ImportCollector<'_> {
-    fn visit_import_declaration(&mut self, it: &ImportDeclaration<'a>) {
-        let mut names = Vec::new();
-        let mut namespace = None;
-        for specifier in it.specifiers.iter().flatten() {
-            match specifier {
-                ImportDeclarationSpecifier::ImportSpecifier(s) => {
-                    names.extend(export_name(&s.imported));
-                }
-                ImportDeclarationSpecifier::ImportDefaultSpecifier(_) => {
-                    names.push("default".to_string());
-                }
-                ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => {
-                    namespace = Some(s.local.name.to_string());
-                }
-            }
-        }
-        if let Some(index) = self.record(&it.source, names)
-            && let Some(local) = namespace
-        {
-            self.namespaces.push((local, index));
-        }
-    }
-
-    /// `export { Foo } from './Foo.svelte'`. This is its own node kind;
-    /// a specifier list with no `from` clause (`ExportNamedDeclaration`)
-    /// names no module and needs no visitor, and the declaration form
-    /// (`ExportDeclaration`, e.g. `export const x =
-    /// import('./y.svelte')`) is reached by the default walk.
-    fn visit_export_from_declaration(&mut self, it: &ExportFromDeclaration<'a>) {
-        let names = it
-            .specifiers
-            .iter()
-            .filter_map(|s| export_name(&s.local))
-            .collect();
-        self.record(&it.source, names);
-    }
-
-    fn visit_export_all_declaration(&mut self, it: &ExportAllDeclaration<'a>) {
-        self.record(&it.source, Vec::new());
-    }
-
-    fn visit_import_expression(&mut self, it: &ImportExpression<'a>) {
-        if let Expression::StringLiteral(lit) = &it.source {
-            self.record(lit, Vec::new());
-        }
-        walk::walk_import_expression(self, it);
-    }
-}
-
-/// Finds `ns.member` reads of namespace-import locals. Scopes are not
-/// tracked: a shadowing local only adds a name to the stub, which never
-/// makes an error appear.
-struct NamespaceMembers<'n> {
-    namespaces: &'n [(String, usize)],
-    /// `(ref index, member name)`.
-    found: Vec<(usize, String)>,
-}
-
-impl<'a> Visit<'a> for NamespaceMembers<'_> {
-    fn visit_static_member_expression(&mut self, it: &StaticMemberExpression<'a>) {
-        if let Expression::Identifier(object) = &it.object
-            && let Some((_, index)) = self
-                .namespaces
-                .iter()
-                .find(|(local, _)| local.as_str() == object.name.as_str())
-        {
-            self.found.push((*index, it.property.name.to_string()));
-        }
-        walk::walk_static_member_expression(self, it);
-    }
 }
 
 /// Whether TypeScript reports semantic errors for this file at all.
@@ -631,14 +448,6 @@ fn is_declaration_file(file: &Path) -> bool {
 fn sidecar_specifier(specifier: &str) -> Option<String> {
     let stem = specifier.strip_suffix(".svelte")?;
     Some(format!("{stem}.d.svelte.ts"))
-}
-
-/// A specifier that names a Svelte component file: ends in `.svelte`.
-/// Excludes `.svelte.ts` / `.svelte.js` runes-module specifiers (those end
-/// in `.ts` / `.js`). Query-suffixed forms (`x.svelte?raw`) are excluded —
-/// they don't end in `.svelte` and aren't TS's concern.
-fn is_svelte_specifier(spec: &str) -> bool {
-    spec.ends_with(".svelte")
 }
 
 /// Whether a `declare module '*.svelte'` wildcard is live anywhere in
@@ -846,7 +655,8 @@ mod tests {
 
     fn refs(src: &str) -> Vec<SvelteImportRef> {
         let (doc, _) = svn_parser::parse_sections(src);
-        collect_svelte_imports(&doc)
+        let (fragment, _) = svn_parser::parse_all_template_runs(src, &doc.template.text_runs);
+        svelte_refs::collect_component(&doc, &fragment, src, svn_parser::is_ts_svelte(src))
     }
 
     fn specifiers(src: &str) -> Vec<String> {
@@ -1011,45 +821,11 @@ mod tests {
 
         let none = |file: &Path, resolver: &SvelteImportResolver| {
             let found = missing_svelte_import_diagnostics_in_script(file, src, resolver);
-            found.diagnostics.is_empty() && found.modules.is_empty()
+            found.diagnostics.is_empty() && found.stub_targets.is_empty()
         };
         assert!(none(&root.join("src/plain.js"), &resolver));
         assert!(none(&root.join("src/types.d.ts"), &resolver));
         assert!(none(&main, &SvelteImportResolver::disabled()));
-    }
-
-    fn names_by_specifier(src: &str) -> Vec<(String, Vec<String>)> {
-        let mut v: Vec<(String, Vec<String>)> = refs(src)
-            .into_iter()
-            .map(|r| {
-                let mut names = r.names;
-                names.sort();
-                (r.specifier, names)
-            })
-            .collect();
-        v.sort();
-        v
-    }
-
-    #[test]
-    fn collects_the_names_each_import_reads() {
-        let src = "<script lang=\"ts\">\n\
-            import D, { A, B as Local, 'str' as S } from './X.svelte'\n\
-            import * as Ns from './Y.svelte'\n\
-            export { default as Again, C } from './Z.svelte'\n\
-            export * from './W.svelte'\n\
-            const v = [Ns.member, Ns.member, Other.member, Ns['computed']]\n\
-            </script>\n";
-        let own = |s: &[&str]| s.iter().map(|n| (*n).to_string()).collect::<Vec<_>>();
-        assert_eq!(
-            names_by_specifier(src),
-            vec![
-                ("./W.svelte".to_string(), own(&[])),
-                ("./X.svelte".to_string(), own(&["A", "B", "default"])),
-                ("./Y.svelte".to_string(), own(&["member", "member"])),
-                ("./Z.svelte".to_string(), own(&["C", "default"])),
-            ]
-        );
     }
 
     #[test]
@@ -1068,40 +844,27 @@ mod tests {
     }
 
     #[test]
-    fn stubs_merge_names_per_target() {
+    fn one_script_stub_per_target() {
         let file = |p: &str| StubTarget::SvelteFile(PathBuf::from(p));
-        let module = |target: StubTarget, names: &[&str]| MissingModule {
-            target,
-            names: names.iter().map(|n| (*n).to_string()).collect(),
-        };
-        let stubs = module_stubs([
-            module(file("/w/src/B.svelte"), &["Named", "default"]),
-            module(StubTarget::Specifier("$lib/G.svelte".into()), &[]),
-            module(file("/w/src/B.svelte"), &["Piece", "Named"]),
-        ]);
-        let head = "// generated by svelte-check-native; do not edit\n\
-                    declare const __svn_missing: any;\n\
-                    type __svn_missing = any;\n\
-                    export default __svn_missing;\n";
+        let alias = || StubTarget::Specifier("$lib/G.svelte".into());
+        let stubs = module_stubs([file("/w/src/B.svelte"), alias(), file("/w/src/B.svelte")]);
         assert_eq!(
             stubs,
             vec![
-                (
-                    file("/w/src/B.svelte"),
-                    format!("{head}export {{ __svn_missing as Named, __svn_missing as Piece }};\n")
-                ),
-                (
-                    StubTarget::Specifier("$lib/G.svelte".into()),
-                    head.to_string()
-                ),
+                (file("/w/src/B.svelte"), MISSING_MODULE_STUB),
+                (alias(), MISSING_MODULE_STUB),
             ]
         );
+        // A script: nothing that would make the compiler load it as a
+        // module.
+        assert!(!MISSING_MODULE_STUB.contains("import"));
+        assert!(!MISSING_MODULE_STUB.contains("export"));
     }
 
     /// A relative target is named by its absolute path, an aliased one by
     /// the specifier as written.
     #[test]
-    fn missing_modules_carry_their_stub_target() {
+    fn missing_imports_carry_their_stub_target() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         std::fs::create_dir_all(root.join("src")).unwrap();
@@ -1111,24 +874,46 @@ mod tests {
         let src = "import A from '../src/./Gone.svelte';\nimport { B } from '$lib/Gone.svelte';\n";
         let found =
             missing_svelte_import_diagnostics_in_script(&root.join("src/main.ts"), src, &resolver);
-        let targets: Vec<(StubTarget, Vec<String>)> = found
-            .modules
-            .into_iter()
-            .map(|m| (m.target, m.names))
-            .collect();
         assert_eq!(
-            targets,
+            found.stub_targets,
             vec![
-                (
-                    StubTarget::SvelteFile(root.join("src/Gone.svelte")),
-                    vec!["default".to_string()]
-                ),
-                (
-                    StubTarget::Specifier("$lib/Gone.svelte".into()),
-                    vec!["B".to_string()]
-                ),
+                StubTarget::SvelteFile(root.join("src/Gone.svelte")),
+                StubTarget::Specifier("$lib/Gone.svelte".into()),
             ]
         );
+    }
+
+    /// svelte-check's directive and the component's language decide,
+    /// before `checkJs`.
+    #[test]
+    fn component_checking_follows_svelte_check() {
+        let checked = |src: &str, check_js: Option<bool>| {
+            let (doc, _) = svn_parser::parse_sections(src);
+            component_is_type_checked(&doc, svn_parser::is_ts_svelte(src), check_js)
+        };
+        let js = "<script>\nlet x;\n</script>";
+        let ts = "<script lang=\"ts\">\nlet x;\n</script>";
+        assert!(!checked(js, None));
+        assert!(!checked(js, Some(false)));
+        assert!(checked(js, Some(true)));
+        assert!(checked(ts, Some(false)));
+        assert!(checked("<script>\n// @ts-check\nlet x;\n</script>", None));
+        assert!(!checked(
+            "<script lang=\"ts\">// @ts-nocheck\n</script>",
+            None
+        ));
+        // The first directive wins, unlike in a plain module.
+        assert!(checked(
+            "<script>// @ts-check\n// @ts-nocheck\n</script>",
+            None
+        ));
+        // The instance script decides over the module script.
+        assert!(!checked(
+            "<script module>// @ts-check\n</script><script>let x;</script>",
+            None
+        ));
+        // A component with no script at all is the language default.
+        assert!(!checked("<p>hi</p>", None));
     }
 
     #[test]

@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 use rayon::prelude::*;
 
 pub use cache::{CacheLayout, write_if_changed};
-pub use discovery::{DiscoveryError, TsgoBinary, discover};
+pub use discovery::{DiscoveryError, Engine, TsgoBinary, discover, discover_engine};
 pub use filters::workspace_svelte_major;
 pub use output::{RawDiagnostic, Severity, parse as parse_output};
 pub use runner::{RunError, run as run_tsgo};

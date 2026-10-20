@@ -6,6 +6,17 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`SVN_ENGINE=tsrs`** checks with [tsrs](https://github.com/oxc-project/tsrs),
+  a Rust port of the TypeScript 7 checker, found in `node_modules` like
+  TypeScript (platform package, wrapper, or pnpm/bun store). Opt-in only:
+  without it tsrs is never used, even as the only compiler installed,
+  and asking for it when it isn't installed fails the check. On both
+  control-rig apps the diagnostics match the TypeScript nightly tsrs is
+  pinned to (`7.1.0-dev.20260930.4`); the compiler step ran about 2.5x
+  faster with about 2.4x less peak memory.
+
 ## [1.10.0]
 
 Matches svelte-check 4.7.7. Elements are typed from Svelte's own

@@ -116,6 +116,13 @@ as upstream's does.
   platform-native `tsgo`/`tsc` binary or JS wrapper. Useful when
   neither engine package is in `node_modules` (e.g. a monorepo where
   TypeScript lives elsewhere).
+- `SVN_ENGINE=tsrs` — check with [tsrs](https://github.com/oxc-project/tsrs),
+  a Rust port of the TypeScript 7 checker, instead of TypeScript.
+  Opt-in only: tsrs is never picked unless asked for, even when it's
+  the only compiler installed, because it checks against its own
+  pinned TypeScript version rather than the one your project
+  installed. Install `tsrs` as a devDependency; if it's missing the
+  check fails rather than falling back. `TSGO_BIN` still wins.
 - `SVN_BRIDGE_WORKERS` — number of `svelte/compiler` worker
   subprocesses. Default `cores/2`, capped at 8; tracks the perf-core
   count on Apple Silicon. Override if you hit IPC contention on very
@@ -141,8 +148,8 @@ Or point `TSGO_BIN` at any Linux arm64 `tsc`/`tsgo` binary.
 - `0` — no errors (and no warnings if `--fail-on-warnings`)
 - `1` — errors detected (or warnings with `--fail-on-warnings`), or the
   TypeScript compiler did not complete (killed, or exited without a
-  diagnostic), as svelte-check reports it
-- `2` — invocation error (bad flag, missing tsconfig, TypeScript not found)
+  diagnostic) or was not found, as svelte-check reports it
+- `2` — invocation error (bad flag, missing tsconfig)
 
 ## Roadmap
 

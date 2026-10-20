@@ -52,6 +52,23 @@
 //! Returns a [`TsgoBinary`] handle that the runner uses to spawn the
 //! correct command (a `.js` wrapper has to be invoked via `node`; a native
 //! binary is invoked directly).
+//!
+//! ## tsrs (opt-in)
+//!
+//! `tsrs` (oxc-project/tsrs) is a Rust port of the TypeScript 7 checker
+//! with the same command line. It is only used when asked for with
+//! `SVN_ENGINE=tsrs`, and then it replaces the search above entirely:
+//! it is pinned to its own TypeScript commit, not the version the
+//! project installed, so picking it silently would check against a
+//! compiler the user never chose. Asked for and missing is an error,
+//! never a fallback to TypeScript. Not asked for, it is never picked —
+//! even when it is the only compiler installed (the not-found error
+//! then says how to opt in). Lookup per ancestor: the platform package
+//! `node_modules/@tsrs/<platform>[-gnu|-musl]/tsrs[.exe]`, then the
+//! `node_modules/tsrs/bin/tsrs` wrapper (upgraded to the native sibling
+//! of its canonical location, as above), then `tsrs@*` entries in the
+//! pnpm / bun stores, highest version first. `TSGO_BIN` still wins over
+//! both engines.
 
 use std::path::{Path, PathBuf};
 
@@ -79,6 +96,50 @@ pub enum DiscoveryError {
 
     #[error("TSGO_BIN points at {path} which does not exist")]
     EnvBinNotFound { path: PathBuf },
+
+    #[error(
+        "could not find a native TypeScript compiler. Install \
+         `typescript` (7+) or `@typescript/native-preview` as a \
+         devDependency, or set TSGO_BIN to an absolute path. Searched \
+         upward from {searched_from}. `tsrs` is installed but is only \
+         used when asked for: set SVN_ENGINE=tsrs to check with it."
+    )]
+    NotFoundTsrsInstalled { searched_from: PathBuf },
+
+    #[error(
+        "SVN_ENGINE=tsrs, but tsrs is not installed. Install `tsrs` as a \
+         devDependency, or unset SVN_ENGINE to use TypeScript. Searched \
+         upward from {searched_from} (hoisted under node_modules, or \
+         isolated under .pnpm/.bun)."
+    )]
+    TsrsNotFound { searched_from: PathBuf },
+
+    #[error("SVN_ENGINE={value} is not a known engine (expected `typescript` or `tsrs`)")]
+    UnknownEngine { value: String },
+}
+
+/// Which compiler family to look for. See the module docs' tsrs section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Engine {
+    /// The project's TypeScript 7 (`typescript` 7+, then tsgo).
+    TypeScript,
+    /// tsrs, only when asked for.
+    Tsrs,
+}
+
+impl Engine {
+    /// Read the engine from an `SVN_ENGINE` value. Unset or empty means
+    /// TypeScript.
+    pub fn parse(value: Option<&str>) -> Result<Self, DiscoveryError> {
+        match value.map(str::trim) {
+            None | Some("") => Ok(Self::TypeScript),
+            Some(v) if v.eq_ignore_ascii_case("typescript") => Ok(Self::TypeScript),
+            Some(v) if v.eq_ignore_ascii_case("tsrs") => Ok(Self::Tsrs),
+            Some(v) => Err(DiscoveryError::UnknownEngine {
+                value: v.to_string(),
+            }),
+        }
+    }
 }
 
 /// Locate the native TypeScript compiler — stable `typescript` 7+
@@ -100,7 +161,26 @@ pub fn discover(workspace: &Path) -> Result<TsgoBinary, DiscoveryError> {
             .unwrap_or(false);
         return Ok(TsgoBinary { path, needs_node });
     }
+    let engine = Engine::parse(std::env::var("SVN_ENGINE").ok().as_deref())?;
+    discover_engine(workspace, engine)
+}
 
+/// [`discover`] without the environment: look for `engine` only.
+pub fn discover_engine(workspace: &Path, engine: Engine) -> Result<TsgoBinary, DiscoveryError> {
+    let searched_from = workspace.to_path_buf();
+    match engine {
+        Engine::Tsrs => find_tsrs(workspace).ok_or(DiscoveryError::TsrsNotFound { searched_from }),
+        Engine::TypeScript => find_typescript(workspace).ok_or_else(|| {
+            if find_tsrs(workspace).is_some() {
+                DiscoveryError::NotFoundTsrsInstalled { searched_from }
+            } else {
+                DiscoveryError::NotFound { searched_from }
+            }
+        }),
+    }
+}
+
+fn find_typescript(workspace: &Path) -> Option<TsgoBinary> {
     // Stable 7+ before preview (tsgo); native before wrapper within
     // each engine — see module docs.
     let native_relatives = [
@@ -176,9 +256,113 @@ pub fn discover(workspace: &Path) -> Result<TsgoBinary, DiscoveryError> {
         // `shamefully-hoist=false`, isolated installs, etc.).
         find_in_package_store(dir, &native_relatives)
     })
-    .ok_or_else(|| DiscoveryError::NotFound {
-        searched_from: workspace.to_path_buf(),
+}
+
+/// tsrs, closest ancestor first: platform package, then the wrapper
+/// (upgraded to its native sibling), then the pnpm / bun stores.
+fn find_tsrs(workspace: &Path) -> Option<TsgoBinary> {
+    let natives = tsrs_platform_native_paths();
+    let native_beside = |wrapper: &Path| {
+        natives
+            .iter()
+            .find_map(|rel| native_beside_wrapper(wrapper, Some(rel)))
+    };
+    svn_core::walk_up_dirs(workspace, |dir| {
+        if let Some(native) = natives
+            .iter()
+            .map(|rel| dir.join(rel))
+            .find(|p| p.is_file())
+        {
+            return Some(TsgoBinary {
+                path: native,
+                needs_node: false,
+            });
+        }
+        let wrapper = package_bin(&dir.join("node_modules/tsrs"), "tsrs", "bin/tsrs");
+        if wrapper.is_file() {
+            if let Some(native) = native_beside(&wrapper) {
+                return Some(TsgoBinary {
+                    path: native,
+                    needs_node: false,
+                });
+            }
+            return Some(TsgoBinary {
+                path: wrapper,
+                needs_node: true,
+            });
+        }
+        find_tsrs_in_package_store(dir, &natives)
     })
+}
+
+/// `node_modules/.pnpm/tsrs@<version>/…` and the `.bun` equivalent, the
+/// highest version first; the native sibling inside the store entry
+/// before its wrapper.
+fn find_tsrs_in_package_store(dir: &Path, natives: &[PathBuf]) -> Option<TsgoBinary> {
+    for manager_root in [
+        dir.join(svn_core::NODE_MODULES_DIR).join(".pnpm"),
+        dir.join(svn_core::NODE_MODULES_DIR).join(".bun"),
+    ] {
+        let Ok(entries) = std::fs::read_dir(&manager_root) else {
+            continue;
+        };
+        let mut candidates: Vec<(Option<semver::Version>, PathBuf)> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter_map(|p| {
+                let version = p.file_name()?.to_str()?.strip_prefix("tsrs@")?.to_string();
+                Some((semver::Version::parse(&version).ok(), p))
+            })
+            .collect();
+        // Newest first; unparseable names last.
+        candidates.sort_by(|(va, a), (vb, b)| match (va, vb) {
+            (Some(va), Some(vb)) => vb.cmp(va),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => b.cmp(a),
+        });
+        for (_, entry) in candidates {
+            for rel in natives {
+                if let Ok(tail) = rel.strip_prefix("node_modules") {
+                    let native = entry.join(svn_core::NODE_MODULES_DIR).join(tail);
+                    if native.is_file() {
+                        return Some(TsgoBinary {
+                            path: native,
+                            needs_node: false,
+                        });
+                    }
+                }
+            }
+            let wrapper = entry.join(svn_core::NODE_MODULES_DIR).join("tsrs/bin/tsrs");
+            if wrapper.is_file() {
+                return Some(TsgoBinary {
+                    path: wrapper,
+                    needs_node: true,
+                });
+            }
+        }
+    }
+    None
+}
+
+/// Relative paths to tsrs's platform binary for the running host, in
+/// the order to try them. tsrs splits Linux by libc (`-gnu` / `-musl`);
+/// npm installs only the one matching the host, so both are tried.
+/// Empty on a host tsrs publishes no binary for.
+fn tsrs_platform_native_paths() -> Vec<PathBuf> {
+    let packages: &[&str] = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => &["darwin-arm64"],
+        ("macos", "x86_64") => &["darwin-x64"],
+        ("linux", "aarch64") => &["linux-arm64-gnu", "linux-arm64-musl"],
+        ("linux", "x86_64") => &["linux-x64-gnu", "linux-x64-musl"],
+        ("windows", "x86_64") => &["win32-x64"],
+        _ => &[],
+    };
+    let exe = if cfg!(windows) { "tsrs.exe" } else { "tsrs" };
+    packages
+        .iter()
+        .map(|pkg| PathBuf::from("node_modules/@tsrs").join(pkg).join(exe))
+        .collect()
 }
 
 /// The stable `typescript` package's `bin/tsc` wrapper — accepted only
@@ -942,5 +1126,147 @@ mod tests {
 
         let found = discover(tmp.path()).unwrap();
         assert_eq!(found.path, hoisted);
+    }
+
+    /// Write a stub `tsrs` native binary for the host under
+    /// `root/node_modules` and return its path, or `None` on a host
+    /// tsrs publishes no binary for.
+    fn write_tsrs_native(root: &Path) -> Option<PathBuf> {
+        let rel = tsrs_platform_native_paths().into_iter().next()?;
+        let native = root.join(rel);
+        fs::create_dir_all(native.parent().unwrap()).unwrap();
+        fs::write(&native, b"\x7fELF stub").unwrap();
+        Some(native)
+    }
+
+    fn write_tsrs_wrapper(root: &Path) -> PathBuf {
+        let wrapper = root.join("node_modules/tsrs/bin/tsrs");
+        fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+        fs::write(&wrapper, "#!/usr/bin/env node\n").unwrap();
+        wrapper
+    }
+
+    #[test]
+    fn engine_parses_from_env_value() {
+        assert_eq!(Engine::parse(None).unwrap(), Engine::TypeScript);
+        assert_eq!(Engine::parse(Some("")).unwrap(), Engine::TypeScript);
+        assert_eq!(
+            Engine::parse(Some("typescript")).unwrap(),
+            Engine::TypeScript
+        );
+        assert_eq!(Engine::parse(Some("tsrs")).unwrap(), Engine::Tsrs);
+        assert_eq!(Engine::parse(Some("TSRS")).unwrap(), Engine::Tsrs);
+        assert!(matches!(
+            Engine::parse(Some("tsc6")),
+            Err(DiscoveryError::UnknownEngine { .. })
+        ));
+    }
+
+    #[test]
+    fn tsrs_is_never_picked_by_default() {
+        // Both engines installed: the user's TypeScript wins unless
+        // tsrs is asked for.
+        let tmp = tempdir().unwrap();
+        let wrapper = write_typescript_pkg(tmp.path(), "7.0.2");
+        write_tsrs_native(tmp.path());
+        write_tsrs_wrapper(tmp.path());
+
+        let found = discover_engine(tmp.path(), Engine::TypeScript).unwrap();
+        assert_eq!(found.path, wrapper);
+    }
+
+    #[test]
+    fn tsrs_alone_is_not_used_by_default() {
+        // tsrs installed and nothing else: still not used, and the error
+        // says how to opt in.
+        let tmp = tempdir().unwrap();
+        write_tsrs_wrapper(tmp.path());
+
+        let err = discover_engine(tmp.path(), Engine::TypeScript).unwrap_err();
+        assert!(matches!(err, DiscoveryError::NotFoundTsrsInstalled { .. }));
+        assert!(err.to_string().contains("SVN_ENGINE=tsrs"), "{err}");
+    }
+
+    #[test]
+    fn tsrs_opt_in_beats_typescript() {
+        let tmp = tempdir().unwrap();
+        write_typescript_pkg(tmp.path(), "7.0.2");
+        let Some(native) = write_tsrs_native(tmp.path()) else {
+            return;
+        };
+
+        let found = discover_engine(tmp.path(), Engine::Tsrs).unwrap();
+        assert_eq!(found.path, native);
+        assert!(!found.needs_node);
+    }
+
+    #[test]
+    fn tsrs_opt_in_without_tsrs_does_not_fall_back() {
+        // Asking for tsrs and not having it is an error, never a silent
+        // run on a different engine.
+        let tmp = tempdir().unwrap();
+        write_typescript_pkg(tmp.path(), "7.0.2");
+
+        let err = discover_engine(tmp.path(), Engine::Tsrs).unwrap_err();
+        assert!(matches!(err, DiscoveryError::TsrsNotFound { .. }));
+    }
+
+    #[test]
+    fn tsrs_wrapper_is_the_fallback_without_a_native_binary() {
+        let tmp = tempdir().unwrap();
+        let wrapper = write_tsrs_wrapper(tmp.path());
+
+        let found = discover_engine(tmp.path(), Engine::Tsrs).unwrap();
+        assert_eq!(found.path, wrapper);
+        assert!(found.needs_node);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tsrs_symlinked_store_wrapper_upgrades_to_native_sibling() {
+        let Some(rel) = tsrs_platform_native_paths().into_iter().next() else {
+            return;
+        };
+        let tmp = tempdir().unwrap();
+        let store_entry = tmp
+            .path()
+            .join("node_modules/.pnpm/tsrs@0.18.0-ts7.1.0-dev.20260929");
+        let canonical_pkg = store_entry.join("node_modules/tsrs");
+        fs::create_dir_all(canonical_pkg.join("bin")).unwrap();
+        fs::write(canonical_pkg.join("bin/tsrs"), "#!/usr/bin/env node\n").unwrap();
+        let native = store_entry.join(&rel);
+        fs::create_dir_all(native.parent().unwrap()).unwrap();
+        fs::write(&native, b"\x7fELF stub").unwrap();
+        fs::create_dir_all(tmp.path().join("node_modules")).unwrap();
+        std::os::unix::fs::symlink(&canonical_pkg, tmp.path().join("node_modules/tsrs")).unwrap();
+
+        let found = discover_engine(tmp.path(), Engine::Tsrs).unwrap();
+        assert_eq!(
+            found.path.canonicalize().unwrap(),
+            native.canonicalize().unwrap()
+        );
+        assert!(!found.needs_node);
+    }
+
+    #[test]
+    fn tsrs_isolated_store_picks_highest_version() {
+        // pnpm without hoisting: only the store entries exist.
+        let tmp = tempdir().unwrap();
+        let store = tmp.path().join("node_modules/.pnpm");
+        for v in ["0.9.0-ts7.1.0-dev.20260801", "0.18.0-ts7.1.0-dev.20260929"] {
+            let wrapper = store.join(format!("tsrs@{v}/node_modules/tsrs/bin/tsrs"));
+            fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+            fs::write(&wrapper, "#!/usr/bin/env node\n").unwrap();
+        }
+
+        let found = discover_engine(tmp.path(), Engine::Tsrs).unwrap();
+        assert!(
+            found
+                .path
+                .to_string_lossy()
+                .contains("tsrs@0.18.0-ts7.1.0-dev.20260929"),
+            "{found:?}"
+        );
+        assert!(found.needs_node);
     }
 }

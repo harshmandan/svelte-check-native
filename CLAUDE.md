@@ -30,7 +30,9 @@ for the current scoreboard (`notes/ROADMAP.md`), open work
   checking with tsgo. `typescript` at 6 and below is never used as the
   engine (its `bin/tsc` is the JS compiler). Platform-native binaries
   win over JS wrappers within each engine. `TSGO_BIN` env var is the
-  override.
+  override. `SVN_ENGINE=tsrs` opts into tsrs (oxc-project/tsrs, a Rust
+  port of the TS 7 checker); it is never picked without that, and a
+  missing tsrs fails instead of falling back.
 - **Upstream submodule:** `language-tools/` is a pinned submodule of
   `sveltejs/language-tools` — used as the source of truth for upstream's
   CLI behavior, the 63 `.v5` test fixtures from `svelte2tsx` that form
@@ -703,8 +705,8 @@ runnable; bench-wide sweeps stay interactive (bench isn't part of
 - `0` — no errors (and no warnings if `--fail-on-warnings`)
 - `1` — errors detected (or warnings with `--fail-on-warnings`), or the
   TypeScript compiler did not complete (killed, or exited without a
-  diagnostic), as svelte-check reports it
-- `2` — invocation error (bad flag, missing tsconfig, missing tsgo)
+  diagnostic) or was not found, as svelte-check reports it
+- `2` — invocation error (bad flag, missing tsconfig)
 
 ## Release workflow
 

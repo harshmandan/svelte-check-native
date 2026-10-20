@@ -55,8 +55,24 @@ pub(crate) fn discover_relevant_files_with_settings(
     workspace: &Path,
     kit_settings: &KitFilesSettings,
 ) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let found = discover_files(workspace, kit_settings);
+    (found.svelte, found.kit)
+}
+
+/// Everything one walk of the workspace finds.
+pub(crate) struct DiscoveredFiles {
+    pub(crate) svelte: Vec<PathBuf>,
+    pub(crate) kit: Vec<PathBuf>,
+    /// TSGO-ENHANCEMENT: every TS/JS source, kit files included — the
+    /// plain modules the missing-`.svelte`-import check also covers.
+    pub(crate) scripts: Vec<PathBuf>,
+}
+
+/// [`discover_relevant_files_with_settings`], plus the TS/JS sources.
+pub(crate) fn discover_files(workspace: &Path, kit_settings: &KitFilesSettings) -> DiscoveredFiles {
     let mut svelte_files = Vec::new();
     let mut kit_files = Vec::new();
+    let mut scripts = Vec::new();
     // Visit order follows svelte-check's `fdir` crawl, which fixes the
     // order files are reported in: Node lists each directory sorted by
     // name (libuv's scandir), a directory's files are taken when its
@@ -78,13 +94,18 @@ pub(crate) fn discover_relevant_files_with_settings(
                 // See `svn_core::sveltekit::classify`.
                 Some("ts" | "js") if classify(path, kit_settings).is_some() => {
                     kit_files.push(path.clone());
+                    scripts.push(path.clone());
                 }
-                _ => {}
+                _ => scripts.push(path.clone()),
             }
         }
         queue.extend(listing.subdirs.iter());
     }
-    (svelte_files, kit_files)
+    DiscoveredFiles {
+        svelte: svelte_files,
+        kit: kit_files,
+        scripts,
+    }
 }
 
 /// One directory's name-sorted contents: the files discovery can use,
@@ -122,7 +143,7 @@ fn read_listing(dir: PathBuf) -> Listing {
         } else if (file_type.is_file() || file_type.is_symlink())
             && matches!(
                 path.extension().and_then(|s| s.to_str()),
-                Some("svelte" | "ts" | "js")
+                Some("svelte" | "ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs")
             )
         {
             files.push(path);

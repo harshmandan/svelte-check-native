@@ -1,15 +1,15 @@
 {
     "errors": [
-        { "file": "src/checked.js", "line": 2, "column": 18, "code": 2307 },
-        { "file": "src/m.mts", "line": 1, "column": 18, "code": 2307 },
-        { "file": "src/main.ts", "line": 3, "column": 18, "code": 2307 },
-        { "file": "src/main.ts", "line": 4, "column": 33, "code": 2307 },
-        { "file": "src/main.ts", "line": 5, "column": 15, "code": 2307 },
-        { "file": "src/main.ts", "line": 6, "column": 24, "code": 2307 },
-        { "file": "src/main.ts", "line": 8, "column": 19, "code": 2307 },
-        { "file": "src/rev.js", "line": 3, "column": 18, "code": 2307 },
-        { "file": "src/routes/+page.ts", "line": 1, "column": 18, "code": 2307 },
-        { "file": "src/state.svelte.ts", "line": 1, "column": 18, "code": 2307 }
+        { "file": "src/checked.js", "line": 1, "column": 17, "code": 2307 },
+        { "file": "src/m.mts", "line": 0, "column": 17, "code": 2307 },
+        { "file": "src/main.ts", "line": 2, "column": 17, "code": 2307 },
+        { "file": "src/main.ts", "line": 3, "column": 32, "code": 2307 },
+        { "file": "src/main.ts", "line": 4, "column": 14, "code": 2307 },
+        { "file": "src/main.ts", "line": 5, "column": 23, "code": 2307 },
+        { "file": "src/main.ts", "line": 7, "column": 18, "code": 2307 },
+        { "file": "src/rev.js", "line": 2, "column": 17, "code": 2307 },
+        { "file": "src/routes/+page.ts", "line": 0, "column": 17, "code": 2307 },
+        { "file": "src/state.svelte.ts", "line": 0, "column": 17, "code": 2307 }
     ],
     "_note": "A `.ts`/`.js` file importing a `.svelte` file that does not exist. The default svelte-check engine (4.7.7) reports TS2307 at each specifier; svelte-check --tsgo reports nothing, because svelte's `declare module '*.svelte'` wildcard (vendored here as a stub) resolves the missing file to `any`. The TSGO-ENHANCEMENT layer reports it, following TypeScript's own rules for which files get checked: TS files unless `// @ts-nocheck`; JS files only with `checkJs` or a leading `// @ts-check` line comment (the last of `@ts-check`/`@ts-nocheck` wins; block comments and comments after code do not count); `.d.ts` files are skipped under `skipLibCheck`. Expected list copied from the default engine run on this exact tree."
 }

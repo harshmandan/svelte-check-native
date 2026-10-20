@@ -33,18 +33,32 @@
 //! positive there, [`SvelteImportResolver::new`] scans the workspace for a
 //! user `*.svelte` wildcard and, if it finds one, disables the check
 //! entirely (the resolver holds `None`).
+//!
+//! ## Plain `.ts` / `.js` importers
+//!
+//! The default engine reports the same `TS2307` in every TS/JS file of
+//! the program, not just in components — `main.ts`, a kit `+page.ts`, a
+//! `.svelte.ts` runes module. Those files are only reported when the
+//! compiler type-checks them at all, so
+//! [`missing_svelte_import_diagnostics_in_script`] applies TypeScript's
+//! own rules (see [`script_is_type_checked`]): a TS file unless it opts
+//! out with `// @ts-nocheck`; a JS file only under `checkJs` or a leading
+//! `// @ts-check`; a declaration file only without `skipLibCheck`.
 
 use std::path::{Path, PathBuf};
 
 use oxc_allocator::Allocator;
+use oxc_ast::ast::Program;
 use oxc_ast::ast::{
     ExportAllDeclaration, ExportFromDeclaration, Expression, ImportDeclaration, ImportExpression,
     StringLiteral,
 };
 use oxc_ast_visit::{Visit, walk};
+use oxc_parser::Parser;
 use oxc_resolver::{
     ResolveOptions, Resolver, TsconfigDiscovery, TsconfigOptions, TsconfigReferences,
 };
+use oxc_span::{GetSpan, SourceType};
 use svn_core::{PositionMap, Range};
 use svn_parser::{Document, parse_script_body};
 
@@ -69,21 +83,40 @@ pub struct EnhancementDiagnostic {
 /// ambient guard").
 pub struct SvelteImportResolver {
     inner: Option<Resolver>,
+    /// The program's `checkJs`; `None` when the tsconfig chain leaves it
+    /// unset, which TypeScript treats differently from `false` only for
+    /// diagnostics this check never produces (see
+    /// [`script_is_type_checked`]).
+    check_js: Option<bool>,
+    skip_lib_check: bool,
 }
 
 impl SvelteImportResolver {
     /// A resolver that reports nothing — for the `--disable-enhance` flag /
     /// `SVN_DISABLE_ENHANCE` env kill-switch. Skips even the workspace scan.
     pub fn disabled() -> Self {
-        Self { inner: None }
+        Self {
+            inner: None,
+            check_js: None,
+            skip_lib_check: false,
+        }
+    }
+
+    /// `false` when the check reports nothing — the kill-switch or the
+    /// ambient guard — so a caller can skip reading files for it.
+    pub fn is_enabled(&self) -> bool {
+        self.inner.is_some()
     }
 
     /// Build the resolver from the user's `tsconfig` (for `paths`/`baseUrl`)
     /// and workspace (for the ambient-wildcard guard).
     pub fn new(workspace: &Path, tsconfig: &Path) -> Self {
         if any_wildcard_in_scope(workspace, tsconfig) {
-            return Self { inner: None };
+            return Self::disabled();
         }
+        let compiler_options = svn_core::tsconfig::load(tsconfig)
+            .map(|config| config.compiler_options)
+            .unwrap_or_default();
         let options = ResolveOptions {
             tsconfig: Some(TsconfigDiscovery::Manual(TsconfigOptions {
                 config_file: tsconfig.to_path_buf(),
@@ -125,6 +158,8 @@ impl SvelteImportResolver {
         };
         Self {
             inner: Some(Resolver::new(options)),
+            check_js: compiler_options.check_js,
+            skip_lib_check: compiler_options.skip_lib_check.unwrap_or(false),
         }
     }
 
@@ -158,6 +193,57 @@ pub fn missing_svelte_import_diagnostics(
         return Vec::new();
     }
     let refs = collect_svelte_imports(doc);
+    diagnostics_for(file, source, refs, resolver)
+}
+
+/// [`missing_svelte_import_diagnostics`] for a plain TS/JS module of the
+/// program (`main.ts`, a kit `+page.ts`, a `.svelte.ts` runes module):
+/// the whole file is the script. Reports nothing for a file the compiler
+/// does not type-check (see [`script_is_type_checked`]) or whose
+/// extension is not a TS/JS one.
+///
+/// The caller decides which files belong to the program (`include` /
+/// `exclude` / `files`, and `allowJs` for JS sources).
+pub fn missing_svelte_import_diagnostics_in_script(
+    file: &Path,
+    source: &str,
+    resolver: &SvelteImportResolver,
+) -> Vec<EnhancementDiagnostic> {
+    // The early-outs skip the parse for the common file that imports no
+    // component at all.
+    if resolver.inner.is_none() || !source.contains(".svelte") {
+        return Vec::new();
+    }
+    let Ok(source_type) = SourceType::from_path(file) else {
+        return Vec::new();
+    };
+    if is_declaration_file(file) && resolver.skip_lib_check {
+        return Vec::new();
+    }
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, source_type).parse();
+    if parsed.fatal_error
+        || !script_is_type_checked(&parsed.program, source_type, resolver.check_js)
+    {
+        return Vec::new();
+    }
+    let mut refs = Vec::new();
+    ImportCollector {
+        base: 0,
+        out: &mut refs,
+    }
+    .visit_program(&parsed.program);
+    diagnostics_for(file, source, refs, resolver)
+}
+
+/// Turn the collected specifiers of one file into `TS2307`s for those
+/// that resolve to nothing.
+fn diagnostics_for(
+    file: &Path,
+    source: &str,
+    refs: Vec<SvelteImportRef>,
+    resolver: &SvelteImportResolver,
+) -> Vec<EnhancementDiagnostic> {
     if refs.is_empty() {
         return Vec::new();
     }
@@ -184,9 +270,9 @@ pub fn missing_svelte_import_diagnostics(
         .collect()
 }
 
-/// A `.svelte` module specifier imported (or re-exported) by a component,
-/// carrying the byte span of its string literal — including the
-/// surrounding quotes — in the ORIGINAL `.svelte` source.
+/// A `.svelte` module specifier imported (or re-exported) by a component
+/// or module, carrying the byte span of its string literal — including
+/// the surrounding quotes — in the ORIGINAL source file.
 struct SvelteImportRef {
     specifier: String,
     start: u32,
@@ -270,6 +356,74 @@ impl<'a> Visit<'a> for ImportCollector<'_> {
         }
         walk::walk_import_expression(self, it);
     }
+}
+
+/// Whether TypeScript reports semantic errors for this file at all.
+///
+/// Mirrors the compiler's own gate: a `// @ts-nocheck` / `// @ts-check`
+/// directive decides when present (the later one wins), otherwise a TS
+/// file is checked and a JS file only under `checkJs: true`. A JS file
+/// with `checkJs` unset is still bound, but the compiler keeps only a
+/// fixed set of plain-JS errors there and `TS2307` is not one of them.
+///
+/// Only line comments before the first token count as directives — the
+/// compiler reads them from the file's leading comments, so a
+/// `/* @ts-check */` block or a `// @ts-check` below the first statement
+/// is ignored.
+fn script_is_type_checked(
+    program: &Program<'_>,
+    source_type: SourceType,
+    check_js: Option<bool>,
+) -> bool {
+    let first_token = program
+        .directives
+        .first()
+        .map(|d| d.span.start)
+        .into_iter()
+        .chain(program.body.first().map(|s| s.span().start))
+        .min()
+        .unwrap_or(program.span.end);
+    let directive = program
+        .comments
+        .iter()
+        .filter(|c| c.span.end <= first_token && c.is_line())
+        .filter_map(|c| check_directive(c.content_span().source_text(program.source_text)))
+        .next_back();
+    match directive {
+        Some(enabled) => enabled,
+        None => source_type.is_typescript() || check_js == Some(true),
+    }
+}
+
+/// `Some(true)` for a `@ts-check` line-comment pragma, `Some(false)` for
+/// `@ts-nocheck`, `None` otherwise. `text` is the comment body after
+/// `//`; the compiler also accepts a third slash and matches the pragma
+/// name case-insensitively, up to whitespace or `:`.
+fn check_directive(text: &str) -> Option<bool> {
+    let text = text.strip_prefix('/').unwrap_or(text).trim_start();
+    let name = text
+        .strip_prefix('@')?
+        .split(|c: char| c.is_whitespace() || c == ':')
+        .next()?;
+    if name.eq_ignore_ascii_case("ts-check") {
+        Some(true)
+    } else if name.eq_ignore_ascii_case("ts-nocheck") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// A declaration file by TypeScript's naming rule: `.d.ts`, `.d.mts`,
+/// `.d.cts`, or an arbitrary-extension declaration such as
+/// `Foo.d.svelte.ts` (a `.d.` anywhere in a `.ts` file name).
+fn is_declaration_file(file: &Path) -> bool {
+    let Some(name) = file.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    name.ends_with(".d.mts")
+        || name.ends_with(".d.cts")
+        || (name.ends_with(".ts") && name.contains(".d."))
 }
 
 /// The declaration-sidecar specifier for a `.svelte` specifier:
@@ -570,6 +724,110 @@ mod tests {
             specifiers(src),
             vec!["./I.svelte".to_string(), "./M.svelte".to_string()]
         );
+    }
+
+    fn script_checked(name: &str, src: &str, check_js: Option<bool>) -> bool {
+        let allocator = Allocator::default();
+        let source_type = SourceType::from_path(name).unwrap();
+        let parsed = Parser::new(&allocator, src, source_type).parse();
+        script_is_type_checked(&parsed.program, source_type, check_js)
+    }
+
+    #[test]
+    fn ts_files_are_checked_unless_nocheck() {
+        assert!(script_checked("a.ts", "import x from './x.svelte'", None));
+        assert!(script_checked("a.mts", "export {}", Some(false)));
+        assert!(!script_checked("a.ts", "// @ts-nocheck\nexport {}", None));
+    }
+
+    #[test]
+    fn js_files_follow_check_js_and_directives() {
+        assert!(!script_checked("a.js", "export {}", None));
+        assert!(!script_checked("a.js", "export {}", Some(false)));
+        assert!(script_checked("a.js", "export {}", Some(true)));
+        assert!(script_checked(
+            "a.js",
+            "// @ts-check\nexport {}",
+            Some(false)
+        ));
+        assert!(script_checked("a.js", "/// @TS-Check: on\nexport {}", None));
+        assert!(!script_checked(
+            "a.js",
+            "// @ts-nocheck\nexport {}",
+            Some(true)
+        ));
+    }
+
+    #[test]
+    fn last_leading_line_directive_wins() {
+        assert!(!script_checked(
+            "a.js",
+            "// @ts-check\n// @ts-nocheck\nexport {}",
+            None
+        ));
+        assert!(script_checked(
+            "a.js",
+            "// @ts-nocheck\n\n// @ts-check\nexport {}",
+            None
+        ));
+        // Not leading, or not a line comment: ignored.
+        assert!(!script_checked(
+            "a.js",
+            "const x = 1;\n// @ts-check\nexport {}",
+            None
+        ));
+        assert!(!script_checked("a.js", "/* @ts-check */\nexport {}", None));
+        assert!(!script_checked("a.js", "// @ts-checked\nexport {}", None));
+        // A directive prologue is the first token.
+        assert!(!script_checked(
+            "a.js",
+            "'use strict';\n// @ts-check\nexport {}",
+            None
+        ));
+    }
+
+    #[test]
+    fn declaration_file_names() {
+        assert!(is_declaration_file(Path::new("src/app.d.ts")));
+        assert!(is_declaration_file(Path::new("x.d.mts")));
+        assert!(is_declaration_file(Path::new("Foo.d.svelte.ts")));
+        assert!(!is_declaration_file(Path::new("state.svelte.ts")));
+        assert!(!is_declaration_file(Path::new("d.ts.js")));
+    }
+
+    /// End to end for a plain module: only the missing specifier fires,
+    /// at the opening quote, and a file the compiler does not check
+    /// reports nothing.
+    #[test]
+    fn script_reports_missing_specifier_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/Here.svelte"), "").unwrap();
+        let tsconfig = root.join("tsconfig.json");
+        std::fs::write(
+            &tsconfig,
+            r#"{ "compilerOptions": { "skipLibCheck": true } }"#,
+        )
+        .unwrap();
+        let resolver = SvelteImportResolver::new(root, &tsconfig);
+
+        let main = root.join("src/main.ts");
+        let src = "import Here from './Here.svelte';\nimport Gone from './Gone.svelte';\n";
+        let diags = missing_svelte_import_diagnostics_in_script(&main, src, &resolver);
+        assert_eq!(diags.len(), 1);
+        assert_eq!((diags[0].line, diags[0].column), (2, 18));
+        assert_eq!(
+            diags[0].message,
+            "Cannot find module './Gone.svelte' or its corresponding type declarations."
+        );
+
+        let plain = root.join("src/plain.js");
+        assert!(missing_svelte_import_diagnostics_in_script(&plain, src, &resolver).is_empty());
+        let dts = root.join("src/types.d.ts");
+        assert!(missing_svelte_import_diagnostics_in_script(&dts, src, &resolver).is_empty());
+        let disabled = SvelteImportResolver::disabled();
+        assert!(missing_svelte_import_diagnostics_in_script(&main, src, &disabled).is_empty());
     }
 
     #[test]

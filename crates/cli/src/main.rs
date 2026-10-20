@@ -1152,22 +1152,30 @@ fn carry_bidi_regex(
     }
 }
 
-// TSGO-ENHANCEMENT: adapter over [`svn_enhance::missing_svelte_import_diagnostics`].
-// The detection lives in the isolated `svn-enhance` crate (droppable once
-// TS7.1's module-resolution API lands upstream — see that crate's docs);
-// here we only lift its position-mapped results into `CheckDiagnostic`.
+// TSGO-ENHANCEMENT: adapter over [`svn_enhance::missing_svelte_import_diagnostics`]
+// (`doc` is the parsed component) and its plain-module twin
+// [`svn_enhance::missing_svelte_import_diagnostics_in_script`] (`doc` is
+// `None` for a `.ts`/`.js` file). The detection lives in the isolated
+// `svn-enhance` crate (droppable once TS7.1's module-resolution API lands
+// upstream — see that crate's docs); here we only lift its
+// position-mapped results into `CheckDiagnostic`.
 fn missing_svelte_import_diagnostics(
     file: &Path,
     source: &str,
-    doc: &svn_parser::Document<'_>,
+    doc: Option<&svn_parser::Document<'_>>,
     resolver: &svn_enhance::SvelteImportResolver,
 ) -> Vec<svn_typecheck::CheckDiagnostic> {
     let script_is_ts = svn_parser::is_ts_svelte(source);
-    svn_enhance::missing_svelte_import_diagnostics(file, source, doc, resolver)
+    let found = match doc {
+        Some(doc) => svn_enhance::missing_svelte_import_diagnostics(file, source, doc, resolver),
+        None => svn_enhance::missing_svelte_import_diagnostics_in_script(file, source, resolver),
+    };
+    found
         .into_iter()
         .map(|d| svn_typecheck::CheckDiagnostic {
-            // Same `ts`/`js` rule as the tsgo-mapped diagnostics: these
-            // land on a `.svelte` file, so the script's language decides.
+            // Same `ts`/`js` rule as the tsgo-mapped diagnostics: on a
+            // `.svelte` file the script's language decides, on a module
+            // its extension.
             source: svn_typecheck::diagnostic_source(&d.file, script_is_ts),
             source_path: d.file,
             line: d.line,
@@ -1801,8 +1809,23 @@ fn check_project(
         let excluded = exclude.as_ref().is_some_and(|set| set.is_match(path));
         included && !excluded
     };
-    let (svelte_files_raw, kit_files_raw) =
-        discovery::discover_relevant_files_with_settings(workspace, kit_files_settings);
+    let discovered = discovery::discover_files(workspace, kit_files_settings);
+    let (svelte_files_raw, kit_files_raw) = (discovered.svelte, discovered.kit);
+    // TSGO-ENHANCEMENT: the TS/JS modules of the program, for the
+    // missing-`.svelte`-import check. Same scope rule as kit files below;
+    // JS sources only under `allowJs`.
+    let script_files: Vec<PathBuf> = discovered
+        .scripts
+        .into_iter()
+        .filter(|p| in_project_scope(p))
+        .filter(|p| {
+            allow_js
+                || !matches!(
+                    p.extension().and_then(|e| e.to_str()),
+                    Some("js" | "jsx" | "mjs" | "cjs")
+                )
+        })
+        .collect();
     // Svelte-file emit: we walk ALL discovered `.svelte` files, not
     // just the in-scope subset. An out-of-scope file might be
     // imported by an in-scope one — upstream's LanguageService
@@ -2039,7 +2062,7 @@ fn check_project(
                         missing_svelte_import_diagnostics(
                             file,
                             source,
-                            &doc,
+                            Some(&doc),
                             svelte_import_resolver_ref,
                         )
                     } else {
@@ -2101,6 +2124,28 @@ fn check_project(
             native_results.push(native);
             missing_import_diags.extend(missing);
             dropped_files.extend(dropped);
+        }
+        // TSGO-ENHANCEMENT: missing `.svelte` imports in the program's
+        // TS/JS modules (kit files included, checked against the source
+        // as written, before any `$types` injection).
+        if svelte_import_resolver.is_enabled() {
+            missing_import_diags.extend(
+                script_files
+                    .par_iter()
+                    .flat_map_iter(|file| {
+                        std::fs::read_to_string(file)
+                            .map(|source| {
+                                missing_svelte_import_diagnostics(
+                                    file,
+                                    &source,
+                                    None,
+                                    svelte_import_resolver_ref,
+                                )
+                            })
+                            .unwrap_or_default()
+                    })
+                    .collect::<Vec<_>>(),
+            );
         }
         if let Some(compat) = native_compat {
             let native = NativeLint {

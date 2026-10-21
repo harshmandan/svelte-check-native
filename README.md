@@ -44,6 +44,42 @@ isn't installed — so you can keep `typescript@6` for your own
 toolchain and check with tsgo. TypeScript 6 and below is never used
 as the check engine.
 
+### Optional: check with tsrs
+
+[tsrs](https://github.com/oxc-project/tsrs) is a Rust port of the
+TypeScript 7 checker. It's opt-in: install it and set `SVN_ENGINE=tsrs`.
+
+```sh
+npm i -D tsrs
+SVN_ENGINE=tsrs npx svelte-check-native --workspace .
+```
+
+```json
+{
+  "scripts": {
+    "check": "SVN_ENGINE=tsrs svelte-check-native --workspace ."
+  }
+}
+```
+
+On two SvelteKit apps (1,124 and 1,357 files), the type-check step ran
+about 2.5x faster with about 2.4x less peak memory than the TypeScript
+nightly tsrs is pinned to. Diagnostics were identical.
+
+Before you switch:
+
+- **tsrs checks with its own TypeScript version**, not the one in your
+  `package.json`. Each release is pinned to a TypeScript commit (0.18.0
+  is `7.1.0-dev.20260929`). Upstream `svelte-check --tsgo` uses your
+  installed TypeScript, so results can differ when the versions do.
+- **Platforms:** macOS arm64 and Linux x64/arm64 (glibc and musl). No
+  Intel macOS or Windows build yet.
+- **It's never picked unless asked for**, even when it's the only
+  compiler installed. With `SVN_ENGINE=tsrs` and no tsrs installed, the
+  check fails instead of falling back to TypeScript.
+- `npx svelte-check-native --debug-paths` shows which compiler a run
+  will use.
+
 ## Use
 
 ```sh
@@ -116,13 +152,9 @@ as upstream's does.
   platform-native `tsgo`/`tsc` binary or JS wrapper. Useful when
   neither engine package is in `node_modules` (e.g. a monorepo where
   TypeScript lives elsewhere).
-- `SVN_ENGINE=tsrs` — check with [tsrs](https://github.com/oxc-project/tsrs),
-  a Rust port of the TypeScript 7 checker, instead of TypeScript.
-  Opt-in only: tsrs is never picked unless asked for, even when it's
-  the only compiler installed, because it checks against its own
-  pinned TypeScript version rather than the one your project
-  installed. Install `tsrs` as a devDependency; if it's missing the
-  check fails rather than falling back. `TSGO_BIN` still wins.
+- `SVN_ENGINE=tsrs` — check with tsrs instead of TypeScript. See
+  [Optional: check with tsrs](#optional-check-with-tsrs).
+  `TSGO_BIN` still wins.
 - `SVN_BRIDGE_WORKERS` — number of `svelte/compiler` worker
   subprocesses. Default `cores/2`, capped at 8; tracks the perf-core
   count on Apple Silicon. Override if you hit IPC contention on very
@@ -174,6 +206,8 @@ Iterate `T` directly in the mapped-type key instead.
   match. The `.v5` fixture corpus from `svelte2tsx` is our parity gate.
 - [TypeScript 7](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/)
   — the native compiler that does the actual type-checking.
+- [tsrs](https://github.com/oxc-project/tsrs) — Rust port of the
+  TypeScript 7 checker, supported as an opt-in engine.
 
 ## License
 

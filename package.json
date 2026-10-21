@@ -40,6 +40,6 @@
   },
   "devDependencies": {
     "@typescript/native-preview": ">=7.0.0-dev.0",
-    "typescript": "^7.0.2"
+    "typescript": "7.1.0-beta"
   }
 }

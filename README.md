@@ -63,8 +63,8 @@ SVN_ENGINE=tsrs npx svelte-check-native --workspace .
 ```
 
 On two SvelteKit apps (1,124 and 1,357 files), the type-check step ran
-about 2.5x faster with about 2.4x less peak memory than the TypeScript
-nightly tsrs is pinned to. Diagnostics were identical.
+3.5–4x faster with 2.7–3.1x less peak memory than the TypeScript
+nightly tsrs is pinned to, with identical diagnostics.
 
 Before you switch:
 

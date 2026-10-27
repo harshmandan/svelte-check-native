@@ -74,6 +74,7 @@ pub(crate) fn apply_script_body_rewrites(
         buf.raw_string_mut(),
         &body,
         &s.exported_locals,
+        &s.jsdoc_typed,
         route_kind,
         emit_is_ts(),
     );
@@ -88,6 +89,7 @@ pub(crate) fn apply_script_body_rewrites(
         buf.raw_string_mut(),
         &body,
         &exported_consts,
+        &s.jsdoc_typed,
         route_kind,
         emit_is_ts(),
     );

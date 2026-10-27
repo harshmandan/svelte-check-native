@@ -23,11 +23,14 @@
 use std::collections::HashSet;
 
 use oxc_allocator::Allocator;
-use oxc_ast::ast::{BindingPattern, Declaration, ImportOrExportKind, Statement};
+use oxc_ast::ast::{
+    BindingPattern, Declaration, ImportOrExportKind, Statement, VariableDeclaration,
+};
 use oxc_span::GetSpan;
 use smol_str::SmolStr;
 use svn_parser::{ScriptLang, parse_script_body};
 
+use crate::jsdoc::{attached_jsdoc_tags, has_type_tag};
 use crate::svelte2tsx_nodes::exported_type_info::collect_export_type_infos;
 use crate::svelte2tsx_nodes::hoistable_interfaces::{HoistContext, hoisted_type_spans};
 
@@ -61,6 +64,10 @@ pub struct SplitScript {
     /// we couldn't extract a safe-to-hoist annotation); the caller
     /// falls back to `any` for those slots.
     pub export_type_infos: Vec<ExportedLocalInfo>,
+    /// Top-level `let` / `const` / `var` names that
+    /// `ts.getJSDocType(declaration)` gives a type in the source as
+    /// written, before any `export` keyword is stripped.
+    pub jsdoc_typed: Vec<SmolStr>,
 }
 
 /// Surface-facing type info for one `export function/let/const` — what
@@ -108,6 +115,58 @@ fn leading_comments_start(
         .unwrap_or(span_start)
 }
 
+/// Push the declarators of `decl` that `ts.getJSDocType` types: a
+/// JSDoc `@type` on the declarator itself (between the keyword or comma
+/// and its name), or, for the first declarator only, on the statement
+/// (before its first token, `stmt_start`). A comment between `export`
+/// and the keyword belongs to neither.
+fn collect_jsdoc_typed(
+    decl: &VariableDeclaration<'_>,
+    stmt_start: usize,
+    trivia_start: usize,
+    content: &str,
+    comments: &[oxc_ast::Comment],
+    out: &mut Vec<SmolStr>,
+) {
+    let stmt_typed = has_type_tag(&attached_jsdoc_tags(
+        comments,
+        content,
+        trivia_start,
+        stmt_start,
+        false,
+    ));
+    let mut token_end = decl.span.start as usize + decl.kind.as_str().len();
+    for (i, d) in decl.declarations.iter().enumerate() {
+        let start = d.span.start as usize;
+        let own_typed = has_type_tag(&attached_jsdoc_tags(
+            comments, content, token_end, start, true,
+        ));
+        if (own_typed || (i == 0 && stmt_typed))
+            && let BindingPattern::BindingIdentifier(id) = &d.id
+        {
+            out.push(SmolStr::from(id.name.as_str()));
+        }
+        token_end = comma_end(comments, content, d.span.end as usize);
+    }
+}
+
+/// Just past the `,` that follows a declarator ending at `from`,
+/// skipping commas inside comments.
+fn comma_end(comments: &[oxc_ast::Comment], content: &str, from: usize) -> usize {
+    let mut at = from;
+    while let Some(i) = content.get(at..).and_then(|rest| rest.find(',')) {
+        let pos = at + i;
+        match comments
+            .iter()
+            .find(|c| (c.span.start as usize..c.span.end as usize).contains(&pos))
+        {
+            Some(c) => at = c.span.end as usize,
+            None => return pos + 1,
+        }
+    }
+    from
+}
+
 /// Split out every module-level statement (imports, exports of all
 /// shapes) from a script body, and move the type declarations
 /// `hoist` says belong at module scope.
@@ -131,6 +190,7 @@ pub fn split_imports(content: &str, _lang: ScriptLang, hoist: &HoistContext) -> 
             hoisted_byte_offsets: Vec::new(),
             hoisted_stmt_spans: Vec::new(),
             export_type_infos: Vec::new(),
+            jsdoc_typed: Vec::new(),
         };
     }
 
@@ -153,6 +213,7 @@ pub fn split_imports(content: &str, _lang: ScriptLang, hoist: &HoistContext) -> 
     // top-level `let`/`var` is known.
     let mut named_exports: Vec<(SmolStr, SmolStr)> = Vec::new();
     let mut top_level_lets: HashSet<SmolStr> = HashSet::new();
+    let mut jsdoc_typed: Vec<SmolStr> = Vec::new();
 
     let mut prev_stmt_end = 0usize;
     for stmt in &parsed.program.body {
@@ -168,6 +229,14 @@ pub fn split_imports(content: &str, _lang: ScriptLang, hoist: &HoistContext) -> 
                 hoist_spans.push((start, decl.span.end as usize));
             }
             Statement::VariableDeclaration(decl) => {
+                collect_jsdoc_typed(
+                    decl,
+                    decl.span.start as usize,
+                    trivia_start,
+                    content,
+                    &parsed.program.comments,
+                    &mut jsdoc_typed,
+                );
                 // Body-level `let`/`var` — stays in body; remembered so an
                 // `export { name }` list can tell a prop from a constant.
                 if matches!(
@@ -203,9 +272,22 @@ pub fn split_imports(content: &str, _lang: ScriptLang, hoist: &HoistContext) -> 
                     // `export const/let/var/function/class` — strip just
                     // the `export ` prefix. The declaration content stays
                     // in body where its identifier references resolve.
+                    if let Declaration::VariableDeclaration(v) = d {
+                        collect_jsdoc_typed(
+                            v,
+                            span.0,
+                            trivia_start,
+                            content,
+                            &parsed.program.comments,
+                            &mut jsdoc_typed,
+                        );
+                    }
+                    // Only the keyword goes, as upstream's `removeExport`
+                    // does: a comment between it and the declaration
+                    // stays, and a JSDoc `@type` there still types it.
                     let inner_start = GetSpan::span(d).start as usize;
                     if inner_start > span.0 {
-                        strip_keyword_spans.push((span.0, inner_start));
+                        strip_keyword_spans.push((span.0, span.0 + "export".len()));
                     }
                     collect_declaration_names(d, &mut exported_locals);
                     collect_export_type_infos(d, content, &mut export_type_infos);
@@ -310,6 +392,7 @@ pub fn split_imports(content: &str, _lang: ScriptLang, hoist: &HoistContext) -> 
             hoisted_byte_offsets: Vec::new(),
             hoisted_stmt_spans: Vec::new(),
             export_type_infos,
+            jsdoc_typed,
         };
     }
 
@@ -400,6 +483,7 @@ pub fn split_imports(content: &str, _lang: ScriptLang, hoist: &HoistContext) -> 
         hoisted_byte_offsets,
         hoisted_stmt_spans,
         export_type_infos,
+        jsdoc_typed,
     }
 }
 

@@ -28,7 +28,7 @@ struct LetDeclarator {
     /// Position right after the binding name, where `!` or `: T` goes.
     name_end: usize,
     has_type_annotation: bool,
-    /// A `/** @type {…} */` JSDoc block leads the statement.
+    /// `ts.getJSDocType` gives the declaration a type in the source.
     has_jsdoc_type: bool,
     init: DeclaratorInit,
     /// Position right after the statement's last declarator (before
@@ -58,14 +58,28 @@ enum DeclaratorInit {
 /// top-level statements count: every rewrite target is a
 /// component-scope binding, and a nested `let` with the same name is a
 /// different variable.
-fn collect_top_level_lets(out: &str, body: &Range<usize>) -> Vec<LetDeclarator> {
-    collect_top_level_declarators(out, body, oxc_ast::ast::VariableDeclarationKind::Let)
+fn collect_top_level_lets(
+    out: &str,
+    body: &Range<usize>,
+    jsdoc_typed: &[SmolStr],
+) -> Vec<LetDeclarator> {
+    collect_top_level_declarators(
+        out,
+        body,
+        oxc_ast::ast::VariableDeclarationKind::Let,
+        jsdoc_typed,
+    )
 }
 
+/// `jsdoc_typed` names the declarations a JSDoc `@type` types, read
+/// from the script as written: here the `export` keyword is already
+/// gone, so a comment written between it and `let` would look like the
+/// statement's own.
 fn collect_top_level_declarators(
     out: &str,
     body: &Range<usize>,
     kind: oxc_ast::ast::VariableDeclarationKind,
+    jsdoc_typed: &[SmolStr],
 ) -> Vec<LetDeclarator> {
     use oxc_ast::ast::{BindingPattern, Declaration, Expression, Statement};
 
@@ -117,16 +131,6 @@ fn collect_top_level_declarators(
         else {
             continue;
         };
-        // `ts.getJSDocType(declaration)`: a JSDoc block right before
-        // the statement that carries an `@type` tag.
-        let has_jsdoc_type = parsed.program.comments.iter().any(|c| {
-            c.is_jsdoc()
-                && c.is_leading()
-                && c.attached_to == decl.span.start
-                && src
-                    .get(c.content_span().start as usize..c.content_span().end as usize)
-                    .is_some_and(|text| text.contains("@type"))
-        });
         for d in &decl.declarations {
             let BindingPattern::BindingIdentifier(id) = &d.id else {
                 continue;
@@ -145,7 +149,7 @@ fn collect_top_level_declarators(
                 name_start: body.start + id.span.start as usize,
                 name_end: body.start + id.span.end as usize,
                 has_type_annotation: d.type_annotation.is_some(),
-                has_jsdoc_type,
+                has_jsdoc_type: is_target(jsdoc_typed, &id.name),
                 init,
                 list_end,
             });
@@ -725,6 +729,7 @@ pub(crate) fn assert_exported_prop_types_in_place(
     out: &mut String,
     body: &Range<usize>,
     exported_names: &[SmolStr],
+    jsdoc_typed: &[SmolStr],
     route_kind: Option<sveltekit::RouteKind>,
     is_ts: bool,
 ) -> Vec<(u32, u32)> {
@@ -732,7 +737,7 @@ pub(crate) fn assert_exported_prop_types_in_place(
         return Vec::new();
     }
     let mut insertions: Vec<(usize, String)> = Vec::new();
-    for d in collect_top_level_lets(out, body) {
+    for d in collect_top_level_lets(out, body, jsdoc_typed) {
         if !is_target(exported_names, &d.name) {
             continue;
         }
@@ -798,6 +803,7 @@ pub(crate) fn annotate_exported_kit_consts_in_place(
     out: &mut String,
     body: &Range<usize>,
     const_names: &[SmolStr],
+    jsdoc_typed: &[SmolStr],
     route_kind: Option<sveltekit::RouteKind>,
     is_ts: bool,
 ) -> Vec<(u32, u32)> {
@@ -808,17 +814,21 @@ pub(crate) fn annotate_exported_kit_consts_in_place(
     {
         return Vec::new();
     }
-    let insertions: Vec<(usize, String)> =
-        collect_top_level_declarators(out, body, oxc_ast::ast::VariableDeclarationKind::Const)
-            .into_iter()
-            .filter(|d| {
-                d.name == "snapshot"
-                    && !d.has_type_annotation
-                    && !d.has_jsdoc_type
-                    && is_target(const_names, &d.name)
-            })
-            .map(|d| kit_type_insertion(&d, "import('./$types.js').Snapshot", is_ts))
-            .collect();
+    let insertions: Vec<(usize, String)> = collect_top_level_declarators(
+        out,
+        body,
+        oxc_ast::ast::VariableDeclarationKind::Const,
+        jsdoc_typed,
+    )
+    .into_iter()
+    .filter(|d| {
+        d.name == "snapshot"
+            && !d.has_type_annotation
+            && !d.has_jsdoc_type
+            && is_target(const_names, &d.name)
+    })
+    .map(|d| kit_type_insertion(&d, "import('./$types.js').Snapshot", is_ts))
+    .collect();
     splice_insertions(out, &insertions)
 }
 

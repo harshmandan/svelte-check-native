@@ -1,0 +1,6 @@
+{
+    "errors": [
+        { "file": "src/Props.svelte", "line": 7, "column": 5, "code": 2367 }
+    ],
+    "_note": "Exported props of a checked JavaScript component, typed with JSDoc in three places. A `@type` between `export` and `let` types nothing for `ts.getJSDocType`, so upstream adds no widening assertion and TypeScript narrows the prop to its initializer (TS2367 on the comparison); the comment stays in the overlay because only the `export` keyword is removed. A `@type` before the statement types its first declarator, and one after a comma types that declarator; both get the assertion and compare cleanly. Expected list matches svelte-check 4.4.6, default engine and --tsgo."
+}

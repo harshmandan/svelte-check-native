@@ -169,6 +169,7 @@ fn prop_type_assertion_edits_reconstruct() {
             SmolStr::from("size"),
             SmolStr::from("on"),
         ],
+        &[],
         None,
         true,
     );

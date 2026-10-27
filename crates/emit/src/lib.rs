@@ -61,6 +61,7 @@ mod emit_buffer;
 mod hoisted_imports;
 mod htmlxtojsx_utils;
 mod is_ts;
+mod jsdoc;
 pub mod kit_inject;
 mod knownevents;
 mod nodes;
@@ -2331,10 +2332,30 @@ mod tests {
     use std::path::PathBuf;
     use svn_analyze::walk_template;
     use svn_parser::{parse_all_template_runs, parse_sections};
+    /// The instance script after the splitter strips `export`, with the
+    /// prop assertions added.
     fn assert_props(src: &str, targets: &[&str], is_ts: bool) -> String {
-        let mut out = String::from(src);
+        let lang = if is_ts {
+            svn_parser::ScriptLang::Ts
+        } else {
+            svn_parser::ScriptLang::Js
+        };
+        let split = process_instance_script_content::split_imports(
+            src,
+            lang,
+            &svelte2tsx_nodes::hoistable_interfaces::HoistContext::default(),
+        );
+        let mut out = split.body;
         let targets: Vec<SmolStr> = targets.iter().map(|s| SmolStr::from(*s)).collect();
-        assert_exported_prop_types_in_place(&mut out, &(0..src.len()), &targets, None, is_ts);
+        let body = 0..out.len();
+        assert_exported_prop_types_in_place(
+            &mut out,
+            &body,
+            &targets,
+            &split.jsdoc_typed,
+            None,
+            is_ts,
+        );
         out
     }
 
@@ -2365,6 +2386,34 @@ mod tests {
             got,
             "/** @type {string} */\nlet a = 'x'/*svn:ignore_start*/;a = __svn_any(a);/*svn:ignore_end*/;\n\
              /** plain */\nlet b = 'y';\n"
+        );
+    }
+
+    /// `ts.getJSDocType`: the statement's JSDoc reaches only its first
+    /// declarator, a declarator's own JSDoc follows the keyword or
+    /// comma, and a comment between `export` and `let` types nothing.
+    #[test]
+    fn prop_assertion_reads_jsdoc_type_where_typescript_attaches_it() {
+        let got = assert_props(
+            "export /** @type {'a' | 'b'} */ let a = 'a';
+             /** @type {string} */
+export let b = 'b', c = 'c';
+             export let d = 'd', /** @type {string} */ e = 'e';
+             /** @typedef {string} T */
+export let f = 'f';
+",
+            &["a", "b", "c", "d", "e", "f"],
+            false,
+        );
+        assert_eq!(
+            got,
+            "       /** @type {'a' | 'b'} */ let a = 'a';
+             /** @type {string} */
+       let b = 'b', c = 'c'/*svn:ignore_start*/;b = __svn_any(b);/*svn:ignore_end*/;
+                    let d = 'd', /** @type {string} */ e = 'e'/*svn:ignore_start*/;e = __svn_any(e);/*svn:ignore_end*/;
+             /** @typedef {string} T */
+       let f = 'f';
+"
         );
     }
 

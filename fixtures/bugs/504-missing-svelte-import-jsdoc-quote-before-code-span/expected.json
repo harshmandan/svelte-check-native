@@ -1,0 +1,7 @@
+{
+    "errors": [
+        { "file": "src/Comp.svelte", "line": 5, "column": 21, "code": 2307 },
+        { "file": "src/doc.js", "line": 4, "column": 17, "code": 2307 }
+    ],
+    "_note": "A JSDoc description with an apostrophe before a backtick code span that runs onto the next line. The default svelte-check engine still reads the `@type` tag after it and reports TS2307 for the missing `.svelte` module, in a `// @ts-check` .js file and in a plain-JS component. Expected list copied from the default engine (svelte-check 4.4.6) run on this tree with a real svelte install."
+}

@@ -1168,27 +1168,19 @@ process.exit(0);
     Some(settings)
 }
 
-/// Look up a string-keyed property on an ObjectExpression and return
-/// the value expression. Skips computed keys, methods, getters,
-/// setters, and shorthand-without-init.
+/// Look up a property by its static key (`a`, `'a'`, `['a']`, `` [`a`] ``)
+/// on an ObjectExpression and return the value expression. svelte-check
+/// runs the config, so of duplicate keys the last one is the value.
 fn lookup_object_property<'a>(
     obj: &'a ObjectExpression<'a>,
     key: &str,
 ) -> Option<&'a Expression<'a>> {
-    for prop in &obj.properties {
-        let ObjectPropertyKind::ObjectProperty(p) = prop else {
-            continue;
-        };
-        let is_key = match &p.key {
-            PropertyKey::StaticIdentifier(id) => id.name == key,
-            PropertyKey::StringLiteral(s) => s.value == key,
-            _ => continue,
-        };
-        if is_key {
-            return Some(&p.value);
-        }
-    }
-    None
+    obj.properties
+        .iter()
+        .rev()
+        .filter_map(ObjectPropertyKind::as_property)
+        .find(|p| p.key.is_specific_static_name(key))
+        .map(|p| &p.value)
 }
 
 /// Convenience: look up `key` and return its value if it's a string
@@ -1763,6 +1755,23 @@ mod tests {
         let path = dir.path().join("vite.config.ts");
         std::fs::write(&path, src).unwrap();
         analyse_vite_config(&path)
+    }
+
+    #[test]
+    fn duplicate_config_keys_take_the_last_value() {
+        assert!(preserve_case(
+            "export default { compilerOptions: { namespace: 'html' }, compilerOptions: { namespace: 'foreign' } };"
+        ));
+        assert!(!preserve_case(
+            "export default { compilerOptions: { namespace: 'foreign' }, compilerOptions: { namespace: 'html' } };"
+        ));
+    }
+
+    #[test]
+    fn computed_config_keys_with_static_names_are_read() {
+        assert!(preserve_case(
+            "export default { [`compilerOptions`]: { ['namespace']: 'foreign' } };"
+        ));
     }
 
     #[test]

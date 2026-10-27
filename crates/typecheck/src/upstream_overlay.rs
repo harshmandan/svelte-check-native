@@ -112,7 +112,10 @@ pub(crate) fn overlay(inputs: &Inputs<'_>) -> Value {
     for spec in raw_files.iter().filter(|s| !s.ends_with(".svelte")) {
         push_unique(&mut files, rebase(spec));
     }
-    for spec in &raw_files {
+    // Only components get a generated `.d.svelte.ts` entry; a `.ts`
+    // entry stays at its rebased real path alone, since a virtual copy
+    // names a file that doesn't exist.
+    for spec in raw_files.iter().filter(|s| s.ends_with(".svelte")) {
         push_unique(&mut files, virtual_spec(spec));
     }
     // svelte2tsx's shim declarations, then the element typings: the

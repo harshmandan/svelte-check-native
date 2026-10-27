@@ -7,8 +7,8 @@
 # manual review pass confirms no behavior gap or test gap.
 
 [language-tools]
-sha = "b1ab06379bca7d96f64f4c2063ffc3c28c060148"
-note = "svelte-check@4.7.7+ — elements typed from the installed svelte-html.d.ts (#3141); a $props type argument is reported, not moved into the alias (#3126); include defaults to **/* when the tsconfig has neither include nor files (#3138)"
+sha = "c2a9be791be9229401b3f488058f1d12e930f6f7"
+note = "svelte-check@4.7.7 + unreleased main: --tsgo keeps .ts `files` entries at their real path only, no virtual copy (#3146); document symbols hide imports (#3113, language server only)"
 
 [svelte-compiler]
 # The Svelte compiler repo tracked locally under

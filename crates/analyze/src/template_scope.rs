@@ -256,8 +256,9 @@ fn walk(
                 if prop.computed {
                     match &prop.key {
                         oxc_ast::ast::PropertyKey::StringLiteral(s) => {
-                            sibling_keys
-                                .push(ObjectRestSibling::Static(SmolStr::from(s.value.as_str())));
+                            if let Some(key) = s.value.as_str() {
+                                sibling_keys.push(ObjectRestSibling::Static(SmolStr::from(key)));
+                            }
                         }
                         oxc_ast::ast::PropertyKey::Identifier(id) => {
                             sibling_keys
@@ -272,8 +273,9 @@ fn walk(
                                 .push(ObjectRestSibling::Static(SmolStr::from(id.name.as_str())));
                         }
                         oxc_ast::ast::PropertyKey::StringLiteral(s) => {
-                            sibling_keys
-                                .push(ObjectRestSibling::Static(SmolStr::from(s.value.as_str())));
+                            if let Some(key) = s.value.as_str() {
+                                sibling_keys.push(ObjectRestSibling::Static(SmolStr::from(key)));
+                            }
                         }
                         _ => {}
                     }
@@ -294,9 +296,10 @@ fn walk(
                         oxc_ast::ast::PropertyKey::Identifier(id) => {
                             Some(DestructureSeg::KeyTypeof(SmolStr::from(id.name.as_str())))
                         }
-                        oxc_ast::ast::PropertyKey::StringLiteral(s) => {
-                            Some(DestructureSeg::Key(SmolStr::from(s.value.as_str())))
-                        }
+                        oxc_ast::ast::PropertyKey::StringLiteral(s) => s
+                            .value
+                            .as_str()
+                            .map(|key| DestructureSeg::Key(SmolStr::from(key))),
                         _ => None,
                     }
                 } else {
@@ -304,9 +307,10 @@ fn walk(
                         oxc_ast::ast::PropertyKey::StaticIdentifier(id) => {
                             Some(DestructureSeg::Key(SmolStr::from(id.name.as_str())))
                         }
-                        oxc_ast::ast::PropertyKey::StringLiteral(s) => {
-                            Some(DestructureSeg::Key(SmolStr::from(s.value.as_str())))
-                        }
+                        oxc_ast::ast::PropertyKey::StringLiteral(s) => s
+                            .value
+                            .as_str()
+                            .map(|key| DestructureSeg::Key(SmolStr::from(key))),
                         _ => None,
                     }
                 };

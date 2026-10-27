@@ -728,7 +728,10 @@ fn option_value_of_object(obj: &ObjectExpression<'_>) -> svn_lint::OptionValue {
         }
         let key = match &p.key {
             PropertyKey::StaticIdentifier(id) => id.name.to_string(),
-            PropertyKey::StringLiteral(s) => s.value.to_string(),
+            PropertyKey::StringLiteral(s) => match s.value.as_str() {
+                Some(key) => key.to_string(),
+                None => return OptionValue::Unknown,
+            },
             _ => return OptionValue::Unknown,
         };
         let value = match p.kind {
@@ -749,14 +752,17 @@ fn option_value_of(expr: &Expression<'_>) -> svn_lint::OptionValue {
         Expression::TSAsExpression(t) => option_value_of(&t.expression),
         Expression::TSSatisfiesExpression(t) => option_value_of(&t.expression),
         Expression::BooleanLiteral(b) => OptionValue::Bool(b.value),
-        Expression::StringLiteral(s) => OptionValue::Str(s.value.to_string()),
+        Expression::StringLiteral(s) => s
+            .value
+            .as_str()
+            .map_or(OptionValue::Unknown, |v| OptionValue::Str(v.to_string())),
         Expression::NumericLiteral(n) => OptionValue::Num(n.value),
         Expression::NullLiteral(_) => OptionValue::Null,
         Expression::Identifier(id) if id.name == "undefined" => OptionValue::Undefined,
         Expression::TemplateLiteral(t) if t.expressions.is_empty() => t
             .quasis
             .first()
-            .and_then(|q| q.value.cooked.as_ref())
+            .and_then(|q| q.value.cooked.and_then(|c| c.as_str()))
             .map_or(OptionValue::Unknown, |c| OptionValue::Str(c.to_string())),
         Expression::ArrayExpression(_) => OptionValue::Array,
         Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => {
@@ -897,16 +903,15 @@ fn import_source<'a>(
         let Statement::ImportDeclaration(decl) = stmt else {
             return None;
         };
+        let source = decl.source.value.as_str()?;
         decl.specifiers
             .iter()
             .flatten()
             .find_map(|spec| match spec {
                 S::ImportSpecifier(s) if s.local.name == local => {
-                    Some((decl.source.value.as_str(), s.imported.name().as_str()))
+                    Some((source, s.imported.name().as_str()))
                 }
-                S::ImportDefaultSpecifier(s) if s.local.name == local => {
-                    Some((decl.source.value.as_str(), "default"))
-                }
+                S::ImportDefaultSpecifier(s) if s.local.name == local => Some((source, "default")),
                 _ => None,
             })
     })
@@ -1039,11 +1044,11 @@ fn read_path_value(value: Option<&Expression<'_>>) -> Option<Option<String>> {
         return Some(None);
     }
     match value {
-        Expression::StringLiteral(s) => Some(Some(s.value.to_string())),
-        Expression::TemplateLiteral(t) if t.expressions.is_empty() => t
-            .quasis
-            .first()
-            .map(|q| Some(q.value.cooked.as_ref().unwrap_or(&q.value.raw).to_string())),
+        Expression::StringLiteral(s) => s.value.as_str().map(|v| Some(v.to_string())),
+        Expression::TemplateLiteral(t) if t.expressions.is_empty() => t.quasis.first().map(|q| {
+            let cooked = q.value.cooked.and_then(|c| c.as_str());
+            Some(cooked.unwrap_or(q.value.raw.as_str()).to_string())
+        }),
         _ => None,
     }
 }
@@ -1174,12 +1179,12 @@ fn lookup_object_property<'a>(
         let ObjectPropertyKind::ObjectProperty(p) = prop else {
             continue;
         };
-        let prop_key = match &p.key {
-            PropertyKey::StaticIdentifier(id) => id.name.as_str(),
-            PropertyKey::StringLiteral(s) => s.value.as_str(),
+        let is_key = match &p.key {
+            PropertyKey::StaticIdentifier(id) => id.name == key,
+            PropertyKey::StringLiteral(s) => s.value == key,
             _ => continue,
         };
-        if prop_key == key {
+        if is_key {
             return Some(&p.value);
         }
     }
@@ -1190,7 +1195,7 @@ fn lookup_object_property<'a>(
 /// literal; otherwise None.
 fn lookup_string_property(obj: &ObjectExpression<'_>, key: &str) -> Option<String> {
     if let Expression::StringLiteral(s) = lookup_object_property(obj, key)? {
-        Some(s.value.to_string())
+        s.value.as_str().map(str::to_string)
     } else {
         None
     }
@@ -1684,7 +1689,7 @@ fn string_list_of_array<'a>(arr: &'a ArrayExpression<'a>) -> Option<Vec<String>>
         let ArrayExpressionElement::StringLiteral(s) = el else {
             return None;
         };
-        out.push(s.value.to_string());
+        out.push(s.value.as_str()?.to_string());
     }
     Some(out)
 }
@@ -1707,16 +1712,9 @@ fn member_access<'a>(expr: &'a Expression<'a>, param: &str) -> Option<&'a str> {
 
 fn string_literal<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
     match expr {
-        Expression::StringLiteral(s) => Some(s.value.as_str()),
+        Expression::StringLiteral(s) => s.value.as_str(),
         Expression::TemplateLiteral(tl) if tl.expressions.is_empty() && tl.quasis.len() == 1 => {
-            Some(
-                tl.quasis[0]
-                    .value
-                    .cooked
-                    .as_ref()
-                    .map(|c| c.as_str())
-                    .unwrap_or(""),
-            )
+            tl.quasis[0].value.cooked.map_or(Some(""), |c| c.as_str())
         }
         _ => None,
     }

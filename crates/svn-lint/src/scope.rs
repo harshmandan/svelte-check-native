@@ -31,7 +31,7 @@ use oxc_ast::ast::{
     VariableDeclarator,
 };
 use oxc_span::GetSpan;
-use smol_str::SmolStr;
+use smol_str::{SmolStr, ToSmolStr};
 use svn_core::Range;
 
 use svn_parser::document::{Document, ScriptSection};
@@ -1701,9 +1701,12 @@ impl TreeBuilder {
                     for spec in &end.specifiers {
                         use oxc_ast::ast::ModuleExportName;
                         let local = match &spec.local {
-                            ModuleExportName::IdentifierName(id) => id.name.as_str(),
-                            ModuleExportName::IdentifierReference(id) => id.name.as_str(),
+                            ModuleExportName::IdentifierName(id) => Some(id.name.as_str()),
+                            ModuleExportName::IdentifierReference(id) => Some(id.name.as_str()),
                             ModuleExportName::StringLiteral(l) => l.value.as_str(),
+                        };
+                        let Some(local) = local else {
+                            continue;
                         };
                         self.export_spec_locals.push(SmolStr::from(local));
                         // Legacy mode promotes only `export { a as b }`
@@ -2203,7 +2206,7 @@ fn class_key_name(key: &PropertyKey<'_>) -> Option<String> {
     match key {
         PropertyKey::StaticIdentifier(id) => Some(id.name.to_string()),
         PropertyKey::PrivateIdentifier(id) => Some(format!("#{}", id.name)),
-        PropertyKey::StringLiteral(l) => Some(l.value.to_string()),
+        PropertyKey::StringLiteral(l) => l.value.as_str().map(str::to_string),
         PropertyKey::NumericLiteral(n) => Some(js_number_string(n.value)),
         _ => None,
     }
@@ -2212,7 +2215,7 @@ fn class_key_name(key: &PropertyKey<'_>) -> Option<String> {
 /// `String(value)` of a literal used as a computed member key.
 fn literal_key_name(e: &Expression<'_>) -> Option<String> {
     match e {
-        Expression::StringLiteral(l) => Some(l.value.to_string()),
+        Expression::StringLiteral(l) => l.value.as_str().map(str::to_string),
         Expression::NumericLiteral(n) => Some(js_number_string(n.value)),
         Expression::BooleanLiteral(b) => Some(b.value.to_string()),
         Expression::NullLiteral(_) => Some("null".to_string()),
@@ -2420,7 +2423,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 &mut self.tree.script_rule_events,
                 &self.ignore_frames,
                 self.tree.bidi_warned.as_ref(),
-                &lit.value,
+                lit.value.chars().map(|c| c.to_u32()),
                 range,
             );
         }
@@ -2661,7 +2664,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             Statement::ImportDeclaration(imp) if imp.import_kind.is_type() => {}
             Statement::ImportDeclaration(imp) => {
                 self.check_runes_import(imp);
-                let source = SmolStr::from(imp.source.value.as_str());
+                let source = imp.source.value.display().to_smolstr();
                 if let Some(specs) = &imp.specifiers {
                     for s in specs {
                         use oxc_ast::ast::ImportDeclarationSpecifier as S;
@@ -2943,7 +2946,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         if !self.hooks.is_some_and(|h| h.runes) {
             return;
         }
-        let source = imp.source.value.as_str();
+        let source = imp.source.value;
         if source.starts_with("svelte/internal") {
             let range = self.abs(imp.span.start, imp.span.end);
             self.push_error(
@@ -3019,7 +3022,12 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             let local = match &spec.local {
                 ModuleExportName::IdentifierName(id) => id.name.as_str(),
                 ModuleExportName::IdentifierReference(id) => id.name.as_str(),
-                ModuleExportName::StringLiteral(l) => l.value.as_str(),
+                ModuleExportName::StringLiteral(l) => {
+                    let Some(local) = l.value.as_str() else {
+                        continue;
+                    };
+                    local
+                }
             };
             let range = self.abs(spec.span.start, spec.span.end);
             self.check_export(local, range);

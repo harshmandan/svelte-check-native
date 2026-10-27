@@ -571,7 +571,7 @@ fn object_expression_has_props_key(src: &str) -> bool {
     obj.properties.iter().any(|p| match p {
         oxc_ast::ast::ObjectPropertyKind::ObjectProperty(prop) => match &prop.key {
             oxc_ast::ast::PropertyKey::StaticIdentifier(id) => id.name.as_str() == "props",
-            oxc_ast::ast::PropertyKey::StringLiteral(s) => s.value.as_str() == "props",
+            oxc_ast::ast::PropertyKey::StringLiteral(s) => s.value == "props",
             _ => false,
         },
         _ => false,

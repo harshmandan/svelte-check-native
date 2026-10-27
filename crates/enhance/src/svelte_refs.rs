@@ -220,7 +220,9 @@ struct ImportCollector<'o> {
 
 impl ImportCollector<'_> {
     fn record(&mut self, lit: &StringLiteral<'_>) {
-        let spec = lit.value.as_str();
+        let Some(spec) = lit.value.as_str() else {
+            return;
+        };
         if !is_svelte_specifier(spec) {
             return;
         }

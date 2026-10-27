@@ -52,7 +52,7 @@ pub(crate) fn replay(
     instance_program: Option<&Program<'_>>,
     last_index: u32,
 ) -> (Option<HashSet<u32>>, BidiTrace) {
-    let may_hold_bidi = source.chars().any(is_bidi) || source.contains("\\u");
+    let may_hold_bidi = source.chars().any(|c| is_bidi(c as u32)) || source.contains("\\u");
     // The compiler parses the template with its trailing whitespace
     // trimmed, so text there is never tested.
     let template_end = source.trim_end().len() as u32;
@@ -105,8 +105,8 @@ pub(crate) fn replay(
     (Some(warned.into_iter().collect()), trace)
 }
 
-fn is_bidi(c: char) -> bool {
-    matches!(c as u32, 0x202A..=0x202E | 0x2066..=0x2069)
+fn is_bidi(c: u32) -> bool {
+    matches!(c, 0x202A..=0x202E | 0x2066..=0x2069)
 }
 
 /// What compiling one component does to the compiler's bidi regex.
@@ -163,10 +163,10 @@ impl BidiTrace {
     }
 }
 
-fn record_test(uses: &mut Vec<RegexUse>, value: &str, start: u32) {
+fn record_test(uses: &mut Vec<RegexUse>, code_points: impl Iterator<Item = u32>, start: u32) {
     let mut groups: Vec<(u32, u32)> = Vec::new();
     let mut offset = 0u32;
-    for c in value.chars() {
+    for c in code_points {
         if is_bidi(c) {
             // Bidi characters are one UTF-16 unit each.
             match groups.last_mut() {
@@ -174,7 +174,8 @@ fn record_test(uses: &mut Vec<RegexUse>, value: &str, start: u32) {
                 _ => groups.push((offset, offset + 1)),
             }
         }
-        offset += c.len_utf16() as u32;
+        // A lone surrogate is one unit, like any code point below 0x10000.
+        offset += if c > 0xFFFF { 2 } else { 1 };
     }
     uses.push(RegexUse::Test { start, groups });
 }
@@ -186,7 +187,11 @@ struct Tester<'s> {
 
 impl<'a> Visit<'a> for Tester<'_> {
     fn visit_string_literal(&mut self, it: &StringLiteral<'a>) {
-        record_test(self.uses, &it.value, self.base + it.span.start);
+        record_test(
+            self.uses,
+            it.value.chars().map(|c| c.to_u32()),
+            self.base + it.span.start,
+        );
     }
 
     fn visit_template_literal(&mut self, it: &TemplateLiteral<'a>) {
@@ -194,7 +199,11 @@ impl<'a> Visit<'a> for Tester<'_> {
             self.visit_expression(expr);
         }
         for quasi in &it.quasis {
-            let cooked = quasi.value.cooked.as_deref().unwrap_or_default();
+            let cooked = quasi
+                .value
+                .cooked
+                .iter()
+                .flat_map(|s| s.chars().map(|c| c.to_u32()));
             record_test(self.uses, cooked, self.base + quasi.span.start);
         }
     }

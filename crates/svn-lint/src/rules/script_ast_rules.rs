@@ -174,9 +174,10 @@ fn is_ignored(frames: &[Vec<SmolStr>], code: Code) -> bool {
 }
 
 /// Matches upstream's `regex_bidirectional_control_characters`.
-fn has_bidi_char(s: &str) -> bool {
-    s.chars()
-        .any(|c| matches!(c as u32, 0x202A..=0x202E | 0x2066..=0x2069))
+fn has_bidi_char(code_points: impl IntoIterator<Item = u32>) -> bool {
+    code_points
+        .into_iter()
+        .any(|c| matches!(c, 0x202A..=0x202E | 0x2066..=0x2069))
 }
 
 impl ScriptRuleHooks {
@@ -277,7 +278,7 @@ impl ScriptRuleHooks {
         events: &mut Vec<ScriptRuleEvent>,
         frames: &[Vec<SmolStr>],
         warned: Option<&std::collections::HashSet<u32>>,
-        value: &str,
+        value: impl IntoIterator<Item = u32>,
         range: Range,
     ) {
         let warns = match warned {
@@ -308,7 +309,12 @@ impl ScriptRuleHooks {
         for q in &tl.quasis {
             let warns = match warned {
                 Some(set) => set.contains(&(q.span.start + base_offset)),
-                None => q.value.cooked.as_deref().is_some_and(has_bidi_char),
+                None => has_bidi_char(
+                    q.value
+                        .cooked
+                        .iter()
+                        .flat_map(|s| s.chars().map(|c| c.to_u32())),
+                ),
             };
             if warns && !is_ignored(frames, Code::bidirectional_control_characters) {
                 // TypeScript's output maps a template chunk from the

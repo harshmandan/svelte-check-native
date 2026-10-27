@@ -234,7 +234,7 @@ pub fn collect_ctor_locals(
         let Statement::ImportDeclaration(decl) = stmt else {
             continue;
         };
-        if decl.source.value.as_str() != "svelte" {
+        if decl.source.value != "svelte" {
             continue;
         }
         let Some(specifiers) = &decl.specifiers else {
@@ -247,12 +247,18 @@ pub fn collect_ctor_locals(
             // `imported` is the source-side name; `local` is the
             // value the user calls in this module. For the
             // un-aliased form they're identical.
-            let imported = match &s.imported {
-                oxc_ast::ast::ModuleExportName::IdentifierName(n) => n.name.as_str(),
-                oxc_ast::ast::ModuleExportName::IdentifierReference(r) => r.name.as_str(),
-                oxc_ast::ast::ModuleExportName::StringLiteral(l) => l.value.as_str(),
+            let is_ctor = match &s.imported {
+                oxc_ast::ast::ModuleExportName::IdentifierName(n) => {
+                    n.name == "createEventDispatcher"
+                }
+                oxc_ast::ast::ModuleExportName::IdentifierReference(r) => {
+                    r.name == "createEventDispatcher"
+                }
+                oxc_ast::ast::ModuleExportName::StringLiteral(l) => {
+                    l.value == "createEventDispatcher"
+                }
             };
-            (imported == "createEventDispatcher").then(|| s.local.name.to_string())
+            is_ctor.then(|| s.local.name.to_string())
         });
         if let Some(local) = first {
             ctor_locals.insert(local);
@@ -318,8 +324,9 @@ pub fn find_dispatched_event_names(program: &oxc_ast::ast::Program<'_>) -> Vec<S
             // that and we don't either.
             if let BindingPattern::BindingIdentifier(bid) = &d.id
                 && let Some(Expression::StringLiteral(s)) = &d.init
+                && let Some(value) = s.value.as_str()
             {
-                literal_vars.insert(bid.name.to_string(), s.value.to_string());
+                literal_vars.insert(bid.name.to_string(), value.to_string());
             }
             // Round-13 follow-up #1: track untyped dispatcher locals
             // incrementally. A forward call `dispatch('ready'); const
@@ -613,7 +620,7 @@ fn scan_expression_for_dispatched_names(
                 && let Some(first_expr) = first.as_expression()
             {
                 let resolved = match first_expr {
-                    Expression::StringLiteral(s) => Some(s.value.to_string()),
+                    Expression::StringLiteral(s) => s.value.as_str().map(str::to_string),
                     Expression::Identifier(id) => literal_vars.get(id.name.as_str()).cloned(),
                     _ => None,
                 };
@@ -1081,7 +1088,10 @@ fn collect_top_level_string_const_literals(
             let Some(Expression::StringLiteral(s)) = &d.init else {
                 continue;
             };
-            out.insert(bid.name.to_string(), s.value.to_string());
+            let Some(value) = s.value.as_str() else {
+                continue;
+            };
+            out.insert(bid.name.to_string(), value.to_string());
         }
     }
     out
@@ -1136,7 +1146,7 @@ fn expression_collect_inline_typed_members(
         } else {
             match &prop.key {
                 oxc_ast::ast::PropertyKey::StaticIdentifier(id) => Some(id.name.to_string()),
-                oxc_ast::ast::PropertyKey::StringLiteral(s) => Some(s.value.to_string()),
+                oxc_ast::ast::PropertyKey::StringLiteral(s) => s.value.as_str().map(str::to_string),
                 _ => None,
             }
         };
@@ -1289,7 +1299,7 @@ impl<'a> oxc_ast_visit::Visit<'a> for TemplateDispatchCollector<'_> {
 /// value would print (`'save'` → `save`, `1` → `1`, `null` → `null`).
 fn literal_event_name(expr: &Expression<'_>) -> Option<String> {
     match expr {
-        Expression::StringLiteral(s) => Some(s.value.to_string()),
+        Expression::StringLiteral(s) => s.value.as_str().map(str::to_string),
         Expression::NumericLiteral(n) => Some(if n.value.fract() == 0.0 && n.value.abs() < 1e21 {
             format!("{}", n.value as i64)
         } else {

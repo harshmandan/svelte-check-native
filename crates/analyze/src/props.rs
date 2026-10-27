@@ -820,7 +820,7 @@ fn collect_from_object_property(
     // a top-level AssignmentPattern in `prop.value` carries the default.
     let prop_key: Option<SmolStr> = match &prop.key {
         PropertyKey::StaticIdentifier(id) => Some(SmolStr::from(id.name.as_str())),
-        PropertyKey::StringLiteral(s) => Some(SmolStr::from(s.value.as_str())),
+        PropertyKey::StringLiteral(s) => s.value.as_str().map(SmolStr::from),
         _ => None,
     };
     let before = out.len();

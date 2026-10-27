@@ -757,7 +757,9 @@ fn static_value(attr: &Attribute, source: &str) -> StaticValue {
     };
     parse_expression(expression, source, |expr| match unparenthesized(expr) {
         Expression::BooleanLiteral(_) => StaticValue::Bool,
-        Expression::StringLiteral(s) => StaticValue::Text(s.value.to_string()),
+        // A lone surrogate prints escaped, which still fails every
+        // keyword match and the tag-name check, as the raw value would.
+        Expression::StringLiteral(s) => StaticValue::Text(s.value.display().to_string()),
         Expression::NullLiteral(_) => StaticValue::Null,
         Expression::NumericLiteral(_)
         | Expression::BigIntLiteral(_)
@@ -931,14 +933,16 @@ fn custom_element(attr: &Attribute, source: &str) -> Option<ParseFinding> {
             match key.name.as_str() {
                 "tag" if tag.is_none() => {
                     tag = Some(match &p.value {
-                        Expression::StringLiteral(s) => Some(s.value.to_string()),
+                        Expression::StringLiteral(s) => Some(s.value.display().to_string()),
                         _ => None,
                     });
                 }
                 "props" if props_ok.is_none() => props_ok = Some(valid_props(&p.value)),
                 "shadow" if shadow_ok.is_none() => {
                     shadow_ok = Some(match &p.value {
-                        Expression::StringLiteral(s) => matches!(s.value.as_str(), "open" | "none"),
+                        Expression::StringLiteral(s) => {
+                            matches!(s.value.as_str(), Some("open" | "none"))
+                        }
                         Expression::ObjectExpression(_) => true,
                         _ => false,
                     });
@@ -1014,7 +1018,7 @@ fn valid_props(value: &Expression<'_>) -> bool {
                 ("type", Expression::StringLiteral(s)) => {
                     matches!(
                         s.value.as_str(),
-                        "String" | "Number" | "Boolean" | "Array" | "Object"
+                        Some("String" | "Number" | "Boolean" | "Array" | "Object")
                     )
                 }
                 ("reflect", Expression::BooleanLiteral(_)) => true,

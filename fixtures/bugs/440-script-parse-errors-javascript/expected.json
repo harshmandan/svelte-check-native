@@ -7,6 +7,30 @@
             "code": "js_parse_error"
         },
         {
+            "file": "src/EscapedField.svelte",
+            "line": 2,
+            "column": 0,
+            "code": 1260
+        },
+        {
+            "file": "src/EscapedField.svelte",
+            "line": 2,
+            "column": 0,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/EscapedField.svelte",
+            "line": 2,
+            "column": 8,
+            "code": 1109
+        },
+        {
+            "file": "src/LetUpdate.svelte",
+            "line": 1,
+            "column": 0,
+            "code": "js_parse_error"
+        },
+        {
             "file": "src/MissingExpression.svelte",
             "line": 1,
             "column": 13,
@@ -46,6 +70,18 @@
             "file": "src/UndefinedLabel.svelte",
             "line": 2,
             "column": 9,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/UnescapedFieldKeyword.svelte",
+            "line": 2,
+            "column": 3,
+            "code": 1109
+        },
+        {
+            "file": "src/UnescapedFieldKeyword.svelte",
+            "line": 2,
+            "column": 3,
             "code": "js_parse_error"
         }
     ],

@@ -848,6 +848,32 @@ mod tests {
     }
 
     #[test]
+    fn escaped_operator_after_a_field_initializer() {
+        let first = |body: &str| as_written(&format!("<script>\nclass C {{ {body} }}\n</script>"));
+        let error = |at: &str, word: &str| Some(format!("{at} Escape sequence in keyword {word}"));
+        assert_eq!(first("x = a\n\\u0069n = 1"), error("2:0", "in"));
+        assert_eq!(
+            first("x = a\n\\u0069nstanceof = 1"),
+            error("2:0", "instanceof")
+        );
+        assert_eq!(first("x = a\n\\u0069n() {}"), error("2:0", "in"));
+        assert_eq!(first("x = () => a\n\\u0069n = 1"), error("2:0", "in"));
+        assert_eq!(first("x = (() => {})\n\\u0069n = 1"), error("2:0", "in"));
+        assert_eq!(first("x = a // c\n\\u0069n = 1"), error("2:0", "in"));
+        for body in [
+            "x = a;\n\\u0069n = 1",
+            "x\n\\u0069n = 1",
+            "x = () => {}\n\\u0069n = 1",
+            "x = a ? b : () => {}\n\\u0069n = 1",
+            "x = y = () => {}\n\\u0069n = 1",
+            "x = a\nstatic \\u0069n = 1",
+            "x = a; \\u0069n = 1",
+        ] {
+            assert_eq!(first(body), None, "{body}");
+        }
+    }
+
+    #[test]
     fn early_error_before_a_later_syntax_error() {
         assert_eq!(
             as_written("<script>\nlet x = 1;\nlet x = 2;\nlet y = ;\n</script>").as_deref(),

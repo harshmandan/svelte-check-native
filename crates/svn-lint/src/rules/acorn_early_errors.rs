@@ -281,6 +281,45 @@ impl<'s, 't> Checker<'s, 't> {
         }
     }
 
+    /// An escaped `in` / `instanceof` starting a class member on the
+    /// line after a field initializer: oxc reads it as the member's
+    /// name, but acorn's tokenizer gives it the keyword's type, so the
+    /// initializer takes it as a binary operator and consuming an
+    /// escaped keyword fails.
+    fn escaped_operator_after_field(
+        &mut self,
+        previous: &ClassElement<'_>,
+        element: &ClassElement<'_>,
+    ) {
+        let ClassElement::PropertyDefinition(field) = previous else {
+            return;
+        };
+        let Some(value) = &field.value else {
+            return;
+        };
+        let key = match element {
+            ClassElement::PropertyDefinition(p) => &p.key,
+            ClassElement::MethodDefinition(m) => &m.key,
+            _ => return,
+        };
+        let PropertyKey::StaticIdentifier(id) = key else {
+            return;
+        };
+        let start = id.span.start;
+        let written = &self.text[start as usize..id.span.end as usize];
+        if !matches!(id.name.as_str(), "in" | "instanceof")
+            || written == id.name.as_str()
+            || element.span().start != start
+            || self.next_token(value.span().end) != start
+            || !self.text[value.span().end as usize..start as usize]
+                .contains(['\n', '\r', '\u{2028}', '\u{2029}'])
+            || !continues_with_operator(value)
+        {
+            return;
+        }
+        self.error(start, format!("Escape sequence in keyword {}", id.name));
+    }
+
     fn error(&mut self, at: u32, message: impl Into<String>) {
         self.record(Candidate::at(at, message));
     }
@@ -786,6 +825,21 @@ fn regexp_reason(message: &str) -> String {
 }
 
 /// The binding identifiers of a pattern, in source order.
+/// Whether acorn's `parseExprOps` goes on to read a binary operator
+/// after `expr` as a class field's initializer: everything but an
+/// arrow function with a block body, which it returns as is. An arrow's
+/// expression body is read the same way.
+fn continues_with_operator(expr: &Expression<'_>) -> bool {
+    match expr {
+        Expression::ArrowFunctionExpression(arrow) => {
+            arrow.get_expression().is_some_and(continues_with_operator)
+        }
+        Expression::ConditionalExpression(c) => continues_with_operator(&c.alternate),
+        Expression::AssignmentExpression(a) => continues_with_operator(&a.right),
+        _ => true,
+    }
+}
+
 fn pattern_ids<'b, 'a>(pattern: &'b BindingPattern<'a>, out: &mut Vec<&'b BindingIdentifier<'a>>) {
     match pattern {
         BindingPattern::BindingIdentifier(id) => out.push(id),
@@ -991,11 +1045,16 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
         let derived = it.heritage.is_some();
         self.classes.push(PrivateNames::default());
         let mut had_constructor = false;
+        let mut previous = None;
         for element in &it.body.body {
             if self.settled(element.span().start) {
                 break;
             }
+            if let Some(previous) = previous {
+                self.escaped_operator_after_field(previous, element);
+            }
             self.class_element(element, derived, &mut had_constructor);
+            previous = Some(element);
         }
         let Some(names) = self.classes.pop() else {
             return;

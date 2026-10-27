@@ -1051,6 +1051,15 @@ mod tests {
     }
 
     #[test]
+    fn computed_member_with_lone_surrogate_key_keeps_its_escape() {
+        let out = rewrite_slot_attr_expr(r"item['\uD800']", &lookup_fn).unwrap();
+        assert_eq!(
+            out,
+            r#"((typeof items) extends Iterable<infer T> ? T : never)["\ud800"]"#
+        );
+    }
+
+    #[test]
     fn module_identifier_returns_none() {
         // Caller splices source verbatim for module-scope refs.
         assert_eq!(rewrite_slot_attr_expr("modScope", &lookup_fn), None);

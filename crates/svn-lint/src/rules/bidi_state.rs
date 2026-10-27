@@ -393,3 +393,44 @@ impl TemplateScopeVisitor for TemplateTester<'_> {
         self.attributes(&element.attributes);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn uses_of(script: &str) -> Vec<RegexUse> {
+        let allocator = Allocator::default();
+        let program = Parser::new(&allocator, script, SourceType::mjs())
+            .parse()
+            .program;
+        let mut uses = Vec::new();
+        Tester {
+            uses: &mut uses,
+            base: 0,
+        }
+        .visit_program(&program);
+        uses
+    }
+
+    fn test_use(start: u32, groups: &[(u32, u32)]) -> RegexUse {
+        RegexUse::Test {
+            start,
+            groups: groups.to_vec(),
+        }
+    }
+
+    #[test]
+    fn lone_surrogate_counts_as_one_utf16_unit() {
+        assert_eq!(uses_of("'\\uD800\\u202E'"), vec![test_use(0, &[(1, 2)])]);
+    }
+
+    #[test]
+    fn astral_char_counts_as_two_utf16_units() {
+        assert_eq!(uses_of("'\u{1F600}\u{202E}'"), vec![test_use(0, &[(2, 3)])]);
+    }
+
+    #[test]
+    fn template_quasi_with_lone_surrogate_counts_as_one_unit() {
+        assert_eq!(uses_of("`\\uD800\\u202E`"), vec![test_use(1, &[(1, 2)])]);
+    }
+}

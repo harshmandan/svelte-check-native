@@ -132,7 +132,7 @@ fn rewrite_expression(
                 // would need `T[typeof key]` projection; bail.
                 return None;
             };
-            Some(format!("{base}[{:?}]", prop.value.as_str()))
+            Some(format!("{base}[{:?}]", prop.value))
         }
         // Optional chains, calls, binary ops, etc. are all
         // type-level invalid for our slot-def shape — bail.
@@ -165,7 +165,7 @@ fn rewrite_member_base(
             let Expression::StringLiteral(prop) = &me.expression else {
                 return None;
             };
-            Some(format!("{base}[{:?}]", prop.value.as_str()))
+            Some(format!("{base}[{:?}]", prop.value))
         }
         _ => None,
     }

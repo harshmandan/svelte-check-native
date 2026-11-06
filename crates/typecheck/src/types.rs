@@ -262,6 +262,9 @@ pub enum DiagnosticCode {
     /// exception rather than a compile error, and svelte-check reports
     /// the exception's message with no `code` field.
     Missing,
+    /// svelte2tsx couldn't convert the component: svelte-check's
+    /// language server reports that error with the code `-1`.
+    ConversionFailed,
 }
 
 impl std::fmt::Display for DiagnosticCode {
@@ -274,6 +277,7 @@ impl std::fmt::Display for DiagnosticCode {
             // check shows `state_referenced_locally`.
             Self::Slug(s) => f.write_str(s),
             Self::Missing => Ok(()),
+            Self::ConversionFailed => f.write_str("-1"),
         }
     }
 }

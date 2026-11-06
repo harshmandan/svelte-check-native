@@ -101,61 +101,16 @@ pub(crate) fn script_tag_error(
 /// True when the compiler's `parse()` would throw on this template for
 /// one of the reasons in the module doc.
 pub fn template_parse_rejected(fragment: &Fragment, source: &str, lang: ScriptLang) -> bool {
-    template_rejection(fragment, source, lang).is_some()
-}
-
-/// Why the compiler's `parse()` rejects a component: the code, the
-/// rendered message and where. Used to report the rejection the way
-/// default svelte-check does, where `--tsgo` reports nothing.
-pub struct Rejection {
-    pub code: &'static str,
-    pub message: String,
-    pub range: Range,
-}
-
-/// The first rejection among our parser's structural errors, the
-/// `<script>` tag checks and the template checks, by source position.
-pub fn parse_rejection(
-    doc: &svn_parser::Document<'_>,
-    fragment: &Fragment,
-    source: &str,
-    parse_errors: &[&svn_parser::ParseError],
-) -> Option<Rejection> {
-    let structural = parse_errors.iter().map(|e| Rejection {
-        code: e.code_slug(),
-        message: e.to_string(),
-        range: e.range(),
-    });
-    let script = [doc.module_script.as_ref(), doc.instance_script.as_ref()]
-        .into_iter()
-        .flatten()
-        .filter_map(script_attribute_error)
-        .map(|(code, message, range)| Rejection {
-            code: code.as_str(),
-            message,
-            range,
-        });
-    structural
-        .chain(script)
-        .chain(template_rejection(fragment, source, doc.script_lang()))
-        .min_by_key(|r| r.range.start)
-}
-
-fn template_rejection(fragment: &Fragment, source: &str, lang: ScriptLang) -> Option<Rejection> {
-    if let Some(f) =
-        crate::parse_errors::first_template_parse_error(fragment, source, lang == ScriptLang::Ts)
+    if crate::parse_errors::first_template_parse_error(fragment, source, lang == ScriptLang::Ts)
+        .is_some()
     {
-        return Some(Rejection {
-            code: f.code.as_str(),
-            message: f.message,
-            range: f.range,
-        });
+        return true;
     }
     let mut finder = InvalidExpressionFinder {
         source,
         lang,
         allocator: Allocator::default(),
-        found: None,
+        found: false,
     };
     walk_with_visitor(fragment, source, &mut finder);
     finder.found
@@ -165,12 +120,12 @@ struct InvalidExpressionFinder<'s> {
     source: &'s str,
     lang: ScriptLang,
     allocator: Allocator,
-    found: Option<Rejection>,
+    found: bool,
 }
 
 impl InvalidExpressionFinder<'_> {
     fn check(&mut self, range: Range) {
-        if self.found.is_some() {
+        if self.found {
             return;
         }
         let Some(text) = self.source.get(range.start as usize..range.end as usize) else {
@@ -186,11 +141,7 @@ impl InvalidExpressionFinder<'_> {
         let parsed: Result<Expression<'_>, _> =
             Parser::new(&self.allocator, text, source_type).parse_expression();
         if parsed.is_err() {
-            self.found = Some(Rejection {
-                code: "js_parse_error",
-                message: "Unexpected token\nhttps://svelte.dev/e/js_parse_error".to_string(),
-                range: Range::new(range.start, range.start),
-            });
+            self.found = true;
         }
     }
 
@@ -231,7 +182,7 @@ impl InvalidExpressionFinder<'_> {
 impl InvalidExpressionFinder<'_> {
     /// The each-head rejection described in the module doc.
     fn check_each_head(&mut self, block: &svn_parser::EachBlock) {
-        if self.found.is_some() || self.lang != ScriptLang::Ts {
+        if self.found || self.lang != ScriptLang::Ts {
             return;
         }
         let Some(clause) = &block.as_clause else {
@@ -257,12 +208,7 @@ impl InvalidExpressionFinder<'_> {
         self.allocator.reset();
         let parsed = Parser::new(&self.allocator, text, source_type).parse_expression();
         if let Ok(Expression::SequenceExpression(_)) = parsed {
-            self.found = Some(Rejection {
-                code: "expected_identifier",
-                message: "Expected an identifier\nhttps://svelte.dev/e/expected_identifier"
-                    .to_string(),
-                range: Range::new(context.end, context.end),
-            });
+            self.found = true;
         }
     }
 }

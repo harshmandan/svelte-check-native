@@ -1,11 +1,4 @@
 {
-    "errors": [
-        {
-            "file": "Broken.svelte",
-            "line": 4,
-            "column": 9,
-            "code": "unterminated-mustache"
-        }
-    ],
-    "_note": "TSGO-ENHANCEMENT (since onerecord-fixes): upstream svelte-check --tsgo leaves a component the compiler parse() rejects out of the run with no diagnostic (its Svelte pass only visits files svelte2tsx converted), so the component checks clean and only the build fails. Default svelte-check reports the compiler parse error and counts the file; we now do the same, one error per rejected file at the first rejection, and still give it no overlay so its broken script cannot leak TypeScript noise. --disable-enhance restores the --tsgo behavior. Previously: `<p>Hello {name</p>` has an unterminated mustache, so the Svelte compiler's parse() throws. svelte-check --tsgo converts components with svelte2tsx in strict mode and leaves such a file out of the run: no TypeScript diagnostics, no compiler diagnostic, not counted. The file therefore reports nothing."
+    "errors": [],
+    "_note": "`<p>Hello {name</p>` has an unterminated mustache, so the Svelte compiler's parse() throws. svelte-check --tsgo converts components with svelte2tsx in strict mode and leaves such a file out of the run: no TypeScript diagnostics, no compiler diagnostic, not counted. The file therefore reports nothing."
 }

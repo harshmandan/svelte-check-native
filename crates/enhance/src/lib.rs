@@ -44,6 +44,10 @@
 //! - `package_imports`: `.svelte` files imported through package.json
 //!   `imports` (SvelteKit 3's `#lib`), which `--tsgo` sends to svelte's
 //!   `*.svelte` wildcard instead of the component's types.
+//! - `parse_rejection`: components svelte2tsx can't convert. `--tsgo`
+//!   drops them without a word (its Svelte pass only visits components
+//!   svelte2tsx converted); the default engine reports the compiler's
+//!   error and svelte2tsx's. Upstream: sveltejs/language-tools#3185.
 //!
 //! ## Removal is mechanical
 //!
@@ -56,6 +60,7 @@
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 mod missing_svelte_imports;
 mod package_imports;
+mod parse_rejection;
 mod svelte_refs;
 
 pub use missing_svelte_imports::{
@@ -63,3 +68,4 @@ pub use missing_svelte_imports::{
     missing_svelte_import_diagnostics, missing_svelte_import_diagnostics_in_script, module_stubs,
 };
 pub use package_imports::package_import_aliases;
+pub use parse_rejection::{ParseRejection, RejectionDiagnostic, RejectionKind, parse_rejections};

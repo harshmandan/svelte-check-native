@@ -12,6 +12,9 @@ workspace = true
 svn-core = { path = "../core" }
 svn-parser = { path = "../parser" }
 svn-analyze = { path = "../analyze" }
+# The project's own `svelte/compiler`, for the errors of components it
+# rejects (see `parse_rejection`).
+svn-svelte-compiler = { path = "../svelte-compiler" }
 oxc_allocator.workspace = true
 oxc_ast.workspace = true
 oxc_ast_visit.workspace = true

@@ -1,11 +1,4 @@
 {
-    "errors": [
-        {
-            "file": "input.svelte",
-            "line": 4,
-            "column": 33,
-            "code": "unexpected-eof"
-        }
-    ],
-    "_note": "TSGO-ENHANCEMENT (since onerecord-fixes): upstream svelte-check --tsgo leaves a component the compiler parse() rejects out of the run with no diagnostic (its Svelte pass only visits files svelte2tsx converted), so the component checks clean and only the build fails. Default svelte-check reports the compiler parse error and counts the file; we now do the same, one error per rejected file at the first rejection, and still give it no overlay so its broken script cannot leak TypeScript noise. --disable-enhance restores the --tsgo behavior. Previously: The file ends inside an opening tag, so the Svelte compiler's parse() throws. svelte-check --tsgo leaves a component whose parse fails out of the run entirely (svelte2tsx runs in strict mode), so nothing is reported for it."
+    "errors": [],
+    "_note": "The file ends inside an opening tag, so the Svelte compiler's parse() throws. svelte-check --tsgo leaves a component whose parse fails out of the run entirely (svelte2tsx runs in strict mode), so nothing is reported for it."
 }

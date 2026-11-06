@@ -276,6 +276,9 @@ fn print_machine(
                     obj.insert("code".to_string(), serde_json::json!(s));
                 }
                 svn_typecheck::DiagnosticCode::Missing => {}
+                svn_typecheck::DiagnosticCode::ConversionFailed => {
+                    obj.insert("code".to_string(), serde_json::json!(-1));
+                }
             }
             if let Some(href) = &d.code_description_url {
                 obj.insert(

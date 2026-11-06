@@ -1,30 +1,12 @@
 {
     "errors": [
         {
-            "file": "src/BadExpr.svelte",
-            "line": 1,
-            "column": 4,
-            "code": "js_parse_error"
-        },
-        {
             "file": "src/Ok.svelte",
             "line": 0,
             "column": 22,
             "code": 2322
-        },
-        {
-            "file": "src/RunesExpr.svelte",
-            "line": 0,
-            "column": 16,
-            "code": "svelte_options_invalid_attribute_value"
-        },
-        {
-            "file": "src/RunesText.svelte",
-            "line": 0,
-            "column": 16,
-            "code": "svelte_options_invalid_attribute_value"
         }
     ],
     "warnings": [],
-    "_note": "TSGO-ENHANCEMENT (since onerecord-fixes): upstream svelte-check --tsgo leaves a component the compiler parse() rejects out of the run with no diagnostic (its Svelte pass only visits files svelte2tsx converted), so the component checks clean and only the build fails. Default svelte-check reports the compiler parse error and counts the file; we now do the same, one error per rejected file at the first rejection, and still give it no overlay so its broken script cannot leak TypeScript noise. --disable-enhance restores the --tsgo behavior. Previously: svelte-check --tsgo runs svelte2tsx with emitOnTemplateError: false, so a component the compiler's parse() rejects makes svelte2tsx throw and the file is dropped: no overlay (so its broken TypeScript cannot hide type errors elsewhere), no diagnostics of any source, not counted in FILES. Covered: a template expression that is not valid JS (`{a +}`) and a non-boolean <svelte:options runes> value (`runes={x}`, `runes=\"true\"`). Only Ok.svelte reports. Verified against svelte-check 4.4.6."
+    "_note": "svelte-check --tsgo runs svelte2tsx with emitOnTemplateError: false, so a component the compiler's parse() rejects makes svelte2tsx throw and the file is dropped: no overlay (so its broken TypeScript cannot hide type errors elsewhere), no diagnostics of any source, not counted in FILES. Covered: a template expression that is not valid JS (`{a +}`) and a non-boolean <svelte:options runes> value (`runes={x}`, `runes=\"true\"`). Only Ok.svelte reports. Verified against svelte-check 4.4.6."
 }

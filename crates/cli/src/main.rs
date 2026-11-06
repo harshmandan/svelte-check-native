@@ -1154,6 +1154,47 @@ fn carry_bidi_regex(
     }
 }
 
+// TSGO-ENHANCEMENT: adapter over [`svn_enhance::parse_rejections`]: one
+// error for a component svelte2tsx can't convert, lifted into the CLI's
+// diagnostic type. The compiler's error carries its own code and docs
+// link; svelte2tsx's has the code `-1` and the script's language as its
+// source, as svelte-check's TypeScript pass reports it.
+fn rejection_diagnostic(
+    file: &Path,
+    d: svn_enhance::RejectionDiagnostic,
+) -> svn_typecheck::CheckDiagnostic {
+    let severity = svn_typecheck::Severity::Error;
+    let (code, code_description_url, source) = match d.kind {
+        svn_enhance::RejectionKind::Compiler(code) => (
+            svn_typecheck::DiagnosticCode::Slug(code.clone()),
+            compiler_code_docs_url(&code, severity),
+            svn_typecheck::DiagnosticSource::Svelte,
+        ),
+        svn_enhance::RejectionKind::Conversion { ts } => (
+            svn_typecheck::DiagnosticCode::ConversionFailed,
+            None,
+            if ts {
+                svn_typecheck::DiagnosticSource::Ts
+            } else {
+                svn_typecheck::DiagnosticSource::Js
+            },
+        ),
+    };
+    svn_typecheck::CheckDiagnostic {
+        source_path: file.to_path_buf(),
+        line: d.line,
+        column: d.column,
+        end_line: d.end_line,
+        end_column: d.end_column,
+        severity,
+        code,
+        message: d.message,
+        source,
+        code_description_url,
+        position_unknown: false,
+    }
+}
+
 // TSGO-ENHANCEMENT: adapter over [`svn_enhance::missing_svelte_import_diagnostics`]
 // (`doc` is the parsed component) and its plain-module twin
 // [`svn_enhance::missing_svelte_import_diagnostics_in_script`] (`doc` is
@@ -2047,67 +2088,6 @@ fn check_project(
                     || svn_lint::script_tag_rejected(&doc)
                     || svn_lint::template_parse_rejected(&fragment, source, doc.script_lang())
                 {
-                    // TSGO-ENHANCEMENT: upstream `--tsgo` reports
-                    // nothing for such a file (its Svelte pass only
-                    // visits converted entries), so a component that
-                    // can't compile checks clean with exit 0 and only
-                    // the build fails. Default svelte-check reports the
-                    // compiler's parse error and counts the file; do
-                    // the same. Still no overlay: the AST is unusable.
-                    if !disable_enhance {
-                        let native = native_compat.map(|compat| {
-                            let mut native = native_diagnostics_for_parsed(
-                                file,
-                                source,
-                                &doc,
-                                &fragment,
-                                &section_errors,
-                                &template_errors,
-                                config_resolver_ref,
-                                compat,
-                                compile_option_warnings[idx].clone(),
-                                false,
-                                0,
-                            );
-                            let errors: Vec<_> = section_errors
-                                .iter()
-                                .chain(template_errors.iter())
-                                .collect();
-                            if !native.broken
-                                && config_resolver_ref
-                                    .for_path(file)
-                                    .compile_options
-                                    .as_ref()
-                                    .is_none_or(|check| check.error.is_none())
-                                && let Some(r) =
-                                    svn_lint::parse_rejection(&doc, &fragment, source, &errors)
-                            {
-                                let pm = svn_core::PositionMap::new(source);
-                                let (start, end) = pm.range_positions(r.range);
-                                native.diags.clear();
-                                native.diags.push(svn_typecheck::CheckDiagnostic {
-                                    source_path: file.clone(),
-                                    line: start.line.saturating_add(1),
-                                    column: start.character.saturating_add(1),
-                                    end_line: end.line.saturating_add(1),
-                                    end_column: end.character.saturating_add(1),
-                                    severity: svn_typecheck::Severity::Error,
-                                    code: svn_typecheck::DiagnosticCode::Slug(r.code.to_string()),
-                                    message: r.message,
-                                    source: svn_typecheck::DiagnosticSource::Svelte,
-                                    code_description_url: None,
-                                    position_unknown: false,
-                                });
-                                native.warnings.clear();
-                                native.broken = true;
-                            }
-                            // Early option errors and parse rejection both end compilation.
-                            native.needs_real_transpile = false;
-                            native.bidi = svn_lint::BidiTrace::Untouched;
-                            native
-                        });
-                        return (None, (native, (Vec::new(), Vec::new()), None));
-                    }
                     return (None, (None, (Vec::new(), Vec::new()), Some(file.clone())));
                 }
                 // Fused native pass: derive fatal/lint diagnostics from
@@ -2429,6 +2409,34 @@ fn check_project(
             );
         }
 
+        // TSGO-ENHANCEMENT: a component svelte2tsx can't convert is
+        // dropped above, as `--tsgo` drops it: no diagnostic, not
+        // counted. The default engine counts it and reports the
+        // compiler's error and svelte2tsx's; do the same for every one
+        // svelte2tsx really rejects.
+        let mut rejections_reported: std::collections::HashSet<PathBuf> =
+            std::collections::HashSet::new();
+        if !disable_enhance && !dropped_files.is_empty() {
+            let rejected: Vec<(PathBuf, String)> = svelte_sources
+                .iter()
+                .filter(|(p, _)| dropped_files.contains(p))
+                .map(|(p, s)| (p.clone(), String::from(&**s)))
+                .collect();
+            let rejections = svn_enhance::parse_rejections(workspace, &rejected, |p| {
+                config_resolver_ref.for_path(p).preprocess_configured
+            });
+            for rejection in rejections.into_iter().flatten() {
+                dropped_files.remove(&rejection.file);
+                diagnostics.extend(
+                    rejection
+                        .diagnostics
+                        .into_iter()
+                        .map(|d| rejection_diagnostic(&rejection.file, d)),
+                );
+                rejections_reported.insert(rejection.file);
+            }
+        }
+
         let run_bridge = matches!(svelte_warnings_mode, SvelteWarningsMode::Bridge);
         if run_bridge {
             // `compile_batch` wants owned Strings (they cross a worker
@@ -2436,6 +2444,8 @@ fn check_project(
             // the opt-in slow path and already spawns JS subprocesses.
             let bridge_sources: Vec<(PathBuf, String)> = std::mem::take(&mut svelte_sources)
                 .into_iter()
+                // TSGO-ENHANCEMENT: already reported above.
+                .filter(|(p, _)| !rejections_reported.contains(p))
                 .map(|(p, s)| (p, String::from(&*s)))
                 .collect();
             match svn_svelte_compiler::compile_batch(workspace, bridge_sources) {
@@ -2529,9 +2539,9 @@ fn check_project(
         }
         let code = match &d.code {
             svn_typecheck::DiagnosticCode::Slug(s) => s.as_str(),
-            svn_typecheck::DiagnosticCode::Numeric(_) | svn_typecheck::DiagnosticCode::Missing => {
-                ""
-            }
+            svn_typecheck::DiagnosticCode::Numeric(_)
+            | svn_typecheck::DiagnosticCode::Missing
+            | svn_typecheck::DiagnosticCode::ConversionFailed => "",
         };
         !plan.should_drop(code, Some(&d.source_path))
     });

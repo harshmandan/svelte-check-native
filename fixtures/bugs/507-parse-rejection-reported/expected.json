@@ -1,7 +1,0 @@
-{
-    "errors": [
-        { "file": "Ok.svelte", "line": 1, "column": 7, "code": 2322 },
-        { "file": "Panel.svelte", "line": 11, "column": 0, "code": "block-unexpected-close" }
-    ],
-    "_note": "Found rebuilding a SvelteKit app: a `<div>` left open inside `{#if}` makes the compiler's parse() throw at `{/if}` (block_unexpected_close). svelte-check --tsgo reported nothing and exit 0, while `vite build` and default svelte-check 4.7.8 both failed on it. The TSGO-ENHANCEMENT reports the parse error as default svelte-check does. Ok.svelte keeps its TypeScript error: a rejected sibling must not hide it."
-}

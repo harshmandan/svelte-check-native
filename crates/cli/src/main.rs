@@ -1154,6 +1154,47 @@ fn carry_bidi_regex(
     }
 }
 
+// TSGO-ENHANCEMENT: adapter over [`svn_enhance::parse_rejections`]: one
+// error for a component svelte2tsx can't convert, lifted into the CLI's
+// diagnostic type. The compiler's error carries its own code and docs
+// link; svelte2tsx's has the code `-1` and the script's language as its
+// source, as svelte-check's TypeScript pass reports it.
+fn rejection_diagnostic(
+    file: &Path,
+    d: svn_enhance::RejectionDiagnostic,
+) -> svn_typecheck::CheckDiagnostic {
+    let severity = svn_typecheck::Severity::Error;
+    let (code, code_description_url, source) = match d.kind {
+        svn_enhance::RejectionKind::Compiler(code) => (
+            svn_typecheck::DiagnosticCode::Slug(code.clone()),
+            compiler_code_docs_url(&code, severity),
+            svn_typecheck::DiagnosticSource::Svelte,
+        ),
+        svn_enhance::RejectionKind::Conversion { ts } => (
+            svn_typecheck::DiagnosticCode::ConversionFailed,
+            None,
+            if ts {
+                svn_typecheck::DiagnosticSource::Ts
+            } else {
+                svn_typecheck::DiagnosticSource::Js
+            },
+        ),
+    };
+    svn_typecheck::CheckDiagnostic {
+        source_path: file.to_path_buf(),
+        line: d.line,
+        column: d.column,
+        end_line: d.end_line,
+        end_column: d.end_column,
+        severity,
+        code,
+        message: d.message,
+        source,
+        code_description_url,
+        position_unknown: false,
+    }
+}
+
 // TSGO-ENHANCEMENT: adapter over [`svn_enhance::missing_svelte_import_diagnostics`]
 // (`doc` is the parsed component) and its plain-module twin
 // [`svn_enhance::missing_svelte_import_diagnostics_in_script`] (`doc` is
@@ -2368,6 +2409,34 @@ fn check_project(
             );
         }
 
+        // TSGO-ENHANCEMENT: a component svelte2tsx can't convert is
+        // dropped above, as `--tsgo` drops it: no diagnostic, not
+        // counted. The default engine counts it and reports the
+        // compiler's error and svelte2tsx's; do the same for every one
+        // svelte2tsx really rejects.
+        let mut rejections_reported: std::collections::HashSet<PathBuf> =
+            std::collections::HashSet::new();
+        if !disable_enhance && !dropped_files.is_empty() {
+            let rejected: Vec<(PathBuf, String)> = svelte_sources
+                .iter()
+                .filter(|(p, _)| dropped_files.contains(p))
+                .map(|(p, s)| (p.clone(), String::from(&**s)))
+                .collect();
+            let rejections = svn_enhance::parse_rejections(workspace, &rejected, |p| {
+                config_resolver_ref.for_path(p).preprocess_configured
+            });
+            for rejection in rejections.into_iter().flatten() {
+                dropped_files.remove(&rejection.file);
+                diagnostics.extend(
+                    rejection
+                        .diagnostics
+                        .into_iter()
+                        .map(|d| rejection_diagnostic(&rejection.file, d)),
+                );
+                rejections_reported.insert(rejection.file);
+            }
+        }
+
         let run_bridge = matches!(svelte_warnings_mode, SvelteWarningsMode::Bridge);
         if run_bridge {
             // `compile_batch` wants owned Strings (they cross a worker
@@ -2375,6 +2444,8 @@ fn check_project(
             // the opt-in slow path and already spawns JS subprocesses.
             let bridge_sources: Vec<(PathBuf, String)> = std::mem::take(&mut svelte_sources)
                 .into_iter()
+                // TSGO-ENHANCEMENT: already reported above.
+                .filter(|(p, _)| !rejections_reported.contains(p))
                 .map(|(p, s)| (p, String::from(&*s)))
                 .collect();
             match svn_svelte_compiler::compile_batch(workspace, bridge_sources) {
@@ -2468,9 +2539,9 @@ fn check_project(
         }
         let code = match &d.code {
             svn_typecheck::DiagnosticCode::Slug(s) => s.as_str(),
-            svn_typecheck::DiagnosticCode::Numeric(_) | svn_typecheck::DiagnosticCode::Missing => {
-                ""
-            }
+            svn_typecheck::DiagnosticCode::Numeric(_)
+            | svn_typecheck::DiagnosticCode::Missing
+            | svn_typecheck::DiagnosticCode::ConversionFailed => "",
         };
         !plan.should_drop(code, Some(&d.source_path))
     });

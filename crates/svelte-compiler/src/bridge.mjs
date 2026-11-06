@@ -7,6 +7,9 @@
 //   request:  {"id": N, "filename": "...", "source": "..."}
 //   response: {"id": N, "warnings": [...], "error": "<optional>"}
 //
+// A request with `"rejection": true` is answered by `rejection()` below
+// instead: {"id": N, "compileError": <error|null>, "parseError": <error|null>}.
+//
 // Each warning has `{code, message, start: {line, column}, end: {line,
 // column}}` where line is 1-based, column is 0-based (matching
 // svelte/compiler's locate-character output).
@@ -84,6 +87,10 @@ rl.on('line', (line) => {
     )
     return
   }
+  if (req.rejection) {
+    process.stdout.write(JSON.stringify({ id: req.id, ...rejection(req) }) + '\n')
+    return
+  }
   try {
     const result = compile(req.source, {
       // User compilerOptions first so our explicit overrides win.
@@ -130,4 +137,95 @@ function serializeWarning(w) {
     start: w.start || { line: 1, column: 0 },
     end: w.end || w.start || { line: 1, column: 0 },
   }
+}
+
+// What svelte-check's default engine reports for a component svelte2tsx
+// can't convert. Its Svelte pass compiles the component with the config's
+// `compilerOptions` exactly as given (`compileError`), and its TypeScript
+// pass reports svelte2tsx's own failure (`parseError`): the compiler's
+// `parse()` run on the source with script and style contents blanked out,
+// as svelte2tsx's `parseHtmlx` does it. Either is null when it doesn't
+// throw. An error without a position counts as at the start of the file.
+function rejection(req) {
+  const asError = (e) => {
+    const start = e?.start ?? { line: 1, column: 0 }
+    return {
+      code: e?.code,
+      message: e?.message || String(e),
+      severity: 'error',
+      start,
+      end: e?.end ?? start,
+    }
+  }
+  let compileError = null
+  try {
+    compile(req.source, { ...userCompilerOptions, filename: req.filename })
+  } catch (e) {
+    compileError = asError(e)
+  }
+  let parseError = null
+  try {
+    const svelte5Plus = Number(String(_svelteMod.VERSION ?? _svelteMod.default?.VERSION)[0]) > 4
+    const parse = _svelteMod.parse ?? _svelteMod.default?.parse
+    const blanked = blankVerbatimContent(req.source, findVerbatimElements(req.source))
+    parse(blanked, svelte5Plus ? { loose: false } : undefined)
+  } catch (e) {
+    parseError = asError(e)
+  }
+  return { compileError, parseError }
+}
+
+// svelte2tsx's `htmlxparser.ts`, kept as it is there.
+const scriptRegex =
+  /(<!--[^]*?-->)|(<script((?:\s+[^=>'"\/\s]+=(?:"[^"]*"|'[^']*'|[^>\s]+)|\s+[^=>'"\/\s]+)*\s*)>)([\S\s]*?)<\/script>/g
+const styleRegex =
+  /(<!--[^]*?-->)|(<style((?:\s+[^=>'"\/\s]+=(?:"[^"]*"|'[^']*'|[^>\s]+)|\s+[^=>'"\/\s]+)*\s*)>)([\S\s]*?)<\/style>/g
+
+function toVerbatimContent(match) {
+  const content = match[4] || ''
+  const start = match.index + match[2].length
+  return { containerStart: match.index, start, end: start + content.length }
+}
+
+function findNextVerbatimElement(htmlx, from) {
+  let best = null
+  for (const exp of [scriptRegex, styleRegex]) {
+    exp.lastIndex = from
+    let match = null
+    while ((match = exp.exec(htmlx)) != null) {
+      if (match[0].startsWith('<!--')) {
+        continue
+      }
+      if (!best || match.index < best.node.containerStart) {
+        best = { node: toVerbatimContent(match), nextIndex: exp.lastIndex }
+      }
+      break
+    }
+  }
+  return best
+}
+
+function findVerbatimElements(htmlx) {
+  const tags = []
+  let from = 0
+  let next
+  while ((next = findNextVerbatimElement(htmlx, from)) != null) {
+    tags.push(next.node)
+    from = next.nextIndex
+  }
+  return tags
+}
+
+function blankVerbatimContent(htmlx, verbatimElements) {
+  let output = htmlx
+  for (const content of verbatimElements) {
+    output =
+      output.substring(0, content.start) +
+      output
+        .substring(content.start, content.end)
+        .replace(/[^\n]/g, ' ')
+        .replace(/[^\n][^\n][^\n][^\n]\n/g, '/**/\n') +
+      output.substring(content.end)
+  }
+  return output
 }

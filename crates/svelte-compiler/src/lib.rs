@@ -245,6 +245,57 @@ impl Worker {
             // ignore and read next.
         }
     }
+
+    /// What svelte-check's default engine reports for a component
+    /// svelte2tsx can't convert (see [`Rejection`]).
+    pub fn rejection(&mut self, filename: &Path, source: &str) -> Result<Rejection, BridgeError> {
+        let id = self.next_id;
+        self.next_id += 1;
+        let req = serde_json::json!({
+            "id": id,
+            "filename": filename.to_string_lossy(),
+            "source": source,
+            "rejection": true,
+        });
+        writeln!(self.stdin, "{req}")?;
+        self.stdin.flush()?;
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if self.stdout.read_line(&mut line)? == 0 {
+                return Err(BridgeError::SubprocessDied);
+            }
+            let parsed: RejectionResponse = serde_json::from_str(line.trim_end())
+                .map_err(|e| BridgeError::BadResponse(e.to_string()))?;
+            if parsed.id == id {
+                return Ok(Rejection {
+                    compile_error: parsed.compile_error.map(Into::into),
+                    parse_error: parsed.parse_error.map(Into::into),
+                });
+            }
+        }
+    }
+}
+
+/// What svelte-check's default engine reports for a component svelte2tsx
+/// can't convert. Each is `None` when that step doesn't throw; an error
+/// without a position is placed at the start of the file.
+#[derive(Debug)]
+pub struct Rejection {
+    /// The compiler's error, compiled with the Svelte config's
+    /// `compilerOptions` exactly as given (its Svelte pass).
+    pub compile_error: Option<CompilerDiagnostic>,
+    /// svelte2tsx's error: the compiler's `parse()` on the source with
+    /// script and style contents blanked out (its TypeScript pass).
+    pub parse_error: Option<CompilerDiagnostic>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RejectionResponse {
+    id: u64,
+    compile_error: Option<RawWarning>,
+    parse_error: Option<RawWarning>,
 }
 
 impl Drop for Worker {
@@ -498,6 +549,28 @@ pub fn compile_batch(
         // SubprocessDied since we have no diagnostics to fall back on.
         let chunk_result = h.join().map_err(|_| BridgeError::SubprocessDied)?;
         out.extend(chunk_result?);
+    }
+    Ok(out)
+}
+
+/// [`Rejection`] for each file. One worker: callers pass the few files
+/// they already expect to fail. A file the bridge couldn't answer for is
+/// left out.
+pub fn rejections(
+    workspace: &Path,
+    inputs: &[(PathBuf, String)],
+) -> Result<Vec<(PathBuf, Rejection)>, BridgeError> {
+    if inputs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut worker = Worker::spawn(workspace)?;
+    let mut out = Vec::with_capacity(inputs.len());
+    for (path, source) in inputs {
+        match worker.rejection(path, source) {
+            Ok(rejection) => out.push((path.clone(), rejection)),
+            Err(BridgeError::SubprocessDied) => return Err(BridgeError::SubprocessDied),
+            Err(_) => {}
+        }
     }
     Ok(out)
 }

@@ -1,0 +1,7 @@
+{
+    "errors": [
+        { "file": "src/App.svelte", "line": 1, "column": 24, "code": 2307 },
+        { "file": "src/main.ts", "line": 0, "column": 17, "code": 2307 }
+    ],
+    "_note": "No `include` and no `files` anywhere in the tsconfig chain, so the compiler defaults `include` to `**/*` and every component and module beside the tsconfig is in the project, as svelte-check --tsgo also has it since 4.7.7. A missing `.svelte` import in them reports TS2307 and nothing else, as the default svelte-check engine does. `exclude` still keeps `dist` out, so its missing import is not reported. The TSGO-ENHANCEMENT check used to treat such a project as containing nothing, so both imports went unreported."
+}

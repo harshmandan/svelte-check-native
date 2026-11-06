@@ -1,11 +1,107 @@
 {
     "errors": [
         {
+            "file": "src/BadContext.svelte",
+            "line": 0,
+            "column": 18,
+            "code": "unknown-script-context"
+        },
+        {
+            "file": "src/BadExpr.svelte",
+            "line": 1,
+            "column": 4,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/BadOpen.svelte",
+            "line": 1,
+            "column": 5,
+            "code": "malformed-open-tag"
+        },
+        {
+            "file": "src/DupScript.svelte",
+            "line": 1,
+            "column": 0,
+            "code": "duplicate-script"
+        },
+        {
+            "file": "src/DupStyle.svelte",
+            "line": 1,
+            "column": 18,
+            "code": "duplicate-style"
+        },
+        {
+            "file": "src/EachSeq.svelte",
+            "line": 1,
+            "column": 24,
+            "code": "expected_identifier"
+        },
+        {
+            "file": "src/Mismatch.svelte",
+            "line": 1,
+            "column": 5,
+            "code": "malformed-open-tag"
+        },
+        {
             "file": "src/Ok.svelte",
             "line": 0,
             "column": 24,
             "code": 2322
+        },
+        {
+            "file": "src/OpenBlock.svelte",
+            "line": 1,
+            "column": 0,
+            "code": "unterminated-element"
+        },
+        {
+            "file": "src/OpenComment.svelte",
+            "line": 1,
+            "column": 0,
+            "code": "unterminated-comment"
+        },
+        {
+            "file": "src/OpenMustache.svelte",
+            "line": 1,
+            "column": 3,
+            "code": "unterminated-mustache"
+        },
+        {
+            "file": "src/OpenTag.svelte",
+            "line": 2,
+            "column": 0,
+            "code": "unexpected-eof"
+        },
+        {
+            "file": "src/RunesExpr.svelte",
+            "line": 0,
+            "column": 16,
+            "code": "svelte_options_invalid_attribute_value"
+        },
+        {
+            "file": "src/StrayClose.svelte",
+            "line": 1,
+            "column": 0,
+            "code": "block-unexpected-close"
+        },
+        {
+            "file": "src/StrayElse.svelte",
+            "line": 1,
+            "column": 0,
+            "code": "block-invalid-continuation-placement"
+        },
+        {
+            "file": "src/UnclosedDiv.svelte",
+            "line": 1,
+            "column": 0,
+            "code": "unterminated-element"
+        },
+        {
+            "file": "src/UnknownSvelte.svelte",
+            "line": 1,
+            "column": 0,
+            "code": "unknown-svelte-element"
         }
     ],
-    "_note": "svelte-check converts components with svelte2tsx in strict mode, so a component the Svelte compiler's parse() rejects is left out of the run entirely: no TypeScript or compiler diagnostics and no entry in the file count. That now covers every structural error our parser reports (unclosed element or block, stray closing or continuation tag, open mustache or comment, duplicate script or style, unknown svelte: element, bad script context), an attribute list that stops at a stray `=` or quote, and, in a TypeScript component, an `{#each a, b as item}` head that the compiler reads as a sequence. Before, these files reported our parser's error (or type errors) instead."
+    "_note": "TSGO-ENHANCEMENT (since onerecord-fixes): upstream svelte-check --tsgo leaves a component the compiler parse() rejects out of the run with no diagnostic (its Svelte pass only visits files svelte2tsx converted), so the component checks clean and only the build fails. Default svelte-check reports the compiler parse error and counts the file; we now do the same, one error per rejected file at the first rejection, and still give it no overlay so its broken script cannot leak TypeScript noise. --disable-enhance restores the --tsgo behavior. Previously: svelte-check converts components with svelte2tsx in strict mode, so a component the Svelte compiler's parse() rejects is left out of the run entirely: no TypeScript or compiler diagnostics and no entry in the file count. That now covers every structural error our parser reports (unclosed element or block, stray closing or continuation tag, open mustache or comment, duplicate script or style, unknown svelte: element, bad script context), an attribute list that stops at a stray `=` or quote, and, in a TypeScript component, an `{#each a, b as item}` head that the compiler reads as a sequence. Before, these files reported our parser's error (or type errors) instead."
 }

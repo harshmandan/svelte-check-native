@@ -65,7 +65,9 @@ pub use codes::{CODES, Code};
 pub use compat::{CompatFeatures, SvelteVersion, detect_for_workspace};
 pub use compile_options::{CompileOptionsCheck, LateOption, OptionValue, check_compile_options};
 pub use context::{LintContext, Warning};
-pub use parse_rejection::{script_tag_rejected, template_parse_rejected};
+pub use parse_rejection::{
+    Rejection, parse_rejection, script_tag_rejected, template_parse_rejected,
+};
 pub use rules::bidi_state::{BidiTrace, RegexUse};
 
 /// The project compiler options the pass honours (from the nearest

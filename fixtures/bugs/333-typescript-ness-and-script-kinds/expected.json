@@ -1,10 +1,10 @@
 {
     "errors": [
         {
-            "file": "src/r40/Use.svelte",
-            "line": 3,
-            "column": 9,
-            "code": 2353
+            "file": "src/r03/A.svelte",
+            "line": 1,
+            "column": 4,
+            "code": 2322
         },
         {
             "file": "src/r03/B.svelte",
@@ -13,10 +13,16 @@
             "code": 2322
         },
         {
-            "file": "src/r03/A.svelte",
-            "line": 1,
-            "column": 4,
-            "code": 2322
+            "file": "src/r04/A.svelte",
+            "line": 0,
+            "column": 8,
+            "code": "script_invalid_attribute_value"
+        },
+        {
+            "file": "src/r40/Use.svelte",
+            "line": 3,
+            "column": 9,
+            "code": 2353
         }
     ],
     "warnings": [
@@ -26,5 +32,6 @@
             "column": 8,
             "code": "script_context_deprecated"
         }
-    ]
+    ],
+    "_note": "r04: `<script module=\"true\">` makes the compiler parse() throw (script_invalid_attribute_value). upstream --tsgo dropped the file silently; the TSGO-ENHANCEMENT reports it as default svelte-check does."
 }

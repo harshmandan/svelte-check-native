@@ -2047,6 +2047,67 @@ fn check_project(
                     || svn_lint::script_tag_rejected(&doc)
                     || svn_lint::template_parse_rejected(&fragment, source, doc.script_lang())
                 {
+                    // TSGO-ENHANCEMENT: upstream `--tsgo` reports
+                    // nothing for such a file (its Svelte pass only
+                    // visits converted entries), so a component that
+                    // can't compile checks clean with exit 0 and only
+                    // the build fails. Default svelte-check reports the
+                    // compiler's parse error and counts the file; do
+                    // the same. Still no overlay: the AST is unusable.
+                    if !disable_enhance {
+                        let native = native_compat.map(|compat| {
+                            let mut native = native_diagnostics_for_parsed(
+                                file,
+                                source,
+                                &doc,
+                                &fragment,
+                                &section_errors,
+                                &template_errors,
+                                config_resolver_ref,
+                                compat,
+                                compile_option_warnings[idx].clone(),
+                                false,
+                                0,
+                            );
+                            let errors: Vec<_> = section_errors
+                                .iter()
+                                .chain(template_errors.iter())
+                                .collect();
+                            if !native.broken
+                                && config_resolver_ref
+                                    .for_path(file)
+                                    .compile_options
+                                    .as_ref()
+                                    .is_none_or(|check| check.error.is_none())
+                                && let Some(r) =
+                                    svn_lint::parse_rejection(&doc, &fragment, source, &errors)
+                            {
+                                let pm = svn_core::PositionMap::new(source);
+                                let (start, end) = pm.range_positions(r.range);
+                                native.diags.clear();
+                                native.diags.push(svn_typecheck::CheckDiagnostic {
+                                    source_path: file.clone(),
+                                    line: start.line.saturating_add(1),
+                                    column: start.character.saturating_add(1),
+                                    end_line: end.line.saturating_add(1),
+                                    end_column: end.character.saturating_add(1),
+                                    severity: svn_typecheck::Severity::Error,
+                                    code: svn_typecheck::DiagnosticCode::Slug(r.code.to_string()),
+                                    message: r.message,
+                                    source: svn_typecheck::DiagnosticSource::Svelte,
+                                    code_description_url: None,
+                                    position_unknown: false,
+                                });
+                                native.warnings.clear();
+                                native.broken = true;
+                            }
+                            // Early option errors and parse rejection both end compilation.
+                            native.needs_real_transpile = false;
+                            native.bidi = svn_lint::BidiTrace::Untouched;
+                            native
+                        });
+                        return (None, (native, (Vec::new(), Vec::new()), None));
+                    }
                     return (None, (None, (Vec::new(), Vec::new()), Some(file.clone())));
                 }
                 // Fused native pass: derive fatal/lint diagnostics from

@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "App.svelte",
+            "line": 0,
+            "column": 0,
+            "code": "options_invalid_value"
+        }
+    ],
+    "_note": "The compiler validates dev before parsing. Its early option error must win over the nonfatal js_parse_error, without later analysis or re-linting."
+}

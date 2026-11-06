@@ -104,7 +104,9 @@ pub enum ParseError {
     #[error("unknown <svelte:{name}> element")]
     UnknownSvelteElement { name: String, range: Range },
 
-    #[error("block-level mustache ({{#}}/{{:}}/{{/}}/{{@}}) not yet supported in this build")]
+    #[error(
+        "Expected 'if', 'each', 'await', 'key' or 'snippet'\nhttps://svelte.dev/e/expected_block_type"
+    )]
     UnsupportedBlock { range: Range },
 }
 

@@ -1,0 +1,12 @@
+{
+    "errors": [
+        {
+            "file": "App.svelte",
+            "line": 0,
+            "column": 8,
+            "code": "script_reserved_attribute"
+        }
+    ],
+    "warnings": [],
+    "_note": "Svelte parse() rejects the reserved server script attribute before analysis. The unrelated legacy_export_invalid error must not replace that rejection."
+}

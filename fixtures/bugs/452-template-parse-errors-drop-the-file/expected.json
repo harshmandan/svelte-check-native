@@ -1,12 +1,108 @@
 {
     "errors": [
         {
+            "file": "src/AttrDup.svelte",
+            "line": 1,
+            "column": 15,
+            "code": "attribute_duplicate"
+        },
+        {
+            "file": "src/ConstSequence.svelte",
+            "line": 1,
+            "column": 19,
+            "code": "const_tag_invalid_expression"
+        },
+        {
+            "file": "src/DebugMember.svelte",
+            "line": 1,
+            "column": 8,
+            "code": "debug_tag_invalid_arguments"
+        },
+        {
+            "file": "src/DirectiveText.svelte",
+            "line": 1,
+            "column": 15,
+            "code": "directive_invalid_value"
+        },
+        {
+            "file": "src/ElementNoThis.svelte",
+            "line": 1,
+            "column": 0,
+            "code": "svelte_element_missing_this"
+        },
+        {
+            "file": "src/EmptyExpression.svelte",
+            "line": 1,
+            "column": 4,
+            "code": "js_parse_error"
+        },
+        {
             "file": "src/Kept.svelte",
             "line": 0,
             "column": 24,
             "code": 2322
+        },
+        {
+            "file": "src/MetaDuplicate.svelte",
+            "line": 1,
+            "column": 17,
+            "code": "svelte_meta_duplicate"
+        },
+        {
+            "file": "src/MetaInBlock.svelte",
+            "line": 1,
+            "column": 7,
+            "code": "svelte_meta_invalid_placement"
+        },
+        {
+            "file": "src/OptionsNamespace.svelte",
+            "line": 1,
+            "column": 16,
+            "code": "svelte_options_invalid_attribute_value"
+        },
+        {
+            "file": "src/OptionsUnknown.svelte",
+            "line": 1,
+            "column": 16,
+            "code": "svelte_options_unknown_attribute"
+        },
+        {
+            "file": "src/RenderNotCall.svelte",
+            "line": 1,
+            "column": 9,
+            "code": "render_tag_invalid_expression"
+        },
+        {
+            "file": "src/ReservedShorthand.svelte",
+            "line": 1,
+            "column": 6,
+            "code": "unexpected_reserved_word"
+        },
+        {
+            "file": "src/SnippetParams.svelte",
+            "line": 1,
+            "column": 12,
+            "code": "js_parse_error"
+        },
+        {
+            "file": "src/TagInAttribute.svelte",
+            "line": 1,
+            "column": 12,
+            "code": "tag_invalid_placement"
+        },
+        {
+            "file": "src/UnknownBlock.svelte",
+            "line": 1,
+            "column": 0,
+            "code": "unsupported-block"
+        },
+        {
+            "file": "src/UnknownTag.svelte",
+            "line": 1,
+            "column": 2,
+            "code": "expected_tag"
         }
     ],
     "warnings": [],
-    "_note": "Every component here but Kept.svelte has a template the Svelte compiler's parse() rejects (duplicate attribute, text directive value, <svelte:element> without this, {@html} in an attribute value, {@debug} of a member, {@render} of a non-call, {@const} sequence, unknown {@tag}, duplicate and nested <svelte:window>/<svelte:body>, invalid <svelte:options> values, empty {}, an unparsable snippet parameter list, a reserved-word shorthand, an unknown block). svelte-check converts each component with svelte2tsx, which calls parse(); when it throws, the component leaves the run, so its script's type error is never reported. Only Kept.svelte's is. Verified against svelte-check --tsgo with svelte 5.55."
+    "_note": "TSGO-ENHANCEMENT (since onerecord-fixes): upstream svelte-check --tsgo leaves a component the compiler parse() rejects out of the run with no diagnostic (its Svelte pass only visits files svelte2tsx converted), so the component checks clean and only the build fails. Default svelte-check reports the compiler parse error and counts the file; we now do the same, one error per rejected file at the first rejection, and still give it no overlay so its broken script cannot leak TypeScript noise. --disable-enhance restores the --tsgo behavior. Previously: Every component here but Kept.svelte has a template the Svelte compiler's parse() rejects (duplicate attribute, text directive value, <svelte:element> without this, {@html} in an attribute value, {@debug} of a member, {@render} of a non-call, {@const} sequence, unknown {@tag}, duplicate and nested <svelte:window>/<svelte:body>, invalid <svelte:options> values, empty {}, an unparsable snippet parameter list, a reserved-word shorthand, an unknown block). svelte-check converts each component with svelte2tsx, which calls parse(); when it throws, the component leaves the run, so its script's type error is never reported. Only Kept.svelte's is. Verified against svelte-check --tsgo with svelte 5.55."
 }

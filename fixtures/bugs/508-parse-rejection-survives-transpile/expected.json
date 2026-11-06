@@ -1,0 +1,12 @@
+{
+    "errors": [
+        {
+            "file": "App.svelte",
+            "line": 0,
+            "column": 55,
+            "code": "js_parse_error"
+        }
+    ],
+    "warnings": [],
+    "_note": "An enum triggers real TypeScript transpilation without a Svelte config. Re-linting used to erase the template parse rejection and exit successfully."
+}

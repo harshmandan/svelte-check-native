@@ -1,0 +1,7 @@
+{
+    "errors": [
+        { "file": "src/App.svelte", "line": 1, "column": 31, "code": 2307 },
+        { "file": "src/main.ts", "line": 0, "column": 30, "code": 2307 }
+    ],
+    "_note": "A missing `.svelte` import whose relative specifier leaves the workspace, from a `.ts` module and from a component. The module is unresolved, so each specifier reports TS2307 and nothing else: every binding is `any`. Under tsgo svelte's `declare module '*.svelte'` wildcard typed the bindings instead, which fired TS2614, TS2322 and TS2345, because the stub that stands in for the missing module sits under the cache at the target's root-stripped absolute path and no `rootDirs` entry reached it from outside the workspace. The TSGO-ENHANCEMENT layer adds the filesystem root to `rootDirs` when such a stub exists, which maps the target onto that path."
+}

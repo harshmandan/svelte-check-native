@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "`#lib/*` and `#lib/server/*` overlap. package.json sends `#lib/server/Card.svelte` to the longer prefix (src/server), and so do `paths`, so both stay aliases: the named type imports resolve (no TS2614 from the `*.svelte` wildcard) and come from src/server, not the src/lib/server decoy."
+}

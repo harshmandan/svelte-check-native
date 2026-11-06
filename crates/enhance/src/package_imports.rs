@@ -21,9 +21,13 @@
 //! `#lib/*.svelte`. `paths` probes extensions and package.json `imports`
 //! does not, so a whole-directory alias let `#lib/util` (no extension)
 //! resolve here while `tsc`, `svelte-check` and Vite's build reject it.
-//! Wildcard aliases that overlap another imports key stay with the
-//! compiler too: `paths` cannot preserve native precedence for targets
-//! it cannot express. Only `.svelte` targets become aliases.
+//!
+//! `paths` is consulted before package.json, so a wildcard alias must
+//! never capture a specifier that package.json gives to another key.
+//! Both sides pick an exact key over any pattern and otherwise the
+//! pattern with the longest text before its `*`, so an overlap is safe
+//! when the other key is an alias too and the two prefixes differ in
+//! length. Any other overlap leaves the wildcard to the compiler.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -34,8 +38,9 @@ use std::path::{Component, Path, PathBuf};
 /// side and as many in the target as in the pattern. Conditional targets
 /// (`{ "types": …, "default": … }`) are left to the compiler, and so is
 /// any entry that can't reach a `.svelte` file. A trailing `*` on both
-/// sides is narrowed to `*.svelte`. Wildcards overlapping another imports
-/// key are left to native resolution, regardless of that key's target.
+/// sides is narrowed to `*.svelte`. A wildcard is left to native
+/// resolution when it overlaps a key that isn't an alias, or a wildcard
+/// alias with a prefix of the same length.
 pub fn package_import_aliases(tsconfig: &Path) -> Vec<(String, PathBuf)> {
     let Some(start) = tsconfig.parent() else {
         return Vec::new();
@@ -60,7 +65,7 @@ pub fn package_import_aliases(tsconfig: &Path) -> Vec<(String, PathBuf)> {
     let Some(imports) = imports.as_object() else {
         return Vec::new();
     };
-    imports
+    let mut candidates: Vec<(&String, String, PathBuf)> = imports
         .iter()
         .filter_map(|(pattern, target)| {
             let target = target.as_str()?;
@@ -83,28 +88,54 @@ pub fn package_import_aliases(tsconfig: &Path) -> Vec<(String, PathBuf)> {
             } else {
                 return None;
             };
-            // A paths wildcard must not capture a specifier owned by another
-            // imports key, including conditional, null and extensionless targets.
-            if let Some((prefix, suffix)) = alias.split_once('*') {
-                if imports.keys().any(|other| {
-                    if other == pattern {
-                        return false;
-                    }
-                    if let Some((other_prefix, other_suffix)) = other.split_once('*') {
-                        (prefix.starts_with(other_prefix) || other_prefix.starts_with(prefix))
-                            && (suffix.ends_with(other_suffix) || other_suffix.ends_with(suffix))
-                    } else {
-                        other
-                            .strip_prefix(prefix)
-                            .is_some_and(|rest| rest.ends_with(suffix))
-                    }
-                }) {
-                    return None;
-                }
-            }
-            Some((alias, pkg_dir.join(relative)))
+            Some((pattern, alias, pkg_dir.join(relative)))
         })
+        .collect();
+    // Dropping one wildcard can expose another that it was shielding, so
+    // repeat until nothing changes.
+    loop {
+        let unsafe_keys: Vec<&String> = candidates
+            .iter()
+            .filter(|(key, alias, _)| {
+                let Some((prefix, suffix)) = alias.split_once('*') else {
+                    return false;
+                };
+                imports.keys().any(|other| {
+                    other != *key
+                        && overlaps(prefix, suffix, other)
+                        && !candidates.iter().any(|(k, other_alias, _)| {
+                            *k == other
+                                && other_alias
+                                    .split_once('*')
+                                    .is_none_or(|(p, _)| p.len() != prefix.len())
+                        })
+                })
+            })
+            .map(|(key, _, _)| *key)
+            .collect();
+        if unsafe_keys.is_empty() {
+            break;
+        }
+        candidates.retain(|(key, _, _)| !unsafe_keys.contains(key));
+    }
+    candidates
+        .into_iter()
+        .map(|(_, alias, target)| (alias, target))
         .collect()
+}
+
+/// Whether some specifier matches both the `prefix*suffix` pattern and
+/// the imports key `other`.
+fn overlaps(prefix: &str, suffix: &str, other: &str) -> bool {
+    match other.split_once('*') {
+        Some((other_prefix, other_suffix)) => {
+            (prefix.starts_with(other_prefix) || other_prefix.starts_with(prefix))
+                && (suffix.ends_with(other_suffix) || other_suffix.ends_with(suffix))
+        }
+        None => other
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.ends_with(suffix)),
+    }
 }
 
 #[cfg(test)]
@@ -194,6 +225,59 @@ mod tests {
                 "#lib/*.svelte".to_string(),
                 PathBuf::from("src/lib/*.svelte")
             )]
+        );
+    }
+
+    #[test]
+    fn nested_wildcard_aliases_keep_longest_prefix_precedence() {
+        // `paths` and package.json both send `#lib/server/X.svelte` to
+        // the longer prefix, so both aliases are safe.
+        assert_eq!(
+            aliases(
+                r##"{ "imports": {
+                "#lib/*": "./src/lib/*", "#lib/server/*": "./src/server/*"
+            } }"##
+            ),
+            vec![
+                (
+                    "#lib/*.svelte".to_string(),
+                    PathBuf::from("src/lib/*.svelte")
+                ),
+                (
+                    "#lib/server/*.svelte".to_string(),
+                    PathBuf::from("src/server/*.svelte")
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn dropping_a_wildcard_drops_the_wildcards_it_shielded() {
+        // The null key rules out `#lib/server/*`; without it as an alias,
+        // `#lib/*.svelte` would capture `#lib/server/` specifiers too.
+        assert!(
+            aliases(
+                r##"{ "imports": {
+                "#lib/*": "./src/lib/*",
+                "#lib/server/*": "./src/server/*",
+                "#lib/server/x.svelte": null
+            } }"##
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn same_length_prefixes_stay_with_native_resolution() {
+        // Precedence between equal prefixes differs between `paths` and
+        // package.json, so neither becomes an alias.
+        assert!(
+            aliases(
+                r##"{ "imports": {
+                "#lib/*": "./src/lib/*", "#lib/*.svelte": "./src/ui/*.svelte"
+            } }"##
+            )
+            .is_empty()
         );
     }
 

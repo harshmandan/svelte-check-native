@@ -7,8 +7,8 @@
 # manual review pass confirms no behavior gap or test gap.
 
 [language-tools]
-sha = "c2a9be791be9229401b3f488058f1d12e930f6f7"
-note = "svelte-check@4.7.7 + unreleased main: --tsgo keeps .ts `files` entries at their real path only, no virtual copy (#3146); document symbols hide imports (#3113, language server only)"
+sha = "34a6fffc5022883564deaf9569722832316f5894"
+note = "svelte-check@4.7.8 + unreleased main: svelte2tsx hoists a script's leading // @ts-check / // @ts-nocheck to the top of the generated file (#3111); --tsconfig path normalized before reading (#3169); TS 7 language-server features (#3111, #3183) and --tsgo-experimental-api fixes (#3168, #3154) out of scope"
 
 [svelte-compiler]
 # The Svelte compiler repo tracked locally under

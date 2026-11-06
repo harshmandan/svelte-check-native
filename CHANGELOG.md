@@ -6,6 +6,14 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A missing `.svelte` import is reported in a project whose tsconfig
+  has neither `include` nor `files`** (tsgo enhancement). Every
+  component and module beside the tsconfig is checked there, and
+  `exclude` still applies. The check used to skip such a project
+  entirely, so Svelte's `*.svelte` wildcard typed the import instead.
+
 ## [1.11.0]
 
 Matches svelte-check 4.7.8, plus the unreleased `// @ts-check`

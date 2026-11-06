@@ -1784,6 +1784,23 @@ fn check_project(
             discovery::SpecKind::Include,
             |f| f.include.as_deref(),
         )
+        .or_else(|| {
+            // With neither `include` nor `files` anywhere in the chain
+            // the compiler defaults `include` to `**/*` beside the entry
+            // config, and the overlay writes that default out, so every
+            // file under it is in the project.
+            if svn_core::tsconfig::winning_patterns(&chain, |f| f.files.as_deref()).is_some() {
+                return None;
+            }
+            let entry = chain.first()?;
+            Some(vec![
+                entry
+                    .config_dir()
+                    .join("**/*")
+                    .to_string_lossy()
+                    .into_owned(),
+            ])
+        })
         .map(|pats| {
             discovery::build_glob_set_absolute(&pats, case_insensitive)
                 .unwrap_or_else(globset::GlobSet::empty)
@@ -1849,13 +1866,9 @@ fn check_project(
         if files.contains(path) {
             return true;
         }
-        // With no `include` anywhere in the chain, ONLY entries listed
-        // in `files` are in the project. The compiler would scan the
-        // whole config directory when `files` is absent too, but the
-        // overlay tsconfig svelte-check compiles always has a `files`
-        // list of its own (its shim declarations), which switches that
-        // default scan off: a project declaring neither is checked
-        // against nothing but its shims.
+        // No `include` here means the chain declares `files` and no
+        // `include`: ONLY the entries listed in `files` are in the
+        // project. (Declaring neither gets the `**/*` default above.)
         if include.is_none() {
             return false;
         }

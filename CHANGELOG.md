@@ -6,8 +6,24 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.11.0]
+
+Matches svelte-check 4.7.8, plus the unreleased `// @ts-check`
+handling from its `main` branch. Adds TypeScript 7.1 nightly support
+and tsrs as an opt-in engine. The enhance layer now also reports
+missing `.svelte` imports from `.ts`/`.js` modules and components
+the Svelte compiler can't parse. Expect new errors where any of these
+apply. Upstream `language-tools` pin moves to `34a6fffc`
+(svelte-check 4.7.8 + `main`).
+
 ### Added
 
+- **TypeScript 7.1 nightlies.** Tested on `7.1.0-dev.20261106.1`. The
+  full suite passes, and on the Svelte-5 control-rig app the
+  diagnostics are identical to TypeScript 7.0. Use `7.1.0-dev.20261027.1` or newer, not
+  `7.1.0-beta`. The beta types a missing `.svelte` import through
+  Svelte's `*.svelte` wildcard (microsoft/TypeScript#64882, fixed in
+  microsoft/TypeScript#64884), which adds errors beside the real TS2307.
 - **`SVN_ENGINE=tsrs`** checks with [tsrs](https://github.com/oxc-project/tsrs),
   a Rust port of the TypeScript 7 checker, found in `node_modules` like
   TypeScript (platform package, wrapper, or pnpm/bun store). Opt-in only:
@@ -16,6 +32,55 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
   control-rig apps the diagnostics match the TypeScript nightly tsrs is
   pinned to (`7.1.0-dev.20260930.4`); the type-check step ran 3.5–4x
   faster with 2.7–3.1x less peak memory.
+- **Missing `.svelte` imports in `.ts`/`.js` modules** (tsgo
+  enhancement). The default svelte-check engine reports TS2307 for a
+  missing component import in any TS/JS file it checks (`main.ts`, kit
+  route modules, `.svelte.ts` runes modules), not only in components.
+  Now so do we. A file counts only when TypeScript checks it:
+  `// @ts-nocheck`, `checkJs` and `// @ts-check` decide.
+- **Components the Svelte compiler can't parse are reported** (tsgo
+  enhancement, thanks @chrisb4096-alt in #79). `svelte-check --tsgo`
+  drops such a file and passes while `vite build` fails. We report what
+  the default engine reports, taken from the project's own
+  `svelte/compiler`: one error per file, same code, position and
+  message. Without Node or svelte installed, the file is dropped as
+  before.
+
+### Fixed
+
+- **A missing `.svelte` module is unresolved at every reference**
+  (tsgo enhancement). As in the default engine, each reference reports
+  TS2307 and nothing is typed through Svelte's `*.svelte` wildcard:
+  namespace members read in the template, string-literal export names,
+  qualified and generic type uses, `export * as`, `import()` types,
+  `import x = require()`, and JSDoc `@import` tags. This also holds
+  when the missing file's path leaves the workspace (`../../shared/X.svelte`).
+- **Diagnostics without a file are reported** on the project tsconfig
+  at 1:1, as svelte-check 4.4.7+ does. Examples: TS2688 for a `types`
+  entry that doesn't resolve, TS2318 for a missing global type, and
+  TS18068 for `contentMappers` without `--runExternalCode`. They used
+  to be dropped.
+- **`// @ts-check` / `// @ts-nocheck` in a component decides whether it
+  is checked** (#3111 upstream, unreleased). Every directive among the
+  comments a script opens with counts, and the last one wins.
+  Diagnostics keep their real positions.
+- **`.ts` entries in tsconfig `files` stay at their real path** (#3146
+  upstream). A diagnostic on the generated tsconfig lands on the line
+  svelte-check 4.7.8 reports.
+- **package.json `#` imports resolve exactly as written** (thanks
+  @chrisb4096-alt in #78). Package imports never try extensions, and an
+  exact key keeps precedence over an overlapping wildcard.
+- **JSDoc prop types on `export let`** are read where TypeScript
+  attaches them, so the widening assertion matches upstream's.
+- **`svelte.config.js` keys are read as running the config does**: of
+  duplicate keys the last one wins, and a template-literal key is an
+  ordinary key.
+- **An escaped `in` / `instanceof` that starts the line after a class
+  field initializer** reports the compiler's parse error again.
+
+### Changed
+
+- oxc 0.156; tokio 1.54.1 (RUSTSEC-2026-0386).
 
 ## [1.10.0]
 

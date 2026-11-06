@@ -1,0 +1,9 @@
+{
+    "name": "package-imports-exact-override",
+    "private": true,
+    "type": "module",
+    "imports": {
+        "#lib/*": "./src/lib/*",
+        "#lib/Card.svelte": "./src/Card.ts"
+    }
+}

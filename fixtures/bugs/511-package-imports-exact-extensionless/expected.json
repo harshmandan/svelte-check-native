@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "main.ts",
+            "line": 0,
+            "column": 21,
+            "code": 2307
+        }
+    ],
+    "_note": "An exact .svelte specifier targeting ./card must not resolve card.ts by extension probing. Package imports rejects the extensionless target, even though card.ts exists. The overlay must not turn it into a paths alias."
+}

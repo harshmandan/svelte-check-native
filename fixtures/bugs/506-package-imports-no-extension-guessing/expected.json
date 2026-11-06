@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "src/App.svelte",
+            "line": 3,
+            "column": 35,
+            "code": 2307
+        },
+        {
+            "file": "src/plain.ts",
+            "line": 0,
+            "column": 22,
+            "code": 2307
+        }
+    ],
+    "_note": "package.json `imports` does no extension probing: `#lib/util` is TS2307 under tsc, svelte-check (both engines) and Vite, while `#lib/util.js` and `#lib/Card.svelte` resolve. The TSGO-ENHANCEMENT aliases from 499 used to map all of `#lib/*` through overlay `paths`, which does probe extensions, so both bad imports passed silently. Aliases are now narrowed to `.svelte` targets (`#lib/*.svelte`)."
+}

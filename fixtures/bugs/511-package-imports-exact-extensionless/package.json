@@ -1,0 +1,8 @@
+{
+    "name": "package-imports-exact-extensionless",
+    "private": true,
+    "type": "module",
+    "imports": {
+        "#card.svelte": "./card"
+    }
+}

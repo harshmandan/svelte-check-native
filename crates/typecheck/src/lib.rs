@@ -355,6 +355,9 @@ pub struct CheckSession {
     path_aliases: Vec<(String, PathBuf)>,
     /// Stub files [`Self::add_module_stubs`] wrote, kept by the cache GC.
     stub_paths: Vec<PathBuf>,
+    /// Extra `rootDirs` entries the stubs need; see
+    /// [`Self::add_module_stubs`].
+    stub_root_dirs: Vec<PathBuf>,
 }
 
 /// TSGO-ENHANCEMENT: a declaration standing in for a module that does
@@ -411,6 +414,7 @@ impl CheckSession {
             kit_types_mirror_task,
             path_aliases: Vec::new(),
             stub_paths: Vec::new(),
+            stub_root_dirs: Vec::new(),
         })
     }
 
@@ -440,6 +444,20 @@ impl CheckSession {
                     let path = self.layout.ambient_path(&source);
                     write_if_changed(&path, &text)?;
                     self.stub_paths.push(path);
+                    // A target outside the workspace is under no
+                    // `rootDirs` entry, so the compiler never looks in
+                    // the cache for it. Its stub sits at the target's
+                    // absolute path with the root stripped, which is
+                    // where the filesystem root as a `rootDirs` entry
+                    // maps the target. The compiler matches the longest
+                    // root, so paths under the other roots resolve as
+                    // before.
+                    if !source.starts_with(&self.layout.workspace)
+                        && let Some(root) = source.ancestors().last()
+                        && !self.stub_root_dirs.iter().any(|r| r == root)
+                    {
+                        self.stub_root_dirs.push(root.to_path_buf());
+                    }
                 }
                 ModuleStub::Specifier { specifier, text } => {
                     let path = self
@@ -758,6 +776,7 @@ impl CheckSession {
             &kit_overlay_sources,
             kit_types_mirror.as_deref(),
             &self.path_aliases,
+            &self.stub_root_dirs,
         );
         let overlay_text = serde_json::to_string_pretty(&overlay)?;
         write_if_changed(&layout.overlay_tsconfig, &overlay_text)?;

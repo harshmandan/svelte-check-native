@@ -43,9 +43,11 @@ use crate::cache::CacheLayout;
 /// absolute paths of the generated `.svelte.ts` files we wrote into the
 /// cache. `path_aliases` are extra `paths` entries — pattern and
 /// absolute target — given the same overlay-mirror treatment as the
-/// user's own (see [`CheckSession::set_path_aliases`]).
+/// user's own (see [`CheckSession::set_path_aliases`]). `stub_root_dirs`
+/// are extra `rootDirs` entries, listed after every other root.
 ///
 /// [`CheckSession::set_path_aliases`]: crate::CheckSession::set_path_aliases
+#[allow(clippy::too_many_arguments)]
 pub fn build(
     layout: &CacheLayout,
     user_tsconfig: &Path,
@@ -54,6 +56,7 @@ pub fn build(
     kit_overlay_sources: &[std::path::PathBuf],
     kit_types_mirror: Option<&Path>,
     path_aliases: &[(String, PathBuf)],
+    stub_root_dirs: &[PathBuf],
 ) -> Value {
     // `extends` is resolved relative to the overlay tsconfig dir.
     let extends_rel = relative_from(layout.root.as_path(), user_tsconfig);
@@ -152,6 +155,11 @@ pub fn build(
         }
     }
     push_root(layout.svelte_dir.as_path(), &mut root_dirs, &mut seen);
+    // TSGO-ENHANCEMENT: roots that reach the stubs of missing modules
+    // outside the workspace (see `CheckSession::add_module_stubs`).
+    for dir in stub_root_dirs {
+        push_root(dir, &mut root_dirs, &mut seen);
+    }
 
     // Path aliases. Each value keeps its place and is followed by its
     // cache-mirror candidate, the order svelte-check writes them in: a
@@ -891,7 +899,7 @@ mod tests {
         let gen_files = vec![PathBuf::from(
             "/projects/app/.svelte-check/svelte/++Index.svelte.ts",
         )];
-        let overlay = build(&layout, &user_ts, &gen_files, &[], &[], None, &[]);
+        let overlay = build(&layout, &user_ts, &gen_files, &[], &[], None, &[], &[]);
 
         let opts = &overlay["compilerOptions"];
         assert_eq!(opts["noEmit"], json!(true));
@@ -905,7 +913,7 @@ mod tests {
     fn build_overlay_extends_user_tsconfig_relatively() {
         let layout = CacheLayout::for_workspace("/projects/app");
         let user_ts = PathBuf::from("/projects/app/tsconfig.json");
-        let overlay = build(&layout, &user_ts, &[], &[], &[], None, &[]);
+        let overlay = build(&layout, &user_ts, &[], &[], &[], None, &[], &[]);
         // extends should point ../tsconfig.json (overlay is in
         // /projects/app/.svelte-check/, user ts in /projects/app/).
         assert_eq!(overlay["extends"], json!("../tsconfig.json"));
@@ -919,7 +927,7 @@ mod tests {
             PathBuf::from("/projects/app/.svelte-check/svelte/++A.svelte.ts"),
             PathBuf::from("/projects/app/.svelte-check/svelte/sub/++B.svelte.ts"),
         ];
-        let overlay = build(&layout, &user_ts, &gen_files, &[], &[], None, &[]);
+        let overlay = build(&layout, &user_ts, &gen_files, &[], &[], None, &[], &[]);
         let files = overlay["files"].as_array().unwrap();
         // 2 generated + 1 svelte-shims.d.ts = 3.
         assert_eq!(files.len(), 3);
@@ -935,7 +943,7 @@ mod tests {
         // svelte/* modules.
         let layout = CacheLayout::for_workspace("/projects/app");
         let user_ts = PathBuf::from("/projects/app/tsconfig.json");
-        let overlay = build(&layout, &user_ts, &[], &[], &[], None, &[]);
+        let overlay = build(&layout, &user_ts, &[], &[], &[], None, &[], &[]);
         let files = overlay["files"].as_array().unwrap();
         assert_eq!(files.len(), 1);
         assert!(files[0].as_str().unwrap().ends_with("svelte-shims.d.ts"));
@@ -993,7 +1001,7 @@ mod tests {
         );
 
         let layout = CacheLayout::for_workspace(&ws);
-        let overlay = build(&layout, &user_ts, &[], &[], &[], None, &[]);
+        let overlay = build(&layout, &user_ts, &[], &[], &[], None, &[], &[]);
 
         let opts = &overlay["compilerOptions"];
         // rootDirs union includes svelte cache, workspace, AND the
@@ -1069,7 +1077,7 @@ mod tests {
         write_file(&user_ts, r#"{ "extends": "../configs/base.json" }"#);
 
         let layout = CacheLayout::for_workspace(&project_dir);
-        let overlay = build(&layout, &user_ts, &[], &[], &[], None, &[]);
+        let overlay = build(&layout, &user_ts, &[], &[], &[], None, &[], &[]);
 
         let opts = &overlay["compilerOptions"];
 
@@ -1152,7 +1160,7 @@ mod tests {
         write_file(&user_ts, r#"{ "extends": ["./a.json", "./b.json"] }"#);
 
         let layout = CacheLayout::for_workspace(&ws);
-        let overlay = build(&layout, &user_ts, &[], &[], &[], None, &[]);
+        let overlay = build(&layout, &user_ts, &[], &[], &[], None, &[], &[]);
 
         let paths = overlay["compilerOptions"]["paths"].as_object().unwrap();
         assert!(
@@ -1209,7 +1217,16 @@ mod tests {
 
     fn overlay_include(ws: &Path) -> Option<Vec<String>> {
         let layout = CacheLayout::for_workspace(ws);
-        let overlay = build(&layout, &ws.join("tsconfig.json"), &[], &[], &[], None, &[]);
+        let overlay = build(
+            &layout,
+            &ws.join("tsconfig.json"),
+            &[],
+            &[],
+            &[],
+            None,
+            &[],
+            &[],
+        );
         overlay["include"]
             .as_array()
             .map(|a| a.iter().map(|v| v.as_str().unwrap().to_string()).collect())

@@ -1,7 +1,6 @@
 {
     "errors": [
-        { "file": "src/A.svelte", "line": 3, "column": 0, "code": 2339 },
-        { "file": "src/B.svelte", "line": 1, "column": 4, "code": 2322 }
+        { "file": "src/A.svelte", "line": 4, "column": 2, "code": 2339 }
     ],
-    "_note": "svelte-check maps diagnostics through a snapshot that prepends the script's leading `// @ts-check` / `// @ts-nocheck` line to the generated code, while the offsets come from the file tsgo checked, which has no such line; every diagnostic of the component therefore lands that many characters (13 or 15) earlier. The directive itself sits inside the render function, so `@ts-nocheck` suppresses nothing. Verified against svelte-check --tsgo."
+    "_note": "svelte2tsx copies every `// @ts-check` / `// @ts-nocheck` among the comments a script opens with to the top of the generated file, where it decides whether the component is checked; diagnostics keep their real positions. A has `@ts-check` below another comment (reported at its true column); B's `@ts-nocheck` silences its TS2322; so does C's, below a block comment, which no longer ends the run of leading comments."
 }

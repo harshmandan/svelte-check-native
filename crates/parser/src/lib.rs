@@ -53,4 +53,4 @@ pub use script_tag_expression::{
 };
 pub use sections::parse_sections;
 pub use template::{parse_all_template_runs, parse_template};
-pub use ts_check::ts_check_directive;
+pub use ts_check::{ts_check_directive, ts_check_directives};

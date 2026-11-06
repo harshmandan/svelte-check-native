@@ -261,11 +261,12 @@ pub fn missing_svelte_import_diagnostics(
     missing_imports(file, source, refs, resolver)
 }
 
-/// Whether svelte-check type-checks a component at all. It prepends the
-/// `// @ts-check` / `// @ts-nocheck` its script opens with to the
-/// generated code (see [`svn_parser::ts_check_directive`]), so that
-/// directive decides; otherwise a TS component is checked and a
-/// JavaScript one only under `checkJs: true`.
+/// Whether svelte-check type-checks a component at all. svelte2tsx
+/// copies the `// @ts-check` / `// @ts-nocheck` comments its script
+/// opens with to the top of the generated code (see
+/// [`svn_parser::ts_check_directive`]), so the last of them decides;
+/// otherwise a TS component is checked and a JavaScript one only under
+/// `checkJs: true`.
 fn component_is_type_checked(doc: &Document<'_>, is_ts: bool, check_js: Option<bool>) -> bool {
     let script = doc.instance_script.as_ref().or(doc.module_script.as_ref());
     match script.and_then(|s| svn_parser::ts_check_directive(s.content)) {
@@ -902,8 +903,9 @@ mod tests {
             "<script lang=\"ts\">// @ts-nocheck\n</script>",
             None
         ));
-        // The first directive wins, unlike in a plain module.
-        assert!(checked(
+        // Every directive is copied to the top of the generated file, so
+        // the last one wins, as in a plain module.
+        assert!(!checked(
             "<script>// @ts-check\n// @ts-nocheck\n</script>",
             None
         ));

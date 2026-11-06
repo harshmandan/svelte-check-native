@@ -492,7 +492,7 @@ fixture that starts passing strict will fail the suite with `STALE:
 <name>` until removed from the list. Loose mode
 `LS_DIAGNOSTICS_LOOSE=1` falls back to `(file, code)` for envs
 that can't reach byte-perfect positions yet. Current skip state:
-21 fixtures under `crates/cli/tests/ls_diagnostics/skips/` (the
+18 fixtures under `crates/cli/tests/ls_diagnostics/skips/` (the
 suite's own denominator is authoritative; run it for the live
 pass count). Per-fixture investigation profiles for every current
 skip live in `notes/LS_CONVERGENCE.md` (consolidated 2026-07-31

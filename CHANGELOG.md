@@ -6,6 +6,10 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.11.1]
+
+One fix to the missing-`.svelte`-import check.
+
 ### Fixed
 
 - **A missing `.svelte` import is reported in a project whose tsconfig

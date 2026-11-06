@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "src/main.ts",
+            "line": 0,
+            "column": 22,
+            "code": 2307
+        }
+    ],
+    "_note": "The exact extensionless #lib/Card.svelte target wins over #lib/* and must report TS2307 despite src/Card.ts existing. A wildcard overlay alias would wrongly select lib/Card.svelte and make the string assignment check clean."
+}

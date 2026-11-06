@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "The exact #lib/Card.svelte import points to Card.ts and overrides #lib/*. Narrowing wildcard aliases must not drop that exact override and select lib/Card.svelte instead."
+}

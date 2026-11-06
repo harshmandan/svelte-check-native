@@ -1,0 +1,9 @@
+{
+    "name": "package-imports-nested-wildcards",
+    "private": true,
+    "type": "module",
+    "imports": {
+        "#lib/*": "./src/lib/*",
+        "#lib/server/*": "./src/server/*"
+    }
+}

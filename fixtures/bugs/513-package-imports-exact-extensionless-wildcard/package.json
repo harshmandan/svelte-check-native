@@ -1,0 +1,9 @@
+{
+    "name": "package-imports-exact-extensionless-wildcard",
+    "private": true,
+    "type": "module",
+    "imports": {
+        "#lib/*": "./src/lib/*",
+        "#lib/Card.svelte": "./src/Card"
+    }
+}

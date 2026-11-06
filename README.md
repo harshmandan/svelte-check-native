@@ -45,6 +45,8 @@ npx svelte-check-native --workspace .
 
 Requires `typescript` 7+ or `@typescript/native-preview` (tsgo). TypeScript 6 and earlier cannot run checks; you can keep them in your project and install `@typescript/native-preview` instead of TypeScript 7. The checker prefers TypeScript 7+ when both are installed.
 
+TypeScript 7.1 nightlies (`typescript@next`) work from `7.1.0-dev.20261027.1` on. Skip `7.1.0-beta`: it types a missing `.svelte` import through Svelte's `*.svelte` wildcard ([microsoft/TypeScript#64882](https://github.com/microsoft/TypeScript/issues/64882)), so you get extra errors beside the real TS2307. `--disable-enhance` avoids them on the beta, but then a missing import goes unreported, as in `svelte-check --tsgo`.
+
 Replace `svelte-check` in your `package.json` check script, keeping your supported flags. For example:
 
 ```json
@@ -75,7 +77,7 @@ The project targets parity with [`svelte-check`](https://www.npmjs.com/package/s
 | Feature or flag | Behavior |
 | --- | --- |
 | Svelte 4 and Svelte 5 | Supported, including SvelteKit projects. |
-| TypeScript engine | Native TypeScript 7+ or the native preview; `--tsgo` is accepted for compatibility. |
+| TypeScript engine | Native TypeScript 7.0, 7.1 nightlies, or the native preview; `--tsgo` is accepted for compatibility. |
 | Svelte warnings | Native Rust pass by default. Use `--svelte-warnings bridge` to run your installed `svelte/compiler`. |
 | `--watch`, `--preserveWatchOutput` | Unsupported. Use an external watcher such as [watchexec](https://github.com/watchexec/watchexec). |
 | `--no-tsconfig` | Unsupported. A tsconfig or jsconfig is required. |

@@ -462,6 +462,24 @@ of snapshots across three corpora:
 Runs in <1 s. Any emit change that's not deliberate must fail this
 gate before anything else is considered.
 
+The snapshots only lock our emit against itself, so the same test then
+compares them with **upstream's emit for the same inputs**:
+`upstream.emit.ts` beside each upstream sample's snapshot, written by
+`scripts/gen-upstream-emit.mjs` (svelte2tsx pinned in
+`scripts/upstream-emit/package.json` to the submodule's version, called
+with the options `svelte-check --tsgo` passes). Upstream's own
+`expectedv2` files are not used — for non-`.v5` samples without an
+`expected-svelte5` file they are Svelte 4 output.
+`scripts/diff-upstream-emit.mjs` reduces both sides to the typed
+constructs (element attribute objects, component props objects,
+generic `$$IsomorphicComponent` signatures), normalises naming and
+equivalent spellings, and fails on any difference not in
+`scripts/diff-upstream-emit-allow.json` (hand-written, each entry
+`intended` or `bug` with a reason; entries that stop matching fail as
+stale). After a submodule bump: `(cd scripts/upstream-emit && npm
+install)`, re-pin if the svelte2tsx version moved, run the generator,
+review the diff.
+
 **Stage 2 — tsgo is trusted.** No tests; it's the TypeScript team's
 code. Integration tests below cover "does the emit work end-to-end"
 without pretending to test tsgo itself.

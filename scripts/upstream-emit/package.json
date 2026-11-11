@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "name": "upstream-emit-reference",
+  "description": "Pinned svelte2tsx + svelte used by scripts/gen-upstream-emit.mjs to write the upstream reference emit for the emit-snapshot samples. svelte2tsx must equal the language-tools submodule's packages/svelte2tsx version; the generator refuses to run otherwise.",
+  "dependencies": {
+    "svelte": "5.57.2",
+    "svelte2tsx": "0.7.63",
+    "typescript": "6.0.3"
+  }
+}

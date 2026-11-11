@@ -4,11 +4,14 @@
 #   - unit tests (`--lib`): line-map translation, path reverse,
 #     analyzer/emit internals — no subprocess, no fixtures.
 #   - emit_snapshots: the primary emit-shape gate. Spawns only our own
-#     binary (`--emit-ts`); no tsgo, no node. The svelte2tsx/htmlx2jsx
+#     binary (`--emit-ts`); no tsgo. The svelte2tsx/htmlx2jsx
 #     sample INPUTS live in the language-tools submodule (hence the
 #     recursive checkout); the expected.emit.ts snapshots are in-repo
 #     and keyed to workspace-relative paths, so they compare
-#     byte-identically on any checkout.
+#     byte-identically on any checkout. It then compares the snapshots
+#     with upstream's committed reference emit (upstream.emit.ts) via
+#     scripts/diff-upstream-emit.mjs, which needs only the runner's
+#     preinstalled node (builtins, no npm install).
 #
 # The tsgo-backed suites (bug_fixtures, ls_diagnostics, upstream_sanity)
 # need a node_modules with a native-compiler install — they stay local

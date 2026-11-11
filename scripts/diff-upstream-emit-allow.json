@@ -1,0 +1,43 @@
+{
+  "_doc": "Known differences between our emit and upstream's for the emit-snapshot samples, read by scripts/diff-upstream-emit.mjs. Hand-written only. `status: intended` = equivalent or deliberate, with the reason; `status: bug` = a real divergence still to fix (kept so the gate passes, and reported as stale once the fix makes it match). Match fields: `sample` (exact or `*`), `kind`, optional `label`, and `ours` / `upstream` substrings of the normalised text.",
+  "entries": [
+    {
+      "status": "intended",
+      "sample": "*",
+      "kind": "component",
+      "label": "H.selfdefault vs H.createcomponentany",
+      "reason": "<svelte:self>: upstream writes an untyped `__sveltets_2_createComponentAny({…})`; we construct it through `__svn_ensure_component(__svn_self_default)`, where `__svn_self_default` is `Component<any, any, any>`. Props are `any` either way."
+    },
+    {
+      "status": "intended",
+      "sample": "svelte2tsx/rewrite-imports",
+      "kind": "element",
+      "ours": "import(\"../../bar\")",
+      "upstream": "import(\"../../../../bar\")",
+      "reason": "Relative specifiers: upstream rewrites them for the generated file's location; we leave them as written and resolve them through the overlay tsconfig's `rootDirs`, which maps the overlay directory onto the source tree."
+    },
+    {
+      "status": "bug",
+      "sample": "*",
+      "kind": "component",
+      "ours": ":`${",
+      "reason": "A quoted attribute holding one expression (`attr=\"{x}\"`) on a component: upstream passes the expression itself (Attribute.ts emits a single MustacheTag value bare), we wrap it in a template literal, so the prop is typed `string` instead of the expression's type.",
+      "title": "quoted single expression on a component is typed string"
+    },
+    {
+      "status": "bug",
+      "sample": "htmlx2jsx/binding-get-set.v5",
+      "kind": "element",
+      "upstream": "H.getsetbinding(null,set)",
+      "reason": "Get/set binding on a one-way element property (`bind:clientWidth={null, set}`): upstream checks it as the `\"bind:clientWidth\"` attribute of the element; we check `__svn_get_set_binding(null, set) satisfies HTMLElement['clientWidth']` instead, against a different type.",
+      "title": "get/set binding on a one-way element property"
+    },
+    {
+      "status": "bug",
+      "sample": "htmlx2jsx/component-slot-attribute-as-prop.v5",
+      "kind": "component",
+      "reason": "`slot=\"x\"` on a component: upstream drops it only when the component's parent in the template is another component (Attribute.ts, `element.parent instanceof InlineComponent`); inside a `{#snippet}` it is passed as a prop. We drop it everywhere.",
+      "title": "slot= on a component inside a snippet"
+    }
+  ]
+}

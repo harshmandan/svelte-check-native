@@ -31,6 +31,13 @@
 //! committing to confirm the change is intentional.
 //!
 //! Default mode: any mismatch fails with a line-by-line diff.
+//!
+//! ### Upstream comparison
+//!
+//! After the snapshot pass, the typed constructs of every upstream
+//! sample's snapshot are compared with upstream's own emit for it
+//! (`upstream.emit.ts`, see `scripts/gen-upstream-emit.mjs`) by
+//! `scripts/diff-upstream-emit.mjs`.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -144,6 +151,31 @@ fn emit_snapshots_suite() {
     assert!(
         failures.is_empty(),
         "emit_snapshots suite failed. Re-run with UPDATE_SNAPSHOTS=1 and inspect the diff to accept deliberate emit changes."
+    );
+
+    check_against_upstream(&crate_dir);
+}
+
+/// The snapshots above only lock our emit against itself. Upstream's
+/// reference emit for the same samples (`upstream.emit.ts`, written by
+/// `scripts/gen-upstream-emit.mjs`) is the spec: compare the typed
+/// constructs of every snapshot against it, so a shape that differs from
+/// upstream cannot be accepted into a snapshot unnoticed. Runs after the
+/// snapshot pass, so in update mode it checks what was just written.
+/// Known differences live in `scripts/diff-upstream-emit-allow.json`.
+fn check_against_upstream(crate_dir: &Path) {
+    let script = crate_dir.join("../../scripts/diff-upstream-emit.mjs");
+    let out = Command::new("node")
+        .arg(&script)
+        .output()
+        .expect("node is required to compare emit snapshots against upstream");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    eprintln!("{stdout}{stderr}");
+    assert!(
+        out.status.success(),
+        "emit differs from upstream's svelte2tsx output (see above). Fix the emit, or \
+         add an entry with a reason to scripts/diff-upstream-emit-allow.json."
     );
 }
 

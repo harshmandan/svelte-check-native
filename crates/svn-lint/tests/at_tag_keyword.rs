@@ -205,6 +205,42 @@ const CASES: &[(bool, &str, Expected)] = &[
             30,
         )),
     ),
+    (
+        false,
+        "{@constant}",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            25,
+        )),
+    ),
+    (
+        false,
+        "<div>{@constx = 1}</div>",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            30,
+        )),
+    ),
+    (
+        true,
+        "{@constant}",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            35,
+        )),
+    ),
+    (
+        true,
+        "<div>{@constx = 1}</div>",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            40,
+        )),
+    ),
 ];
 
 fn source(ts: bool, template: &str) -> String {

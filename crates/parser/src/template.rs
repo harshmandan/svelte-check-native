@@ -341,21 +341,28 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                         let body_start = sigil_idx + 1; // past `@`
                         let src = self.scanner.source();
                         let bytes = src.as_bytes();
-                        // Read the tag keyword (alpha chars) into a slice
-                        // so we can classify it (@const vs anything else).
+                        // The compiler's `special()` tries each keyword in
+                        // this order and takes the first one the text
+                        // starts with, then reads the tag's own syntax
+                        // right after it: `{@debugx}` debugs `x`, and
+                        // `{@constx a}` is a `{@const}` missing its
+                        // whitespace. Text matching no keyword is an
+                        // unknown tag; its word is skipped.
                         let keyword_start = body_start as usize;
-                        let mut p = keyword_start;
-                        while p < end as usize && bytes[p].is_ascii_alphabetic() {
-                            p += 1;
-                        }
-                        let keyword = &src[keyword_start..p];
-                        let kind = match keyword {
-                            "const" => InterpolationKind::AtConst,
-                            "html" => InterpolationKind::AtHtml,
-                            "render" => InterpolationKind::AtRender,
-                            "debug" => InterpolationKind::AtDebug,
-                            _ => InterpolationKind::AtTag,
-                        };
+                        let rest = &src[keyword_start..end as usize];
+                        let word_len = rest.bytes().take_while(u8::is_ascii_alphabetic).count();
+                        let (kind, keyword_len) = [
+                            ("html", InterpolationKind::AtHtml),
+                            ("debug", InterpolationKind::AtDebug),
+                            ("const", InterpolationKind::AtConst),
+                            ("render", InterpolationKind::AtRender),
+                        ]
+                        .into_iter()
+                        .find(|(keyword, _)| rest.starts_with(keyword))
+                        .map_or((InterpolationKind::AtTag, word_len), |(keyword, kind)| {
+                            (kind, keyword.len())
+                        });
+                        let mut p = keyword_start + keyword_len;
                         // Skip whitespace after the keyword.
                         while p < end as usize && bytes[p].is_ascii_whitespace() {
                             p += 1;
@@ -2487,8 +2494,8 @@ mod tests {
             ("{@constx a = 1}", InterpolationKind::AtConst, "x a = 1"),
             ("{@htmlfoo bar}", InterpolationKind::AtHtml, "foo bar"),
             ("{@renderx()}", InterpolationKind::AtRender, "x()"),
-            ("{@HTML x}", InterpolationKind::AtTag, "HTML x"),
-            ("{@attachx}", InterpolationKind::AtTag, "attachx"),
+            ("{@HTML x}", InterpolationKind::AtTag, "x"),
+            ("{@attachx}", InterpolationKind::AtTag, ""),
         ];
         for (src, kind, expression) in cases {
             let frag = parse_ok(src);

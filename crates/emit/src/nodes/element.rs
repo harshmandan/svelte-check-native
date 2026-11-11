@@ -207,8 +207,10 @@ pub(crate) fn emit_svelte_element_node(
         // `$$slot_def["X"]` and gets handled at the parent's child
         // walk via `try_emit_slot_let_consumer_open`. Skip the local
         // destructure here so we don't double-emit.
-        let has_slot_attr =
-            svn_analyze::literal_attr_value(&s.attributes, "slot", source).is_some();
+        // SVELTE-4-COMPAT: only when this component fills a slot of its
+        // parent component; elsewhere `slot` is a prop.
+        let has_slot_attr = inst.fills_parent_slot
+            && svn_analyze::literal_attr_value(&s.attributes, "slot", source).is_some();
         let let_destructures = if has_slot_attr {
             Vec::new()
         } else {

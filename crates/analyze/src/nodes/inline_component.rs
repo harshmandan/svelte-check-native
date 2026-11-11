@@ -21,7 +21,9 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, c: &Component) {
     // unknown tags to `HTMLElement` so the pattern doesn't break
     // the program.
     walk_attributes(&c.attributes, &mut v.summary, &mut v.counters, &ctx, None);
-    collect_component_instantiation(c, v.source, &mut v.summary);
+    // SVELTE-4-COMPAT: whether a text `slot="x"` names a parent slot.
+    let fills_parent_slot = v.components_in_slot_position.contains(&c.range.start);
+    collect_component_instantiation(c, fills_parent_slot, v.source, &mut v.summary);
     crate::nodes::let_directive::enter_component_like(
         v,
         c.range.start,
@@ -60,6 +62,7 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, c: &Component) {
 /// skipped so the satisfies object stays correct on the rest.
 pub(crate) fn collect_component_instantiation(
     c: &svn_parser::Component,
+    fills_parent_slot: bool,
     source: &str,
     summary: &mut TemplateSummary,
 ) {
@@ -73,6 +76,7 @@ pub(crate) fn collect_component_instantiation(
                 range: Range::new(name_start, name_end),
             },
             ctor_anchor: Range::new(name_end.saturating_sub(1), name_end),
+            fills_parent_slot,
         },
         &c.attributes,
         &c.children,
@@ -82,12 +86,15 @@ pub(crate) fn collect_component_instantiation(
     );
 }
 
-/// What an instantiation constructs from, and the source position a
+/// What an instantiation constructs from, the source position a
 /// diagnostic on the constructor maps to (see
-/// [`ComponentInstantiation::ctor_anchor`]).
+/// [`ComponentInstantiation::ctor_anchor`]), and whether the component
+/// fills a slot of its parent (see
+/// [`ComponentInstantiation::fills_parent_slot`]).
 pub(crate) struct InstantiationRoot {
     pub(crate) ctor: ComponentCtor,
     pub(crate) ctor_anchor: Range,
+    pub(crate) fills_parent_slot: bool,
 }
 
 /// Body of [`collect_component_instantiation`] generalised to accept
@@ -105,7 +112,11 @@ pub(crate) fn collect_instantiation_inner(
 ) {
     let range_start = node_range.start;
     let range_end = node_range.end;
-    let InstantiationRoot { ctor, ctor_anchor } = root;
+    let InstantiationRoot {
+        ctor,
+        ctor_anchor,
+        fills_parent_slot,
+    } = root;
     let mut props: Vec<PropShape> = Vec::with_capacity(attributes.len());
     let mut on_events: Vec<OnEventDirective> = Vec::new();
     let mut bind_this_target: Option<Range> = None;
@@ -136,6 +147,7 @@ pub(crate) fn collect_instantiation_inner(
                     start: range_start,
                     end: first.range().start,
                     name_move,
+                    fills_parent_slot,
                 },
                 attributes,
                 source,
@@ -172,6 +184,7 @@ pub(crate) fn collect_instantiation_inner(
             attr,
             source,
             &ctor,
+            fills_parent_slot,
             summary,
             AttributeSinks {
                 props: &mut props,
@@ -212,6 +225,7 @@ pub(crate) fn collect_instantiation_inner(
             element_directives,
             start_tag_end: start_tag_end(range_start, range_end, children, source),
             node_start: range_start,
+            fills_parent_slot,
         });
 }
 
@@ -226,6 +240,9 @@ struct StartTag {
     /// (the tag name, or `<svelte:component>`'s `this` expression);
     /// `None` for `<svelte:self>`.
     name_move: Option<Range>,
+    /// SVELTE-4-COMPAT: a text `slot="x"` names a parent slot, so only
+    /// its value is kept (see [`is_parent_slot_name`]).
+    fills_parent_slot: bool,
 }
 
 /// Source offset the synthesized implicit `children` prop maps to.
@@ -279,7 +296,7 @@ fn implicit_children_anchor(tag: StartTag, attributes: &[Attribute], source: &st
         if !shorthand {
             ranges.extend(thread.leading.iter().map(|c| (c.range.start, c.range.end)));
         }
-        kept_attribute_ranges(attr, source, &mut ranges);
+        kept_attribute_ranges(attr, tag.fills_parent_slot, source, &mut ranges);
         ranges.extend(thread.trailing.iter().map(|c| (c.range.start, c.range.end)));
     }
     let end = tag.end;
@@ -318,7 +335,12 @@ fn implicit_children_anchor(tag: StartTag, attributes: &[Attribute], source: &st
 }
 
 /// The source ranges svelte2tsx keeps from one component attribute.
-fn kept_attribute_ranges(attr: &Attribute, source: &str, out: &mut Vec<(u32, u32)>) {
+fn kept_attribute_ranges(
+    attr: &Attribute,
+    fills_parent_slot: bool,
+    source: &str,
+    out: &mut Vec<(u32, u32)>,
+) {
     let trimmed = |r: Range| {
         let text = r.slice(source);
         let start = r.start + (text.len() - text.trim_start().len()) as u32;
@@ -328,9 +350,9 @@ fn kept_attribute_ranges(attr: &Attribute, source: &str, out: &mut Vec<(u32, u32
     match attr {
         Attribute::Comment(_) => {}
         Attribute::Plain(p) => {
-            // `slot="x"` under a component names the slot the element
-            // fills; its value is still a kept range.
-            let is_slot_name = p.name.as_str() == "slot";
+            // SVELTE-4-COMPAT: `slot="x"` under a component names the
+            // slot the element fills; its value is still a kept range.
+            let is_slot_name = is_parent_slot_name(p, fills_parent_slot);
             if !is_slot_name {
                 out.push(name_range(p.range.start, p.name.as_str()));
             }
@@ -564,6 +586,7 @@ fn collect_attribute(
     attr: &Attribute,
     source: &str,
     ctor: &ComponentCtor,
+    fills_parent_slot: bool,
     summary: &mut TemplateSummary,
     sinks: AttributeSinks<'_>,
 ) {
@@ -578,16 +601,14 @@ fn collect_attribute(
     {
         match attr {
             Attribute::Plain(p) => {
-                // SVELTE-4-COMPAT: `slot="x"` on a component is a
-                // POSITIONAL marker for the Svelte compiler (places
-                // the child into a named slot of its parent), not a
-                // prop of the child itself. Emitting it as a prop
-                // fires TS2353 on every Svelte-5 child that doesn't
-                // declare a `slot` prop. Skip entirely — the
-                // Svelte-4 widen on the ENCLOSING parent already
-                // handles the case where `slot` *is* explicitly
-                // passed as a prop name.
-                if p.name.as_str() == "slot" {
+                // SVELTE-4-COMPAT: a text `slot="x"` on a component
+                // whose parent is a component places it in that
+                // parent's named slot — emit checks the name against
+                // the parent's slots — so it is not a prop of the
+                // component. Anywhere else (inside a snippet or an
+                // element, at the top level) and with any other value
+                // it is an ordinary prop, as in svelte2tsx.
+                if is_parent_slot_name(p, fills_parent_slot) {
                     return;
                 }
                 let Some(v) = &p.value else {
@@ -945,6 +966,21 @@ fn collect_attribute(
             }
         }
     }
+}
+
+/// SVELTE-4-COMPAT: is `p` a `slot` attribute naming the parent slot the
+/// component fills? svelte2tsx reads it so only for a value that is one
+/// text chunk (`Attribute.ts`, `attributeValueIsOfType(value, 'Text')`;
+/// an empty quoted value counts) on a component whose parent is a
+/// component; otherwise `slot` is a prop like any other.
+fn is_parent_slot_name(p: &svn_parser::PlainAttr, fills_parent_slot: bool) -> bool {
+    fills_parent_slot
+        && p.name.as_str() == "slot"
+        && p.value.as_ref().is_some_and(|v| match v.parts.as_slice() {
+            [AttrValuePart::Text { .. }] => true,
+            [] => v.quoted,
+            _ => false,
+        })
 }
 
 /// `slot="x"` with `x` other than `default` on a component child — the

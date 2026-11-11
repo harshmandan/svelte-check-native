@@ -414,6 +414,11 @@ pub struct ComponentInstantiation {
     /// (i.e. inside the right `{#each}` / `{#if}` / `{#snippet}` body)
     /// when re-walking the template fragment.
     pub node_start: u32,
+    /// SVELTE-4-COMPAT: the component's nearest enclosing element,
+    /// component or snippet is a component, so a text `slot="x"` on it
+    /// names a slot of that parent (and its `let:` names read that slot)
+    /// rather than being a prop of its own.
+    pub fills_parent_slot: bool,
 }
 
 /// One `bind:NAME={…}` / bare `bind:NAME` directive on a component
@@ -641,6 +646,10 @@ pub fn walk_template(fragment: &Fragment, source: &str) -> TemplateSummary {
         pending_await_promise_range: None,
         pending_let_owner: None,
         slot_let_owners: std::collections::HashMap::new(),
+        // SVELTE-4-COMPAT
+        components_in_slot_position: crate::svelte4::slot_position::components_in_slot_position(
+            fragment,
+        ),
     };
     crate::template_scope::walk_with_visitor(fragment, source, &mut visitor);
     visitor.summary
@@ -738,6 +747,10 @@ pub(crate) struct AnalyzeVisitor<'src> {
     /// fill one of its named slots with `let:` directives, keyed by the
     /// child's start offset.
     pub(crate) slot_let_owners: std::collections::HashMap<u32, LetOwnerInfo>,
+    /// SVELTE-4-COMPAT: start offsets of the components in a slot
+    /// position of a parent component — see
+    /// [`crate::svelte4::slot_position`].
+    pub(crate) components_in_slot_position: std::collections::HashSet<u32>,
 }
 
 /// The component whose slot a set of `let:` directives reads — see

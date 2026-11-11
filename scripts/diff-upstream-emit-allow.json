@@ -10,11 +10,11 @@
       "reason": "Same rewrite, different stage: like svelte2tsx's rewriteExternalImports, we rewrite a `../` specifier that leaves the workspace so it resolves from the overlay's directory, and leave every other relative specifier to the overlay tsconfig's `rootDirs`. We do it when the overlay is written (`rewrite_external_imports` in crates/typecheck/src/path_utils.rs), after the point where `--emit-ts` prints, so the snapshot shows the specifier as written."
     },
     {
-      "status": "bug",
+      "status": "intended",
       "sample": "htmlx2jsx/component-slot-attribute-as-prop.v5",
       "kind": "component",
-      "reason": "`slot=\"x\"` on a component: upstream drops it only when the component's parent in the template is another component (Attribute.ts, `element.parent instanceof InlineComponent`); inside a `{#snippet}` it is passed as a prop. We drop it everywhere.",
-      "title": "slot= on a component inside a snippet"
+      "upstream": "$$_egdaBnottuB0C",
+      "reason": "Same code, unnormalised names: the components inside the `{#snippet}` prop are part of the outer component's text, and there upstream's locals `$$_egdaBnottuB0C` / `$$_tnenopmoC0` keep their names (the normaliser renames only constructor locals ending in `C<n>C`), and upstream leaves the closing tag's name `Component` as a bare expression statement. Neither changes a type; the `slot` prop and the named-slot destructure match."
     }
   ]
 }

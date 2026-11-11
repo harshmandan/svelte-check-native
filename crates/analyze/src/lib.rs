@@ -51,6 +51,8 @@ pub mod runes;
 pub mod slot_attr_rewrite;
 pub mod snippet_globals;
 pub mod store;
+// SVELTE-4-COMPAT: legacy-slot helpers, removable as a unit.
+mod svelte4;
 pub mod template_refs;
 pub mod template_scope;
 pub mod void_refs;

@@ -11,7 +11,7 @@ function $$render_e40e2c10() {
                     badge: () => { async () => {
                         {
                             const __svn_C_28 = __svn_ensure_component(ButtonBadge);
-                            new __svn_C_28({ target: __svn_any(), props: {} });
+                            new __svn_C_28({ target: __svn_any(), props: {"slot": "badge"} });
                         }
                         {
                             const __svn_C_4d = __svn_ensure_component(Component);

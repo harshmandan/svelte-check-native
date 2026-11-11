@@ -38,10 +38,12 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
     } else {
         crate::nodes::let_directive::enter_element_like(v, s.range.start, &s.attributes);
     }
+    // SVELTE-4-COMPAT: whether a text `slot="x"` names a parent slot.
+    let fills_parent_slot = v.components_in_slot_position.contains(&s.range.start);
     match s.kind {
         SvelteElementKind::SelfRef => {
             collect_instantiation_inner(
-                self_root(s.range.start),
+                self_root(s.range.start, fills_parent_slot),
                 &s.attributes,
                 &s.children,
                 s.range,
@@ -81,9 +83,10 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
                     // expression, where upstream's map resolves it to
                     // the character right after it.
                     ctor_anchor: Range::new(end, end + 1),
+                    fills_parent_slot,
                 })
             });
-            let root = this_expr.unwrap_or_else(|| self_root(s.range.start));
+            let root = this_expr.unwrap_or_else(|| self_root(s.range.start, fills_parent_slot));
             // Filter out the `this={…}` directive itself from
             // the prop walk so it isn't surfaced as a regular
             // prop on the synthetic component.
@@ -159,10 +162,11 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
 
 /// Root of a `<svelte:self>` (or a `<svelte:component>` without `this`):
 /// an untyped instance, anchored on the tag name.
-fn self_root(node_start: u32) -> InstantiationRoot {
+fn self_root(node_start: u32, fills_parent_slot: bool) -> InstantiationRoot {
     let start = node_start + 1;
     InstantiationRoot {
         ctor: ComponentCtor::SelfAny,
         ctor_anchor: Range::new(start, start + 1),
+        fills_parent_slot,
     }
 }

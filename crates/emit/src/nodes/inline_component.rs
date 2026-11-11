@@ -86,7 +86,12 @@ pub(crate) fn emit_component_node(
     // walk depth (handled in the parent's loop via
     // `try_emit_slot_let_consumer_open`). Skipping here prevents a
     // double destructure / wrong access path.
-    let has_slot_attr = svn_analyze::literal_attr_value(&c.attributes, "slot", source).is_some();
+    //
+    // Only a component that fills a slot of its parent component reads
+    // its `slot=` that way; anywhere else `slot` is a prop and `let:`
+    // reads the component's own default slot, as in svelte2tsx.
+    let has_slot_attr = inst.is_some_and(|i| i.fills_parent_slot)
+        && svn_analyze::literal_attr_value(&c.attributes, "slot", source).is_some();
     let let_destructures = if has_slot_attr {
         Vec::new()
     } else {

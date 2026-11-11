@@ -189,8 +189,29 @@ pub struct Element {
     pub children: Fragment,
     /// True for self-closing (`<br />`) or void elements (`<br>`, `<img>`).
     pub self_closing: bool,
+    /// Set when the element has no closing tag of its own because HTML
+    /// ends it early: a following open tag it may not contain (`<li>a<li>`)
+    /// or an ancestor's closing tag (`<div><span>a</div>`). `range` then
+    /// stops at the trigger.
+    pub implicit_close: Option<ImplicitClose>,
     /// Range of the full element, including opening and closing tags.
     pub range: Range,
+}
+
+/// How an [`Element`] was implicitly closed. The Svelte parser decides
+/// this as it reads the template, and warns `element_implicitly_closed`
+/// at the same moment, so the parser records both.
+#[derive(Debug, Clone)]
+pub struct ImplicitClose {
+    /// The tag that closed the element, as written in the warning:
+    /// `<li>` for a following open tag, `</ul>` for an ancestor close.
+    pub trigger: SmolStr,
+    /// Source offset of the trigger tag's `<`.
+    pub trigger_start: u32,
+    /// False when the compiler stays quiet: an ancestor's closing tag
+    /// matching the tag that was just closed by a sibling open tag (the
+    /// close was already accounted for by that earlier warning).
+    pub warns: bool,
 }
 
 /// A Svelte component invocation. Tag name starts uppercase or contains `.`.

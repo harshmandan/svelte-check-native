@@ -310,7 +310,7 @@ pub fn walk_parsed(
 
     // element_implicitly_closed — parse-time upstream, so it leads
     // everything the analyze phase produces.
-    crate::rules::implicit_close::scan(source, ctx);
+    crate::rules::implicit_close::report(fragment, ctx);
 
     // store_rune_conflict — upstream fires it from the store-sub
     // synthesis loop, before even the options warnings.

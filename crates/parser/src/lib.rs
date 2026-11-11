@@ -38,9 +38,9 @@ mod ts_check;
 pub use ast::{
     AttrValue, AttrValuePart, Attribute, AwaitBlock, CatchBranch, Comment, Component, Directive,
     DirectiveKind, DirectiveValue, EachAsClause, EachBlock, Element, ElseIfArm, ExpressionAttr,
-    Fragment, IfBlock, Interpolation, InterpolationKind, KeyBlock, Node, PlainAttr, ShorthandAttr,
-    SnippetBlock, SpreadAttr, SvelteElement, SvelteElementKind, Text as TemplateText, ThenBranch,
-    is_component_tag, is_void_element, runes_option,
+    Fragment, IfBlock, ImplicitClose, Interpolation, InterpolationKind, KeyBlock, Node, PlainAttr,
+    ShorthandAttr, SnippetBlock, SpreadAttr, SvelteElement, SvelteElementKind,
+    Text as TemplateText, ThenBranch, is_component_tag, is_void_element, runes_option,
 };
 pub use document::{
     Document, ScriptAttr, ScriptContext, ScriptLang, ScriptSection, StyleSection, Template,

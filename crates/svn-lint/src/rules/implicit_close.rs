@@ -1,532 +1,96 @@
-//! `element_implicitly_closed` — HTML5 auto-close detection.
+//! `element_implicitly_closed` — HTML auto-close of an element whose
+//! closing tag is optional.
 //!
-//! Upstream emits this warning in the parser (`phases/1-parse/state/
-//! element.js:110, 215`) whenever:
-//!   1. a new opening tag is encountered AND the innermost open
-//!      regular-element parent's closing tag is optional by HTML5
-//!      rules per the vendored `closing_tag_omitted(parent, next)`
-//!      table — fires on `parent` with `<next>` and `</parent>`, OR
-//!   2. a closing tag `</NAME>` doesn't match the innermost open
-//!      element; each popped non-matching ancestor fires with
-//!      `</NAME>` and `</ancestor>`.
+//! The Svelte compiler warns from its parser (`phases/1-parse/state/
+//! element.js`) at the moment it ends an element early: a following open
+//! tag the element may not contain (`<li>a<li>`, per the HTML
+//! `closing_tag_omitted` table), or an ancestor's closing tag
+//! (`<div><span>a</div>`). Only a plain element can be closed this way,
+//! and only while it is the innermost open node: a component, a
+//! `svelte:*` element or a block in between keeps the outer element open.
 //!
-//! Our svn-parser errors-out on mismatched closing tags instead of
-//! reproducing upstream's tolerant parse + auto-close pops, so we
-//! can't read this out of the AST. This module walks the source
-//! directly with a minimal tag scanner: attribute-quote aware,
-//! comment-skipping, script/style-raw-content aware, and
-//! mustache-scope-boundary aware (control blocks reset the tag
-//! stack so e.g. an `{#if}` doesn't bridge an auto-close across its
-//! halves).
+//! svn-parser makes the same decision while building the tree and
+//! records it on the element (`Element::implicit_close`), so this rule
+//! only reports what the parser recorded.
 
-use smol_str::SmolStr;
 use svn_core::Range;
+use svn_parser::{Element, Fragment, Node};
 
 use crate::codes::Code;
 use crate::context::LintContext;
-use crate::html5::closing_tag_omitted;
 use crate::messages;
-use crate::rules::util::is_void_element;
 
-struct OpenTag {
-    name: SmolStr,
-    open_start: u32,
-    open_end: u32,
-}
-
-/// Frame in the open-tag stack. `Block` boundaries represent
-/// `{#if}` / `{#each}` / `{#await}` / `{#key}` / `{#snippet}` — an
-/// outer element can't be auto-closed by an inner element across
-/// one, matching upstream's parser stack layering (IfBlock etc.
-/// aren't RegularElement, so `parent.type === 'RegularElement'`
-/// gates the warning).
-enum Frame {
-    Open(OpenTag),
-    Block,
-}
-
-pub fn scan(source: &str, ctx: &mut LintContext<'_>) {
-    let bytes = source.as_bytes();
-    let mut stack: Vec<Frame> = Vec::new();
-    let mut i: usize = 0;
-    let len = bytes.len();
-    // Mirrors upstream's `last_auto_closed_tag`: the name of the tag
-    // most recently auto-closed by a sibling open, plus the stack
-    // depth at that moment. A following explicit `</NAME>` for the
-    // same tag is suppressed (the auto-close already accounted for
-    // it), and the record is reset once we pop back above that depth
-    // so it can't over-suppress a later legitimate close.
-    let mut last_auto_closed: Option<SmolStr> = None;
-    let mut last_auto_closed_depth: usize = 0;
-
-    while i < len {
-        let b = bytes[i];
-        if b == b'<' {
-            // Comment.
-            if bytes.get(i + 1..i + 4) == Some(b"!--") {
-                if let Some(end) = find_bytes(bytes, i + 4, b"-->") {
-                    i = end + 3;
-                } else {
-                    i = len;
-                }
-                continue;
-            }
-            // CDATA.
-            if bytes.get(i + 1..i + 9) == Some(b"![CDATA[") {
-                if let Some(end) = find_bytes(bytes, i + 9, b"]]>") {
-                    i = end + 3;
-                } else {
-                    i = len;
-                }
-                continue;
-            }
-            // Closing tag.
-            if bytes.get(i + 1) == Some(&b'/') {
-                let close_start = i + 2;
-                let (name_end, name) = read_tag_name(bytes, close_start);
-                let mut j = name_end;
-                while j < len && bytes[j].is_ascii_whitespace() {
-                    j += 1;
-                }
-                // Find `>`.
-                let gt = bytes.get(j).copied();
-                if gt != Some(b'>') {
-                    i = name_end;
-                    continue;
-                }
-                i = j + 1;
-                handle_close(
-                    &mut stack,
-                    &name,
-                    i as u32 - 1,
-                    &mut last_auto_closed,
-                    last_auto_closed_depth,
-                    ctx,
-                );
-                continue;
-            }
-            // Opening tag (or malformed `<`).
-            let name_start = i + 1;
-            let (name_end, name) = read_tag_name(bytes, name_start);
-            if name.is_empty() {
-                i += 1;
-                continue;
-            }
-            // Scan past the attribute list to `>` or `/>`.
-            let Some((open_end, self_closing)) = scan_to_tag_close(bytes, name_end) else {
-                i = len;
-                continue;
-            };
-            let open_start = i as u32;
-            // svelte:* tags aren't RegularElements in upstream's
-            // model; they participate in their own layering. For the
-            // auto-close table, only real HTML tag names matter.
-            let is_regular = is_regular_name(&name);
-            let tag_name = name.clone();
-
-            if is_regular {
-                handle_open(
-                    &mut stack,
-                    &tag_name,
-                    &mut last_auto_closed,
-                    &mut last_auto_closed_depth,
-                    ctx,
-                );
-            }
-
-            i = open_end;
-
-            if self_closing {
-                // Don't push.
-            } else if is_regular && is_void_element(&tag_name) {
-                // Void element — don't push.
-            } else if is_regular
-                && (tag_name == "script" || tag_name == "style" || tag_name == "textarea")
-            {
-                // Raw-content element — skip to closing tag.
-                let close_marker = format!("</{tag_name}");
-                if let Some(close_pos) = find_ci_bytes(bytes, i, close_marker.as_bytes()) {
-                    // Scan to the `>` of the close tag.
-                    let mut k = close_pos + close_marker.len();
-                    while k < len && bytes[k].is_ascii_whitespace() {
-                        k += 1;
-                    }
-                    if bytes.get(k) == Some(&b'>') {
-                        i = k + 1;
-                    } else {
-                        i = close_pos;
-                    }
-                } else {
-                    i = len;
-                }
-            } else if is_regular {
-                stack.push(Frame::Open(OpenTag {
-                    name: tag_name,
-                    open_start,
-                    open_end: open_end as u32,
-                }));
-            }
+pub fn report(fragment: &Fragment, ctx: &mut LintContext<'_>) {
+    let mut closed: Vec<&Element> = Vec::new();
+    collect(fragment, &mut closed);
+    // The compiler warns as it meets each trigger, in source order. One
+    // closing tag can end several elements; it pops the innermost first,
+    // which is the one that starts last.
+    closed.sort_by_key(|e| {
+        let trigger = e.implicit_close.as_ref().map_or(0, |c| c.trigger_start);
+        (trigger, std::cmp::Reverse(e.range.start))
+    });
+    for element in closed {
+        let Some(close) = &element.implicit_close else {
             continue;
-        }
-        if b == b'{' {
-            // Mustache — skip balanced, respecting string/template
-            // literals so braces inside strings don't confuse the
-            // counter. Also track control-block boundaries.
-            let tag = scan_mustache(bytes, i);
-            match tag.kind {
-                MustacheKind::BlockOpen => {
-                    stack.push(Frame::Block);
-                }
-                MustacheKind::BlockClose => {
-                    // Pop everything up to and including the matching
-                    // Frame::Block marker. Any Open frames above that
-                    // mark as implicitly closed by the block boundary
-                    // itself — but upstream doesn't fire here, so we
-                    // just pop silently.
-                    while let Some(f) = stack.pop() {
-                        if matches!(f, Frame::Block) {
-                            break;
-                        }
-                    }
-                }
-                MustacheKind::BlockMid => {
-                    // `{:else}` / `{:catch}` / `{:then}` — reset
-                    // element stack *within* the current block
-                    // frame without popping the block itself.
-                    let mut popped = Vec::new();
-                    while let Some(f) = stack.pop() {
-                        if matches!(f, Frame::Block) {
-                            popped.push(f);
-                            break;
-                        }
-                    }
-                    // Put the Block back.
-                    if popped.pop().is_some() {
-                        stack.push(Frame::Block);
-                    }
-                }
-                MustacheKind::Other => {}
-            }
-            i = tag.end;
-            continue;
-        }
-        i += 1;
+        };
+        let message =
+            messages::element_implicitly_closed(&close.trigger, &format!("</{}>", element.name));
+        // The compiler's range ends at the element's first child, or at
+        // the trigger when it has none.
+        let end = element
+            .children
+            .nodes
+            .first()
+            .map_or(close.trigger_start, |n| n.range().start);
+        ctx.emit(
+            Code::element_implicitly_closed,
+            message,
+            Range::new(element.range.start, end),
+        );
     }
 }
 
-struct MustacheTag {
-    end: usize,
-    kind: MustacheKind,
-}
-
-enum MustacheKind {
-    BlockOpen,
-    BlockMid,
-    BlockClose,
-    Other,
-}
-
-fn scan_mustache(bytes: &[u8], start: usize) -> MustacheTag {
-    // Detect block open `{#` / mid `{:` / close `{/`.
-    let kind = match bytes.get(start + 1).copied() {
-        Some(b'#') => MustacheKind::BlockOpen,
-        Some(b':') => MustacheKind::BlockMid,
-        Some(b'/') => MustacheKind::BlockClose,
-        _ => MustacheKind::Other,
-    };
-    let end = find_mustache_end(bytes, start);
-    MustacheTag { end, kind }
-}
-
-fn find_mustache_end(bytes: &[u8], start: usize) -> usize {
-    let len = bytes.len();
-    let mut i = start + 1;
-    let mut depth = 1usize;
-    while i < len {
-        let b = bytes[i];
-        match b {
-            b'\\' if i + 1 < len => {
-                i += 2;
-                continue;
-            }
-            b'"' | b'\'' => {
-                i = skip_js_string(bytes, i, b);
-                continue;
-            }
-            b'`' => {
-                i = skip_js_template(bytes, i);
-                continue;
-            }
-            b'/' if bytes.get(i + 1) == Some(&b'/') => {
-                // Line comment.
-                i += 2;
-                while i < len && bytes[i] != b'\n' {
-                    i += 1;
+fn collect<'a>(fragment: &'a Fragment, out: &mut Vec<&'a Element>) {
+    for node in &fragment.nodes {
+        match node {
+            Node::Text(_) | Node::Interpolation(_) | Node::Comment(_) => {}
+            Node::Element(e) => {
+                if e.implicit_close.as_ref().is_some_and(|c| c.warns) {
+                    out.push(e);
                 }
-                continue;
+                collect(&e.children, out);
             }
-            b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                i += 2;
-                while i + 1 < len && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                    i += 1;
+            Node::Component(c) => collect(&c.children, out),
+            Node::SvelteElement(s) => collect(&s.children, out),
+            Node::IfBlock(b) => {
+                collect(&b.consequent, out);
+                for arm in &b.elseif_arms {
+                    collect(&arm.body, out);
                 }
-                i = (i + 2).min(len);
-                continue;
-            }
-            b'{' => {
-                depth += 1;
-            }
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return i + 1;
+                if let Some(alt) = &b.alternate {
+                    collect(alt, out);
                 }
             }
-            _ => {}
-        }
-        i += 1;
-    }
-    len
-}
-
-fn skip_js_string(bytes: &[u8], start: usize, quote: u8) -> usize {
-    let len = bytes.len();
-    let mut i = start + 1;
-    while i < len {
-        match bytes[i] {
-            b'\\' if i + 1 < len => i += 2,
-            c if c == quote => return i + 1,
-            _ => i += 1,
-        }
-    }
-    len
-}
-
-fn skip_js_template(bytes: &[u8], start: usize) -> usize {
-    let len = bytes.len();
-    let mut i = start + 1;
-    while i < len {
-        match bytes[i] {
-            b'\\' if i + 1 < len => i += 2,
-            b'`' => return i + 1,
-            b'$' if bytes.get(i + 1) == Some(&b'{') => {
-                // Template expression — balanced braces.
-                let mut depth = 1usize;
-                i += 2;
-                while i < len && depth > 0 {
-                    match bytes[i] {
-                        b'\\' if i + 1 < len => {
-                            i += 2;
-                            continue;
-                        }
-                        b'"' | b'\'' => {
-                            i = skip_js_string(bytes, i, bytes[i]);
-                            continue;
-                        }
-                        b'`' => {
-                            i = skip_js_template(bytes, i);
-                            continue;
-                        }
-                        b'{' => depth += 1,
-                        b'}' => depth -= 1,
-                        _ => {}
-                    }
-                    i += 1;
+            Node::EachBlock(b) => {
+                collect(&b.body, out);
+                if let Some(alt) = &b.alternate {
+                    collect(alt, out);
                 }
             }
-            _ => i += 1,
-        }
-    }
-    len
-}
-
-fn read_tag_name(bytes: &[u8], start: usize) -> (usize, SmolStr) {
-    let len = bytes.len();
-    let mut j = start;
-    if j >= len || !is_tag_name_start(bytes[j]) {
-        return (j, SmolStr::default());
-    }
-    j += 1;
-    while j < len && is_tag_name_cont(bytes[j]) {
-        j += 1;
-    }
-    let name = std::str::from_utf8(&bytes[start..j]).unwrap_or("");
-    (j, SmolStr::from(name))
-}
-
-fn is_tag_name_start(b: u8) -> bool {
-    b.is_ascii_alphabetic()
-}
-fn is_tag_name_cont(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b':' | b'-' | b'_' | b'.')
-}
-fn is_lowercase_start(name: &str) -> bool {
-    name.chars().next().is_some_and(|c| c.is_ascii_lowercase())
-}
-fn is_regular_name(name: &str) -> bool {
-    !name.is_empty()
-        && !name.starts_with("svelte:")
-        && !name.contains('-')
-        && is_lowercase_start(name)
-}
-
-/// Scan from the position right after the tag name to the `>` that
-/// ends the opening tag. Returns `(end_of_open_tag, self_closing)`.
-/// `end_of_open_tag` is one past the `>`.
-fn scan_to_tag_close(bytes: &[u8], start: usize) -> Option<(usize, bool)> {
-    let len = bytes.len();
-    let mut i = start;
-    while i < len {
-        match bytes[i] {
-            b'>' => return Some((i + 1, false)),
-            b'/' if bytes.get(i + 1) == Some(&b'>') => return Some((i + 2, true)),
-            b'"' => i = skip_attr_quote(bytes, i, b'"'),
-            b'\'' => i = skip_attr_quote(bytes, i, b'\''),
-            b'{' => i = find_mustache_end(bytes, i),
-            _ => i += 1,
-        }
-    }
-    None
-}
-
-fn skip_attr_quote(bytes: &[u8], start: usize, quote: u8) -> usize {
-    let len = bytes.len();
-    let mut i = start + 1;
-    while i < len {
-        let b = bytes[i];
-        if b == b'{' {
-            i = find_mustache_end(bytes, i);
-            continue;
-        }
-        if b == quote {
-            return i + 1;
-        }
-        i += 1;
-    }
-    len
-}
-
-fn find_bytes(bytes: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || from >= bytes.len() {
-        return None;
-    }
-    bytes[from..]
-        .windows(needle.len())
-        .position(|w| w == needle)
-        .map(|p| p + from)
-}
-
-fn find_ci_bytes(bytes: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || from >= bytes.len() {
-        return None;
-    }
-    let needle_lower: Vec<u8> = needle.iter().map(|b| b.to_ascii_lowercase()).collect();
-    let hay = &bytes[from..];
-    for i in 0..=hay.len().saturating_sub(needle.len()) {
-        if hay[i..i + needle.len()]
-            .iter()
-            .map(|b| b.to_ascii_lowercase())
-            .eq(needle_lower.iter().copied())
-        {
-            return Some(i + from);
-        }
-    }
-    None
-}
-
-/// On an opening tag: if the innermost open regular-element parent's
-/// `closing_tag_omitted(parent, this)` fires, emit the warning and
-/// pop that parent.
-fn handle_open(
-    stack: &mut Vec<Frame>,
-    name: &str,
-    last_auto_closed: &mut Option<SmolStr>,
-    last_auto_closed_depth: &mut usize,
-    ctx: &mut LintContext<'_>,
-) {
-    if let Some(Frame::Open(parent)) = stack.last() {
-        if closing_tag_omitted(parent.name.as_str(), Some(name)) {
-            let parent_name = parent.name.clone();
-            let full = messages::element_implicitly_closed(
-                &format!("<{name}>"),
-                &format!("</{parent_name}>"),
-            );
-            let range = Range::new(parent.open_start, parent.open_end);
-            ctx.emit(Code::element_implicitly_closed, full, range);
-            stack.pop();
-            // Record the auto-close so a following explicit `</NAME>`
-            // for the same tag is suppressed instead of firing again.
-            *last_auto_closed = Some(parent_name);
-            *last_auto_closed_depth = stack.len();
-        }
-    }
-}
-
-/// On a closing `</NAME>`: walk up the open-stack; each popped
-/// non-matching regular element fires the warning keyed on
-/// `</NAME>`, until we find the matching element (or hit a Block
-/// boundary / empty stack).
-///
-/// Guards — both are necessary to avoid the FP class we saw on
-///
-///   1. NAME must be a regular element name. A Component / custom
-///      element / `svelte:*` close is tracked by upstream's own
-///      parse-stack; we don't model those frames, so if we treat
-///      `</Foo>` as if it were a regular close we walk up and fire
-///      on innocent regular ancestors that are actually closed
-///      correctly further along.
-///   2. There must be a matching regular open within the current
-///      block frame. Without a match the close is invalid and
-///      upstream fires `element_invalid_closing_tag` (an error —
-///      out of scope for this warning). Firing
-///      `element_implicitly_closed` on ancestors in that case is
-///      a false positive for the same reason as (1).
-fn handle_close(
-    stack: &mut Vec<Frame>,
-    name: &str,
-    _close_end: u32,
-    last_auto_closed: &mut Option<SmolStr>,
-    last_auto_closed_depth: usize,
-    ctx: &mut LintContext<'_>,
-) {
-    if !is_regular_name(name) {
-        return;
-    }
-    let has_match = stack
-        .iter()
-        .rev()
-        .take_while(|f| !matches!(f, Frame::Block))
-        .any(|f| matches!(f, Frame::Open(parent) if parent.name.as_str() == name));
-    if !has_match {
-        return;
-    }
-    // If this close matches the tag we just auto-closed via a sibling
-    // open, the warning was already emitted there — pop, but stay quiet.
-    let suppress = last_auto_closed.as_deref() == Some(name);
-    while let Some(frame) = stack.pop() {
-        match frame {
-            Frame::Block => {
-                stack.push(Frame::Block);
-                break;
-            }
-            Frame::Open(parent) => {
-                if parent.name.as_str() == name {
-                    break;
+            Node::AwaitBlock(b) => {
+                if let Some(pending) = &b.pending {
+                    collect(pending, out);
                 }
-                if !suppress {
-                    let full = messages::element_implicitly_closed(
-                        &format!("</{name}>"),
-                        &format!("</{}>", parent.name),
-                    );
-                    let range = Range::new(parent.open_start, parent.open_end);
-                    ctx.emit(Code::element_implicitly_closed, full, range);
+                if let Some(then) = &b.then_branch {
+                    collect(&then.body, out);
+                }
+                if let Some(catch) = &b.catch_branch {
+                    collect(&catch.body, out);
                 }
             }
+            Node::KeyBlock(b) => collect(&b.body, out),
+            Node::SnippetBlock(b) => collect(&b.body, out),
         }
-    }
-    // Once we've popped back above the depth where the auto-close
-    // happened, the record is stale and must not suppress later closes.
-    if stack.len() < last_auto_closed_depth {
-        *last_auto_closed = None;
     }
 }

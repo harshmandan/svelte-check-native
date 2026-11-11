@@ -8,7 +8,7 @@
 //! element/svelte-element visitors. `script_rules` exposes
 //! `visit_document(doc, ctx)`; `script_ast_rules` hooks into the
 //! scope builder's shared script walk and exposes `flush(events,
-//! ctx)`; `implicit_close` exposes `scan(source, ctx)`, all driven
+//! ctx)`; `implicit_close` exposes `report(fragment, ctx)`, all driven
 //! from `walk::walk`. `binding_rules::visit(ctx)` also runs from
 //! `walk::walk`.
 

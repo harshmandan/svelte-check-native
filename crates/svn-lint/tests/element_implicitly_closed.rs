@@ -1,28 +1,18 @@
 //! Focused tests for `element_implicitly_closed`.
 //!
-//! The rule lives in `rules/implicit_close.rs` and is a source-level
-//! tag scanner (it doesn't go through the AST), because upstream emits
-//! this warning during the *parse* phase and our own parser hard-errors
-//! on the same inputs instead of recovering. The scanner tracks an
-//! open-tag stack and fires in two shapes:
+//! The parser decides when HTML ends an element early and records it on
+//! the element; `rules/implicit_close.rs` reports what it recorded. Two
+//! shapes fire:
 //!
-//!   1. opening `<X>` while the innermost open regular-element parent
-//!      has an HTML5 closing-tag-omitted rule against `<X>` (e.g.
-//!      `<p><div>` auto-closes the `<p>`).
-//!   2. closing `</X>` where `X` is a regular element and one or more
-//!      non-matching regular ancestors sit between the stack top and
-//!      the matching open.
+//!   1. opening `<X>` while the innermost open node is a plain element
+//!      whose closing tag HTML lets `<X>` omit (`<p><div>` closes the
+//!      `<p>`).
+//!   2. closing `</X>` for an open ancestor while plain elements are
+//!      still open inside it (`<div><span>a</div>`).
 //!
-//! **Shape (2) must never fire when `X` is a Component, a custom
-//! element, a `svelte:*` tag, or a name that isn't on the stack at
-//! all** — upstream's parse-stack tracks those separately, and
-//! "</Foo>" encountered with only regular-element ancestors open is
-//! either a clean component close (upstream pops its own Component
-//! frame) or an invalid-close *error* (different diagnostic code,
-//! not ours). Treating those closes as regular-close would bogusly
-//! unwind the regular-element stack and fire on ancestors that are
-//! actually well-formed — a huge false-positive class on any
-//! workspace that nests DOM elements inside Components.
+//! A component, a `svelte:*` element or a block is never closed this
+//! way, and while one is the innermost open node nothing outside it can
+//! be closed either.
 
 use std::path::Path;
 
@@ -139,4 +129,60 @@ fn span_auto_closed_by_div_close_still_fires() {
         1,
         "expected one warning for span auto-closed by </div>, got: {warnings:?}"
     );
+}
+
+/// A component is its own parent frame: an element opened among its
+/// children never auto-closes an element outside the component. The
+/// compiler only auto-closes when the *innermost* open node is a
+/// regular element, and here that node is `<Wrapper>`.
+#[test]
+fn p_inside_component_inside_p_does_not_fire() {
+    let src = "<p>\n\tBefore\n\t<Wrapper>\n\t\t<p>Inside the component</p>\n\t</Wrapper>\n\tafter.\n</p>\n";
+    let warnings = implicit_close_warnings(src);
+    assert!(
+        warnings.is_empty(),
+        "expected no warnings, got: {warnings:?}"
+    );
+}
+
+/// Same for a `svelte:*` element between the two.
+#[test]
+fn div_inside_svelte_boundary_inside_p_does_not_fire() {
+    let src = "<p>\n<svelte:boundary>\n<div>x</div>\n</svelte:boundary>\n</p>\n";
+    let warnings = implicit_close_warnings(src);
+    assert!(
+        warnings.is_empty(),
+        "expected no warnings, got: {warnings:?}"
+    );
+}
+
+/// A custom element is a regular element with no omittable closing
+/// tag, so it shields the outer `<p>` the same way.
+#[test]
+fn p_inside_custom_element_inside_p_does_not_fire() {
+    let src = "<p>\n<my-el>\n<p>x</p>\n</my-el>\n</p>\n";
+    let warnings = implicit_close_warnings(src);
+    assert!(
+        warnings.is_empty(),
+        "expected no warnings, got: {warnings:?}"
+    );
+}
+
+/// The warning spans from the closed element's start to its first
+/// child (or to the trigger when it has none), as the compiler reports.
+#[test]
+fn warning_range_runs_to_first_child() {
+    let src = "<ul><li>a<li>b</ul>";
+    let ranges: Vec<_> = lint(src)
+        .into_iter()
+        .filter(|w| w.code == svn_lint::Code::element_implicitly_closed)
+        .map(|w| (w.range.start, w.range.end, w.message))
+        .collect();
+    assert_eq!(ranges.len(), 2, "got: {ranges:?}");
+    // First `<li>` closed by the second `<li>`: ends at its text child.
+    assert_eq!((ranges[0].0, ranges[0].1), (4, 8));
+    assert!(ranges[0].2.contains("`<li>`"), "{}", ranges[0].2);
+    // Second `<li>` closed by `</ul>`.
+    assert_eq!((ranges[1].0, ranges[1].1), (9, 13));
+    assert!(ranges[1].2.contains("`</ul>`"), "{}", ranges[1].2);
 }

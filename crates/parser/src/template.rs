@@ -19,7 +19,7 @@ use smol_str::SmolStr;
 use svn_core::Range;
 
 use crate::ast::{
-    CatchBranch, Comment, Component, Element, ElseIfArm, Fragment, Interpolation,
+    CatchBranch, Comment, Component, Element, ElseIfArm, Fragment, ImplicitClose, Interpolation,
     InterpolationKind, Node, SvelteElement, SvelteElementKind, Text, ThenBranch, is_component_tag,
     is_void_element,
 };
@@ -159,8 +159,20 @@ struct TemplateParser<'src, 'col> {
     /// an ancestor's closing tag). Only ever set while a `stop_element` is
     /// active, so only [`Self::parse_children_until`] consumes it: no
     /// closing tag is expected and no error is recorded — upstream emits
-    /// just the `element_implicitly_closed` warning (svn-lint's concern).
-    pending_auto_close: bool,
+    /// just the `element_implicitly_closed` warning, which the element
+    /// carries for svn-lint to report.
+    pending_auto_close: Option<ImplicitClose>,
+    /// Upstream's `parser.last_auto_closed_tag`: the element most recently
+    /// closed by a following open tag, with the open-frame depth left
+    /// after it was popped. An ancestor's closing tag with that same name
+    /// pops further elements without warning. Cleared once a closing tag
+    /// pops the stack below that depth.
+    last_auto_closed: Option<(SmolStr, usize)>,
+    /// Source offset of an open tag that has just closed the element it
+    /// appeared in. The compiler tests only the innermost open element
+    /// against a new tag, so once that element is closed the tag opens
+    /// inside the next frame without being tested again.
+    auto_close_trigger: Option<u32>,
     /// Document-mode section collector. `Some` only for the whole-source
     /// walk driven by [`scan_document_sections`]: a `<script>`/`<style>`
     /// open tag met while `open_elements` is empty is handed to the
@@ -181,7 +193,9 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             errors: Vec::new(),
             last_terminator_range: Range::new(range.start, range.start),
             open_elements: Vec::new(),
-            pending_auto_close: false,
+            pending_auto_close: None,
+            last_auto_closed: None,
+            auto_close_trigger: None,
             sections: None,
         }
     }
@@ -423,7 +437,16 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                     // unconsumed — the matching ancestor's own frame
                     // consumes it.
                     if self.closing_tag_matches_open_ancestor() {
-                        self.pending_auto_close = true;
+                        let name = self.peek_closing_tag_name().unwrap_or_default();
+                        let warns = self
+                            .last_auto_closed
+                            .as_ref()
+                            .is_none_or(|(tag, _)| tag.as_str() != name);
+                        self.pending_auto_close = Some(ImplicitClose {
+                            trigger: SmolStr::from(format!("</{name}>")),
+                            trigger_start: self.scanner.pos(),
+                            warns,
+                        });
                         return (nodes, None);
                     }
                 }
@@ -463,11 +486,25 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                 // the new element). Left unconsumed — it parses as the
                 // parent's next child.
                 if let Some(stop) = stop_element
+                    && self.auto_close_trigger != Some(self.scanner.pos())
                     && self.open_tag_implicitly_closes(stop)
                 {
-                    self.pending_auto_close = true;
+                    let next = self.peek_open_tag_name().unwrap_or_default();
+                    self.pending_auto_close = Some(ImplicitClose {
+                        trigger: SmolStr::from(format!("<{next}>")),
+                        trigger_start: self.scanner.pos(),
+                        warns: true,
+                    });
+                    // The current element's frame is still on the stack;
+                    // upstream records the depth after popping it.
+                    self.last_auto_closed = Some((
+                        SmolStr::from(stop),
+                        self.open_elements.len().saturating_sub(1),
+                    ));
+                    self.auto_close_trigger = Some(self.scanner.pos());
                     return (nodes, None);
                 }
+                self.auto_close_trigger = None;
                 if let Some(node) = self.parse_element_or_component() {
                     nodes.push(node);
                 }
@@ -962,7 +999,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             let children = if self_closing {
                 Fragment::default()
             } else {
-                self.parse_children_until(&name, tag_start, open_tag_end)?
+                self.parse_children_until(&name, tag_start, open_tag_end)?.0
             };
             return Some(Node::SvelteElement(Box::new(SvelteElement {
                 kind,
@@ -977,7 +1014,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             let children = if self_closing {
                 Fragment::default()
             } else {
-                self.parse_children_until(&name, tag_start, open_tag_end)?
+                self.parse_children_until(&name, tag_start, open_tag_end)?.0
             };
             return Some(Node::Component(Box::new(Component {
                 name,
@@ -990,6 +1027,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
 
         // Normal HTML element.
         let is_void = is_void_element(&name);
+        let mut implicit_close = None;
         let children = if self_closing || is_void {
             Fragment::default()
         } else if name == "textarea" {
@@ -1009,7 +1047,9 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             // NOT raw-text — Svelte interpolates mustaches inside it.
             self.parse_raw_text_children_until(&name, tag_start, open_tag_end)?
         } else {
-            self.parse_children_until(&name, tag_start, open_tag_end)?
+            let (children, closed) = self.parse_children_until(&name, tag_start, open_tag_end)?;
+            implicit_close = closed;
+            children
         };
 
         Some(Node::Element(Box::new(Element {
@@ -1017,6 +1057,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             attributes,
             children,
             self_closing: self_closing || is_void,
+            implicit_close,
             range: Range::new(tag_start, self.scanner.pos()),
         })))
     }
@@ -1062,12 +1103,15 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         }
     }
 
+    /// Parse an element's children up to its closing tag. The second
+    /// value is set when HTML closed the element early instead (only a
+    /// plain element can be; see [`OpenFrame`]).
     fn parse_children_until(
         &mut self,
         tag: &str,
         open_start: u32,
         open_end: u32,
-    ) -> Option<Fragment> {
+    ) -> Option<(Fragment, Option<ImplicitClose>)> {
         let frame = if is_component_tag(tag) || tag.starts_with("svelte:") {
             OpenFrame::Component(SmolStr::from(tag))
         } else {
@@ -1076,6 +1120,16 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         self.open_elements.push(frame);
         let result = self.parse_children_until_inner(tag, open_start, open_end);
         self.open_elements.pop();
+        // Upstream drops `last_auto_closed_tag` after a closing tag pops
+        // the stack below the depth it was recorded at.
+        if let Some((_, None)) = &result
+            && self
+                .last_auto_closed
+                .as_ref()
+                .is_some_and(|(_, depth)| self.open_elements.len() < *depth)
+        {
+            self.last_auto_closed = None;
+        }
         result
     }
 
@@ -1084,7 +1138,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         tag: &str,
         open_start: u32,
         open_end: u32,
-    ) -> Option<Fragment> {
+    ) -> Option<(Fragment, Option<ImplicitClose>)> {
         let children_start = self.scanner.pos();
         // A terminator surfacing here is a stray `{/...}` / `{:...}` inside
         // an element with no open block (e.g. `<div>{:else}</div>`) —
@@ -1106,12 +1160,14 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         // closing tag of our own to consume and nothing to report — the
         // element ends at the unconsumed trigger, exactly where upstream
         // sets `parent.end = start`.
-        if self.pending_auto_close {
-            self.pending_auto_close = false;
-            return Some(Fragment {
-                nodes: children,
-                range: Range::new(children_start, children_end),
-            });
+        if let Some(closed) = self.pending_auto_close.take() {
+            return Some((
+                Fragment {
+                    nodes: children,
+                    range: Range::new(children_start, children_end),
+                },
+                Some(closed),
+            ));
         }
 
         // Consume the closing tag if present.
@@ -1143,10 +1199,13 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             });
         }
 
-        Some(Fragment {
-            nodes: children,
-            range: Range::new(children_start, children_end),
-        })
+        Some((
+            Fragment {
+                nodes: children,
+                range: Range::new(children_start, children_end),
+            },
+            None,
+        ))
     }
 
     /// Textarea children: a sequence of text runs and `{...}`
@@ -1734,6 +1793,37 @@ mod tests {
             panic!("expected p first");
         };
         assert_eq!(p.range.slice(src), "<p>a");
+    }
+
+    #[test]
+    fn open_tag_closes_at_most_one_element() {
+        // The compiler checks only the innermost open element against the
+        // new tag: `<td>` closes, then the new `<tr>` nests inside the old
+        // `<tr>` (an invalid placement the compiler then reports).
+        let src = "<table><tr><td>a<tr><td>b</table>";
+        let (frag, _) = parse_template(src, Range::new(0, src.len() as u32));
+        let [Node::Element(table)] = frag.nodes.as_slice() else {
+            panic!("expected one table, got {:?}", frag.nodes);
+        };
+        let [Node::Element(tr)] = table.children.nodes.as_slice() else {
+            panic!("expected one tr in table, got {:?}", table.children.nodes);
+        };
+        let nested: Vec<&str> = tr
+            .children
+            .nodes
+            .iter()
+            .filter_map(|n| match n {
+                Node::Element(e) => Some(e.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(nested, ["td", "tr"], "{:?}", tr.children.nodes);
+        let Node::Element(td) = &tr.children.nodes[0] else {
+            panic!("expected td first");
+        };
+        let close = td.implicit_close.as_ref().expect("td closed by <tr>");
+        assert_eq!(close.trigger, "<tr>");
+        assert!(close.warns);
     }
 
     #[test]

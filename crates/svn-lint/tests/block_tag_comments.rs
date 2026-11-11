@@ -7,7 +7,8 @@
 //! fine; one written where that reader looks for the next token is an
 //! error, reported where the comment starts. Each case below is what
 //! svelte 5.57.2's `parse()` reports for the template, with the
-//! component in JavaScript and in TypeScript.
+//! component in JavaScript and in TypeScript. A type annotation on a
+//! pattern is read the same way, and fails without TypeScript.
 
 use std::path::Path;
 use svn_lint::CompatFeatures;
@@ -457,6 +458,78 @@ const CASES: &[(bool, &str, Expected)] = &[
     (false, "{#each [] as  q , i  ( q )  }{/each}", None),
     (false, "{#if a}{:else if a /*c*/}{/if}", None),
     (
+        false,
+        "{#each [] as q: string}{/each}",
+        Some((
+            "expected_token",
+            "Expected token }\nhttps://svelte.dev/e/expected_token",
+            41,
+        )),
+    ),
+    (
+        false,
+        "{#each [] as {a, b}: T}{/each}",
+        Some((
+            "expected_token",
+            "Expected token }\nhttps://svelte.dev/e/expected_token",
+            47,
+        )),
+    ),
+    (
+        false,
+        "{#each [] as q: string /*c*/}{/each}",
+        Some((
+            "expected_token",
+            "Expected token }\nhttps://svelte.dev/e/expected_token",
+            41,
+        )),
+    ),
+    (
+        false,
+        "{#each [] as {a}: T /*c*/}{/each}",
+        Some((
+            "expected_token",
+            "Expected token }\nhttps://svelte.dev/e/expected_token",
+            43,
+        )),
+    ),
+    (
+        false,
+        "{#each [] as q:T, i (q) /*c*/}{/each}",
+        Some((
+            "expected_token",
+            "Expected token }\nhttps://svelte.dev/e/expected_token",
+            41,
+        )),
+    ),
+    (
+        false,
+        "{#await p}{:then {a}: T /*c*/}{/await}",
+        Some((
+            "expected_token",
+            "Expected token }\nhttps://svelte.dev/e/expected_token",
+            47,
+        )),
+    ),
+    (
+        false,
+        "{#if 1}{@const a: T /*c*/ = 1}{/if}",
+        Some((
+            "expected_token",
+            "Expected token =\nhttps://svelte.dev/e/expected_token",
+            43,
+        )),
+    ),
+    (
+        false,
+        "{#each [] as q: /*c*/ string}{/each}",
+        Some((
+            "expected_token",
+            "Expected token }\nhttps://svelte.dev/e/expected_token",
+            41,
+        )),
+    ),
+    (
         true,
         "{#each [] as q /*c*/}{/each}",
         Some((
@@ -895,6 +968,8 @@ const CASES: &[(bool, &str, Expected)] = &[
     (true, "{@debug/*c*/ a}", None),
     (true, "{#each [] as  q , i  ( q )  }{/each}", None),
     (true, "{#if a}{:else if a /*c*/}{/if}", None),
+    (true, "{#each [] as q: string}{/each}", None),
+    (true, "{#each [] as {a, b}: T}{/each}", None),
     (
         true,
         "{#each [] as q: string /*c*/}{/each}",

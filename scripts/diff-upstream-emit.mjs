@@ -201,7 +201,11 @@ function normalize(text) {
         .replace(/__sveltets_2_([A-Za-z0-9_]+)/g, (_, n) => canonHelper(n))
         .replace(/__svn_C_[A-Za-z0-9_]+/g, '$C')
         .replace(/__svn_inst_[A-Za-z0-9_]+/g, '$I')
-        .replace(/\$\$_[A-Za-z0-9_]*C\d+C\b/g, '$C')
+        // svelte2tsx names a component's constructor local after the
+        // reversed tag name plus its depth (`$$_tnenopmoC0C`) and the
+        // instance the same without the trailing `C` (`$$_tnenopmoC0`).
+        .replace(/\$\$_[A-Za-z0-9_]*?\d+C\b/g, '$C')
+        .replace(/\$\$_[A-Za-z][A-Za-z0-9_]*?\d+\b/g, '$I')
         .replace(/__svn_Render_[0-9a-f]+|__sveltets_Render/g, '$R')
         .replace(/\$\$render_[0-9a-f]+/g, '$$$$render')
         .replace(/__svn_([A-Za-z0-9_]+)/g, (_, n) => canonHelper(n))
@@ -213,7 +217,11 @@ function normalize(text) {
         // upstream `__sveltets_2_any(0)`; both are `any`.
         .replace(/H\.snippetreturn\(\)/g, 'H.any(0)')
         .replace(/=>\{returnH\.any\(0\);?\}/g, '=>H.any(0)')
-        .replace(/;\}/g, '}');
+        .replace(/;\}/g, '}')
+        // svelte2tsx ends a component's block with the bare tag name
+        // (`… } Component}`), a reference for editor navigation with no
+        // effect on types.
+        .replace(/\}[A-Za-z_$][\w$.]*\}/g, '}}');
 }
 
 /**

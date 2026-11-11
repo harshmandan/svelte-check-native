@@ -9,11 +9,6 @@
 //! `(key)` and the closing `}`. In TypeScript, acorn reads `as` as a
 //! cast, so nearly every header goes through those steps. Each case
 //! below is what svelte 5.57.2's `parse()` reports for the template.
-//!
-//! Not covered: a pattern whose brackets do not pair up
-//! (`{#each [] as {a]}`). Our parser finds the end of a tag by counting
-//! braces, so it builds no `{#each}` there and reports its own error
-//! instead; the component is rejected either way.
 
 use std::path::Path;
 use svn_lint::CompatFeatures;
@@ -751,6 +746,24 @@ const CASES: &[(bool, &str, Expected)] = &[
     (true, "{#each [] as {a: {b}}}{/each}", None),
     (true, "{#each [] as q: Map<string, number>}{/each}", None),
     (true, "{#each [] as q: (a: string) => void, i}{/each}", None),
+    (
+        false,
+        "{#each [] as {a]}{/each}",
+        Some((
+            "expected_token",
+            "Expected token }\nhttps://svelte.dev/e/expected_token",
+            33,
+        )),
+    ),
+    (
+        true,
+        "{#each [] as {a]}{/each}",
+        Some((
+            "expected_token",
+            "Expected token }\nhttps://svelte.dev/e/expected_token",
+            43,
+        )),
+    ),
 ];
 
 fn source(ts: bool, template: &str) -> String {

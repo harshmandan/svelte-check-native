@@ -2485,6 +2485,47 @@ mod tests {
         assert_eq!(i.expression_range.slice(src), "x");
     }
 
+    /// The `{#each …}` of a component's template, parsed after `script`.
+    fn each_block_after(
+        script: &str,
+        template: &str,
+    ) -> (crate::ast::EachBlock, String, Vec<ParseError>) {
+        let src = format!("{script}{template}");
+        let range = Range::new(script.len() as u32, src.len() as u32);
+        let (frag, errors) = parse_template(&src, range);
+        let Some(Node::EachBlock(b)) = frag.nodes.into_iter().next() else {
+            panic!("expected an EachBlock for {template:?}");
+        };
+        (*b, src, errors)
+    }
+
+    #[test]
+    fn each_tag_ends_where_the_compilers_read_ends() {
+        // The compiler reads the annotation after rewriting `?:` to `:`
+        // and keeps the rewritten text's positions, so its read ends one
+        // character early, on the type's own `}`: that closes the tag.
+        let (b, src, errors) = each_block_after(
+            "<script lang=\"ts\"></script>",
+            "{#each rows as row: { b?: number }, i}x{/each}",
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        let clause = b.as_clause.expect("as-clause");
+        assert_eq!(clause.context_range.map(|r| r.slice(&src)), Some("row"));
+        assert_eq!(clause.index_range, None);
+        let [Node::Text(text)] = b.body.nodes.as_slice() else {
+            panic!("expected one text node, got {:?}", b.body.nodes);
+        };
+        assert_eq!(text.range.slice(&src), ", i}x");
+    }
+
+    #[test]
+    fn each_tag_with_unpaired_brackets_is_still_a_block() {
+        // The compiler throws `expected_token` at the `]`; the block stays
+        // so the error has a place.
+        let (b, src, _) = each_block_after("<script></script>", "{#each [] as {a]}{/each}");
+        assert_eq!(b.expression_range.slice(&src), "[] as {a]");
+    }
+
     #[test]
     fn at_tag_keyword_is_read_by_prefix() {
         // The compiler takes the first of html / debug / const / render

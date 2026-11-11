@@ -1,0 +1,6 @@
+{
+    "errors": [
+        { "file": "input.svelte", "line": 5, "column": 9, "code": 2304 }
+    ],
+    "_note": "The compiler reads an {#each} pattern's annotation from `_ as <type>` after rewriting `?:` to `:`, but keeps using the rewritten text's positions. Each removed `?` moves the end one character earlier, so the reading resumes on the type literal's own `}`, which closes the tag: `, i}` becomes text and `i` is never declared. We found the tag's end by counting braces first, closed it at the real `}` and declared `i` as the index."
+}

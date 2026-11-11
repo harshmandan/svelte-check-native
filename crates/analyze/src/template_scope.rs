@@ -1138,55 +1138,6 @@ struct LetDirectiveScope {
     defaults: Vec<Range>,
 }
 
-/// Parse a binding-pattern source slice (the `as` clause of
-/// `{#each}`, an await branch's `{value}`, or a snippet's
-/// `(p1, p2)` list) and return the bindings it declares plus any
-/// default-value expression ranges, all in ORIGINAL source
-/// coordinates.
-///
-/// Default-value ranges (e.g. the `expr` in `{ a = expr }`) are
-/// emitted alongside the bindings so the caller — typically the
-/// walker — can hand them to `visit_expr` in the PARENT scope
-/// before entering the each/snippet/let-directive child scope. That
-/// matches what the pre-Phase-4 lint walker did inline inside
-/// `declare_each_pattern`'s `AssignmentPattern` arm.
-///
-/// Wrapper: `({trimmed}) => 0`. The `(` adds 1 byte of prefix in
-/// the wrapped string, so the offset that translates oxc spans
-/// back to original source = `range.start + trim_offset - 1`,
-/// where `trim_offset` is the byte distance between `slice.start`
-/// and `trimmed.start` (handles leading whitespace inside the
-/// pattern slice).
-/// Where svelte2tsx's `getEnd` (`htmlxtojsx_v2/utils/node-utils.ts`)
-/// ends an `{#each}` pattern: at the start of its type annotation, so
-/// `item: string` is written as `item` (a `for…of` binding cannot carry
-/// an annotation). Without an annotation, or if the pattern does not
-/// parse, the range's own end.
-pub fn each_pattern_end(source: &str, range: Range) -> u32 {
-    let Some(slice) = source.get(range.start as usize..range.end as usize) else {
-        return range.end;
-    };
-    let lead = (slice.len() - slice.trim_start().len()) as u32;
-    let alloc = oxc_allocator::Allocator::default();
-    let wrapped = format!("({}) => 0", slice.trim());
-    let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
-    use oxc_ast::ast::{Expression, Statement};
-    let annotation_start = match parsed.program.body.first() {
-        Some(Statement::ExpressionStatement(es)) if !parsed.panicked => match &es.expression {
-            Expression::ArrowFunctionExpression(arrow) if arrow.params.items.len() == 1 => arrow
-                .params
-                .items
-                .first()
-                .and_then(|p| p.type_annotation.as_ref())
-                .map(|t| t.span.start),
-            _ => None,
-        },
-        _ => None,
-    };
-    // Wrapper offset N maps to `range.start + lead + N - 1` (the `(`).
-    annotation_start.map_or(range.end, |n| range.start + lead + n - 1)
-}
-
 /// Where svelte2tsx's `getEnd` ends an `{#each}` iterable: an expression
 /// wrapped in `!`, `as T` or `satisfies T` ends at the expression it
 /// wraps (one level), so `maybe!` compares equal to an item named
@@ -1219,6 +1170,25 @@ pub fn each_expression_end(source: &str, range: Range) -> u32 {
     inner_end.map_or(range.end, |n| range.start + lead + n - 1)
 }
 
+/// Parse a binding-pattern source slice (the `as` clause of
+/// `{#each}`, an await branch's `{value}`, or a snippet's
+/// `(p1, p2)` list) and return the bindings it declares plus any
+/// default-value expression ranges, all in ORIGINAL source
+/// coordinates.
+///
+/// Default-value ranges (e.g. the `expr` in `{ a = expr }`) are
+/// emitted alongside the bindings so the caller — typically the
+/// walker — can hand them to `visit_expr` in the PARENT scope
+/// before entering the each/snippet/let-directive child scope. That
+/// matches what the pre-Phase-4 lint walker did inline inside
+/// `declare_each_pattern`'s `AssignmentPattern` arm.
+///
+/// Wrapper: `({trimmed}) => 0`. The `(` adds 1 byte of prefix in
+/// the wrapped string, so the offset that translates oxc spans
+/// back to original source = `range.start + trim_offset - 1`,
+/// where `trim_offset` is the byte distance between `slice.start`
+/// and `trimmed.start` (handles leading whitespace inside the
+/// pattern slice).
 fn collect_pattern_bindings_from_slice(source: &str, range: Range) -> PatternBindings {
     let start = range.start as usize;
     let end = range.end as usize;

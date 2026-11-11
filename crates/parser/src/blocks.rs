@@ -17,8 +17,7 @@ use smol_str::SmolStr;
 use svn_core::Range;
 
 use crate::ast::{
-    AwaitBlock, CatchBranch, EachAsClause, EachBlock, ElseIfArm, Fragment, IfBlock, KeyBlock,
-    SnippetBlock, ThenBranch,
+    AwaitBlock, CatchBranch, ElseIfArm, Fragment, IfBlock, KeyBlock, SnippetBlock, ThenBranch,
 };
 use crate::error::ParseError;
 use crate::mustache::{
@@ -219,279 +218,6 @@ pub(crate) fn parse_if_header(
     }
     scanner.set_pos(end + 1);
     Some(Range::new(start, end))
-}
-
-/// Parse the header of `{#each expression [as pattern[, index]] [(key)]}`.
-///
-/// Returns `(expression_range, Option<EachAsClause>)`. The scanner advances
-/// past the closing `}`. Because `as` / `,` / `(` / `)` can appear inside
-/// expressions, we use the same lexical context tracker as for top-level
-/// commas.
-pub(crate) fn parse_each_header(
-    scanner: &mut Scanner<'_>,
-    errors: &mut Vec<ParseError>,
-) -> Option<(Range, Option<EachAsClause>)> {
-    scanner.skip_svelte_whitespace();
-    let header_start = scanner.pos();
-    let header_end = find_matching_close_brace(scanner)?;
-    if header_end <= header_start {
-        errors.push(ParseError::MalformedOpenTag {
-            range: Range::new(header_start, header_end.max(header_start)),
-        });
-        return None;
-    }
-
-    let header = &scanner.source()[header_start as usize..header_end as usize];
-    // Find the top-level `as` that separates the iterable from the
-    // binding context. Any whitespace run (spaces, tabs, newlines) may
-    // surround it — upstream parses the iterable with `read_expression`,
-    // then `allow_whitespace()` + `match('as')`.
-    //
-    // In TypeScript the iterable itself may contain `as` casts at depth
-    // zero (`{#each items as unknown as Item[] as item}`). Upstream
-    // acorn-parses the whole header, then peels ONE trailing
-    // TSAsExpression back off as the context — i.e. only the LAST `as`
-    // whose right side is a valid binding pattern splits the header.
-    // Mirror that by trying candidates right-to-left and accepting the
-    // first whose suffix parses as `pattern [, index] [(key)]`.
-    let mut chosen: Option<(usize, EachAsClause)> = None;
-    for p in find_keywords_at_depth_zero(header, "as").into_iter().rev() {
-        let clause_start = header_start + p as u32 + 2; // past `as`
-        let clause_str = &scanner.source()[clause_start as usize..header_end as usize];
-        let clause = parse_each_as_clause(clause_str, clause_start);
-        if each_as_clause_is_valid(scanner.source(), &clause) {
-            chosen = Some((p, clause));
-            break;
-        }
-    }
-
-    let (expression_range, as_clause) = match chosen {
-        Some((p, clause)) => {
-            // Trim the whitespace run before `as` off the expression.
-            let expr_end = skip_ws_end(header, 0, p as u32) + header_start;
-            (Range::new(header_start, expr_end), Some(clause))
-        }
-        None => parse_each_sequence_form(scanner.source(), header, header_start, header_end),
-    };
-
-    scanner.set_pos(header_end + 1);
-    Some((expression_range, as_clause))
-}
-
-/// `{#each expr, i}` / `{#each expr, i (key)}` — the index-only sequence
-/// form (no `as` context). Upstream reads the header as a
-/// SequenceExpression, rewinds to the first expression's end, and binds
-/// `, i` as the index. Splits at the first depth-0 comma when the
-/// remainder is `identifier [(key)]`; otherwise the whole header is the
-/// iterable expression.
-fn parse_each_sequence_form(
-    source: &str,
-    header: &str,
-    header_start: u32,
-    header_end: u32,
-) -> (Range, Option<EachAsClause>) {
-    let whole = (Range::new(header_start, header_end), None);
-    let Some(comma) = find_char_at_depth_zero(header, b',') else {
-        return whole;
-    };
-    let clause_start = header_start + comma as u32 + 1;
-    let clause_str = &source[clause_start as usize..header_end as usize];
-    let clause = parse_each_as_clause(clause_str, clause_start);
-    // The slot before any `(key)` must be a bare identifier — it is the
-    // INDEX binding here, not a context pattern (upstream reads it with
-    // read_identifier), and it must be present.
-    let index_ok = clause.index_range.is_none()
-        && clause
-            .context_range
-            .is_some_and(|r| is_valid_identifier(&source[r.start as usize..r.end as usize]));
-    if !index_ok {
-        return whole;
-    }
-    let expr_end = skip_ws_end(header, 0, comma as u32) + header_start;
-    (
-        Range::new(header_start, expr_end),
-        Some(EachAsClause {
-            context_range: None,
-            index_range: clause.context_range,
-            key_range: clause.key_range,
-        }),
-    )
-}
-
-/// Whether a candidate `as`-clause split holds up: the context must
-/// parse as a real binding pattern and the index (when present) must be
-/// a plain identifier. Rejecting a candidate makes the caller try the
-/// next `as` to its left (TS casts) or fall back to no clause at all.
-fn each_as_clause_is_valid(source: &str, clause: &EachAsClause) -> bool {
-    let Some(ctx) = clause.context_range else {
-        return false;
-    };
-    if !is_valid_binding_pattern(&source[ctx.start as usize..ctx.end as usize]) {
-        return false;
-    }
-    match clause.index_range {
-        Some(idx) => is_valid_identifier(&source[idx.start as usize..idx.end as usize]),
-        None => true,
-    }
-}
-
-/// True when `pattern` parses as a complete `let` binding pattern —
-/// an identifier or (possibly nested) destructuring with defaults.
-/// Validated with oxc in TS mode so both plain and TypeScript headers
-/// accept the same shapes.
-fn is_valid_binding_pattern(pattern: &str) -> bool {
-    if pattern.trim().is_empty() {
-        return false;
-    }
-    let allocator = oxc_allocator::Allocator::default();
-    let probe = format!("let {pattern} = 0;");
-    let parsed = oxc_parser::Parser::new(
-        &allocator,
-        &probe,
-        oxc_span::SourceType::default().with_typescript(true),
-    )
-    .parse();
-    parsed.diagnostics.is_empty() && !parsed.fatal_error && parsed.program.body.len() == 1
-}
-
-/// Plain-identifier check for index bindings (`i` in `as item, i`).
-/// Full-Unicode, like upstream's `read_identifier`.
-fn is_valid_identifier(text: &str) -> bool {
-    !text.is_empty() && unicode_identifier_len(text) as usize == text.len()
-}
-
-fn parse_each_as_clause(clause: &str, base_offset: u32) -> EachAsClause {
-    // A pattern with a type annotation: the compiler reads the annotation
-    // with acorn-typescript, so it ends where that read stops, with the
-    // type's own commas and parentheses. `, index` and `(key)` follow it.
-    if let Some(context_end) = annotated_context_end(clause) {
-        let rest =
-            parse_unannotated_as_clause(&clause[context_end as usize..], base_offset + context_end);
-        if rest.context_range.is_none() {
-            let start = skip_ws_start(clause, 0, context_end);
-            return EachAsClause {
-                context_range: Some(Range::new(base_offset + start, base_offset + context_end)),
-                index_range: rest.index_range,
-                key_range: rest.key_range,
-            };
-        }
-    }
-    parse_unannotated_as_clause(clause, base_offset)
-}
-
-/// Where a pattern and its type annotation end in `clause`, when the
-/// pattern has one: the identifier or bracketed pattern, then `:` and
-/// the type as the compiler reads it.
-fn annotated_context_end(clause: &str) -> Option<u32> {
-    let len = clause.len() as u32;
-    let start = skip_ws_start(clause, 0, len);
-    let pattern = &clause[start as usize..];
-    let pattern_len = match pattern.as_bytes().first()? {
-        b'{' | b'[' => crate::acorn::match_bracket(pattern, 0).ok()?,
-        _ => unicode_identifier_len(pattern),
-    };
-    if pattern_len == 0 {
-        return None;
-    }
-    let colon = skip_ws_start(clause, start + pattern_len, len);
-    if clause.as_bytes().get(colon as usize) != Some(&b':') {
-        return None;
-    }
-    let after = colon + 1;
-    match crate::acorn::read_type_annotation(&clause[after as usize..]).read {
-        crate::acorn::Read::Expression { end, .. } => {
-            Some(after + end.checked_sub(crate::acorn::ANNOTATION_PREFIX_LEN)?)
-        }
-        crate::acorn::Read::Error { .. } => None,
-    }
-}
-
-fn parse_unannotated_as_clause(clause: &str, base_offset: u32) -> EachAsClause {
-    // `clause` may look like:
-    //   "item"
-    //   "item, i"
-    //   "item, i (key)"
-    //   "{ a, b }"
-    //   "_, i"
-    // We locate the top-level `(` (if any) and `,` (splits context from index).
-
-    let bytes = clause.as_bytes();
-
-    // Find `(` at depth 0 to split context+index from the key expression.
-    let paren_pos = find_char_at_depth_zero(clause, b'(');
-
-    let (before_key, key_range) = if let Some(p) = paren_pos {
-        // Key expression is everything up to matching `)`.
-        let key_inner_start = p + 1;
-        let mut depth = 1;
-        let mut i = key_inner_start;
-        while i < bytes.len() {
-            match bytes[i] {
-                b'(' => depth += 1,
-                b')' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        break;
-                    }
-                }
-                _ => {}
-            }
-            i += 1;
-        }
-        let key_end = i;
-        let key_start_trim = skip_ws_start(clause, key_inner_start as u32, key_end as u32);
-        let key_end_trim = skip_ws_end(clause, key_start_trim, key_end as u32);
-        let key_range = if key_start_trim < key_end_trim {
-            Some(Range::new(
-                base_offset + key_start_trim,
-                base_offset + key_end_trim,
-            ))
-        } else {
-            None
-        };
-        (&clause[..p], key_range)
-    } else {
-        (clause, None)
-    };
-
-    // Split before_key on depth-0 comma into context + optional index.
-    let comma_pos = find_char_at_depth_zero(before_key, b',');
-
-    let (context_slice, index_slice) = match comma_pos {
-        Some(p) => (&before_key[..p], Some(&before_key[p + 1..])),
-        None => (before_key, None),
-    };
-
-    let context_start = skip_ws_start(clause, 0, context_slice.len() as u32);
-    let context_end = skip_ws_end(clause, context_start, context_slice.len() as u32);
-    let context_range = if context_start < context_end {
-        Some(Range::new(
-            base_offset + context_start,
-            base_offset + context_end,
-        ))
-    } else {
-        None
-    };
-
-    let index_range = match (comma_pos, index_slice) {
-        (Some(comma), Some(idx)) => {
-            let index_offset = comma + 1;
-            let idx_end = context_slice.len() + 1 + idx.len();
-            let idx_start_trim = skip_ws_start(clause, index_offset as u32, idx_end as u32);
-            let idx_end_trim = skip_ws_end(clause, idx_start_trim, idx_end as u32);
-            Some(Range::new(
-                base_offset + idx_start_trim,
-                base_offset + idx_end_trim,
-            ))
-        }
-        _ => None,
-    };
-
-    EachAsClause {
-        context_range,
-        index_range,
-        key_range,
-    }
 }
 
 /// Parse `{#await expression [then pattern | catch pattern]}` header.
@@ -911,70 +637,7 @@ fn find_keywords_at_depth_zero(src: &str, keyword: &str) -> Vec<usize> {
     found
 }
 
-fn find_char_at_depth_zero(src: &str, ch: u8) -> Option<usize> {
-    let bytes = src.as_bytes();
-    let mut i = 0;
-    let mut depth: i32 = 0;
-    while i < bytes.len() {
-        if depth == 0 && bytes[i] == ch {
-            return Some(i);
-        }
-        match bytes[i] {
-            b'(' | b'[' | b'{' => depth += 1,
-            b')' | b']' | b'}' => depth -= 1,
-            b'"' | b'\'' => {
-                let q = bytes[i];
-                i += 1;
-                while i < bytes.len() && bytes[i] != q {
-                    if bytes[i] == b'\\' {
-                        i += 2;
-                    } else {
-                        i += 1;
-                    }
-                }
-            }
-            b'`' => {
-                i += 1;
-                while i < bytes.len() && bytes[i] != b'`' {
-                    if bytes[i] == b'\\' {
-                        i += 2;
-                    } else {
-                        i += 1;
-                    }
-                }
-            }
-            b'/' => match bytes.get(i + 1).copied() {
-                Some(b'/') => {
-                    // Line comment to end of line. `//` is unambiguously a
-                    // comment in expression context (an empty `//` regex is
-                    // invalid), so no regex/division disambiguation is needed.
-                    i += 2;
-                    while i < bytes.len() && bytes[i] != b'\n' {
-                        i += 1;
-                    }
-                }
-                Some(b'*') => {
-                    // Block comment to `*/`. Leave `i` on the closing `/` so
-                    // the trailing `i += 1` steps past it.
-                    i += 2;
-                    while i + 1 < bytes.len() {
-                        if bytes[i] == b'*' && bytes[i + 1] == b'/' {
-                            i += 1;
-                            break;
-                        }
-                        i += 1;
-                    }
-                }
-                _ => {}
-            },
-            _ => {}
-        }
-        i += 1;
-    }
-    None
-}
-
-fn trimmed_range(src: &str, start: u32, end: u32) -> Option<Range> {
+pub(crate) fn trimmed_range(src: &str, start: u32, end: u32) -> Option<Range> {
     let s = skip_ws_start(src, start, end);
     let e = skip_ws_end(src, s, end);
     if s < e { Some(Range::new(s, e)) } else { None }
@@ -996,26 +659,6 @@ pub(crate) fn build_if_block(
         consequent,
         elseif_arms,
         alternate,
-        range: Range::new(block_start, block_end),
-    }
-}
-
-/// Assemble an EachBlock.
-pub(crate) fn build_each_block(
-    expression_range: Range,
-    as_clause: Option<EachAsClause>,
-    body: Fragment,
-    alternate: Option<Fragment>,
-    opening_tag_end: u32,
-    block_start: u32,
-    block_end: u32,
-) -> EachBlock {
-    EachBlock {
-        expression_range,
-        as_clause,
-        body,
-        alternate,
-        opening_tag_end,
         range: Range::new(block_start, block_end),
     }
 }
@@ -1507,23 +1150,24 @@ mod tests {
     fn each_header_annotation_keeps_its_commas_and_parentheses() {
         // The compiler reads the annotation as acorn-typescript reads
         // `_ as <type>`: the type's own commas and parentheses are part
-        // of it.
+        // of it, and the index and key come after it. The context is the
+        // pattern alone.
         let cases = [
             (
                 "entries as entry: Map<string, number>}",
-                "entry: Map<string, number>",
+                "entry",
                 None,
                 None,
             ),
             (
                 "handlers as handler: (a: string) => void, i}",
-                "handler: (a: string) => void",
+                "handler",
                 Some("i"),
                 None,
             ),
             (
                 "rows as { a }: { a: string, b: number }, i (a)}",
-                "{ a }: { a: string, b: number }",
+                "{ a }",
                 Some("i"),
                 Some("a"),
             ),
@@ -1608,57 +1252,61 @@ mod tests {
     }
 
     #[test]
-    fn find_char_at_depth_zero_basic() {
-        assert_eq!(find_char_at_depth_zero("a,b", b','), Some(1));
-        assert_eq!(find_char_at_depth_zero("f(a, b),c", b','), Some(7));
+    fn each_header_clause_parts() {
+        let cases = [
+            ("items as item}", "item", None, None),
+            ("items as item, i}", "item", Some("i"), None),
+            ("items as item (item.id)}", "item", None, Some("item.id")),
+            (
+                "items as item, i (item.id)}",
+                "item",
+                Some("i"),
+                Some("item.id"),
+            ),
+            // The comma inside the pattern is the pattern's.
+            ("items as { a, b }, i}", "{ a, b }", Some("i"), None),
+        ];
+        for (src, context, index, key) in cases {
+            let mut scanner = Scanner::new(src);
+            let mut errors = Vec::new();
+            let (_, clause) = parse_each_header(&mut scanner, &mut errors).expect("header parses");
+            let clause = clause.expect("as-clause present");
+            assert_eq!(
+                clause.context_range.map(|r| r.slice(src)),
+                Some(context),
+                "{src}"
+            );
+            assert_eq!(clause.index_range.map(|r| r.slice(src)), index, "{src}");
+            assert_eq!(clause.key_range.map(|r| r.slice(src)), key, "{src}");
+        }
     }
 
-    #[test]
-    fn find_char_at_depth_zero_in_string_skipped() {
-        assert_eq!(find_char_at_depth_zero(r#""a,b",c"#, b','), Some(5));
-    }
-
-    #[test]
-    fn parse_each_as_clause_simple_identifier() {
-        let clause = "item";
-        let c = parse_each_as_clause(clause, 10);
-        assert_eq!(c.context_range, Some(Range::new(10, 14)));
-        assert!(c.index_range.is_none());
-        assert!(c.key_range.is_none());
-    }
-
-    #[test]
-    fn parse_each_as_clause_with_index() {
-        let clause = "item, i";
-        let c = parse_each_as_clause(clause, 0);
-        assert_eq!(c.context_range.unwrap().slice(clause), "item");
-        assert_eq!(c.index_range.map(|r| r.slice(clause)), Some("i"));
-    }
-
-    #[test]
-    fn parse_each_as_clause_with_key() {
-        let clause = "item (item.id)";
-        let c = parse_each_as_clause(clause, 0);
-        assert_eq!(c.context_range.unwrap().slice(clause), "item");
-        assert_eq!(c.key_range.map(|r| r.slice(clause)), Some("item.id"));
-    }
-
-    #[test]
-    fn parse_each_as_clause_full() {
-        let clause = "item, i (item.id)";
-        let c = parse_each_as_clause(clause, 0);
-        assert_eq!(c.context_range.unwrap().slice(clause), "item");
-        assert_eq!(c.index_range.map(|r| r.slice(clause)), Some("i"));
-        assert_eq!(c.key_range.map(|r| r.slice(clause)), Some("item.id"));
-    }
-
-    #[test]
-    fn parse_each_as_clause_destructuring() {
-        let clause = "{ a, b }, i";
-        let c = parse_each_as_clause(clause, 0);
-        // Top-level comma inside `{ ... }` must be ignored — the outer
-        // comma after `}` separates context from index.
-        assert_eq!(c.context_range.unwrap().slice(clause), "{ a, b }");
-        assert_eq!(c.index_range.map(|r| r.slice(clause)), Some("i"));
+    /// The `{#each}` header `header` (up to and including its `}`) as the
+    /// template parser reads it in a TypeScript component, with its ranges
+    /// in `header`. `None` when the compiler throws reading it.
+    fn parse_each_header(
+        scanner: &mut Scanner<'_>,
+        errors: &mut Vec<ParseError>,
+    ) -> Option<(Range, Option<crate::ast::EachAsClause>)> {
+        let header = scanner.source();
+        let script = "<script lang=\"ts\"></script>";
+        let src = format!("{script}{{#each {header}{{/each}}");
+        let template = Range::new(script.len() as u32, src.len() as u32);
+        let (fragment, parse_errors) = crate::template::parse_template(&src, template);
+        errors.extend(parse_errors);
+        let Some(crate::ast::Node::EachBlock(block)) = fragment.nodes.into_iter().next() else {
+            return None;
+        };
+        if block.open_error.is_some() {
+            return None;
+        }
+        let offset = script.len() as u32 + "{#each ".len() as u32;
+        let shift = |r: Range| Range::new(r.start - offset, r.end - offset);
+        let clause = block.as_clause.map(|c| crate::ast::EachAsClause {
+            context_range: c.context_range.map(shift),
+            index_range: c.index_range.map(shift),
+            key_range: c.key_range.map(shift),
+        });
+        Some((shift(block.expression_range), clause))
     }
 }

@@ -33,6 +33,7 @@ mod scanner;
 mod script;
 mod script_tag_expression;
 mod sections;
+pub mod tag_read;
 mod template;
 mod ts_check;
 

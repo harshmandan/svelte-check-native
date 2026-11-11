@@ -41,11 +41,12 @@ pub(crate) struct ParseFinding {
 pub(crate) fn first_template_parse_error(
     fragment: &Fragment,
     source: &str,
-    ts: bool,
 ) -> Option<ParseFinding> {
     let mut finder = Finder {
         source,
-        ts,
+        // The compiler decides once, from the component's first `<script
+        // lang>`, how acorn reads every expression.
+        ts: svn_parser::tag_read::compiler_reads_typescript(source),
         found: None,
         meta_seen: Vec::new(),
     };
@@ -468,7 +469,7 @@ impl Finder<'_> {
     }
 
     fn reserved_word(&mut self, word: &str, at: u32) {
-        if RESERVED_WORDS.contains(&word) {
+        if svn_parser::tag_read::RESERVED_WORDS.contains(&word) {
             self.report(
                 at,
                 Code::unexpected_reserved_word,
@@ -700,58 +701,6 @@ fn is_valid_tag_name(name: &str) -> bool {
     let rest: Vec<&str> = segments.collect();
     first_ok && !rest.is_empty() && rest.iter().all(|s| !s.is_empty() && s.bytes().all(ident))
 }
-
-/// `RESERVED_WORDS` from the compiler's `utils.js`.
-const RESERVED_WORDS: &[&str] = &[
-    "arguments",
-    "await",
-    "break",
-    "case",
-    "catch",
-    "class",
-    "const",
-    "continue",
-    "debugger",
-    "default",
-    "delete",
-    "do",
-    "else",
-    "enum",
-    "eval",
-    "export",
-    "extends",
-    "false",
-    "finally",
-    "for",
-    "function",
-    "if",
-    "implements",
-    "import",
-    "in",
-    "instanceof",
-    "interface",
-    "let",
-    "new",
-    "null",
-    "package",
-    "private",
-    "protected",
-    "public",
-    "return",
-    "static",
-    "super",
-    "switch",
-    "this",
-    "throw",
-    "true",
-    "try",
-    "typeof",
-    "var",
-    "void",
-    "while",
-    "with",
-    "yield",
-];
 
 /// A `<svelte:options>` attribute's value the way `get_static_value`
 /// reads it.

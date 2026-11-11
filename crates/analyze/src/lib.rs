@@ -80,7 +80,7 @@ pub use store::{
     find_store_refs_with_bindings, find_template_store_refs, has_svelte_store_derived_import,
 };
 pub use template_refs::{TemplateExpression, template_directive_names, template_expression_ranges};
-pub use template_scope::{each_expression_end, each_pattern_end, extract_at_const_bindings};
+pub use template_scope::{each_expression_end, extract_at_const_bindings};
 pub use void_refs::VoidRefRegistry;
 pub use walker::{
     BindDirective, BindThisTarget, BubbledComponentEvent, BubbledDomEvent, BubbledDomEventScope,

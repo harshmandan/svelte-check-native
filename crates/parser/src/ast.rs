@@ -599,15 +599,23 @@ pub struct EachBlock {
     pub body: Fragment,
     /// `{:else}` empty-list body, if present.
     pub alternate: Option<Fragment>,
-    /// Just past the `}` that closes the opening `{#each …}` tag.
+    /// Just past the `}` that closes the opening `{#each …}` tag: where
+    /// the compiler's reading of the tag ends.
     pub opening_tag_end: u32,
+    /// The error the compiler throws reading the opening tag. The block
+    /// is kept so the error has a place; the component is rejected.
+    pub open_error: Option<crate::tag_read::TagReadError>,
+    /// The JavaScript comments the compiler's reads of the opening tag
+    /// collected, in source order.
+    pub open_comments: Vec<Range>,
     pub range: Range,
 }
 
 #[derive(Debug, Clone)]
 pub struct EachAsClause {
     /// Byte range of the destructuring pattern (may be an identifier,
-    /// array-destructuring, or object-destructuring). `None` for the
+    /// array-destructuring, or object-destructuring), without its type
+    /// annotation: what svelte2tsx writes as the loop variable. `None` for the
     /// index-only sequence form `{#each expr, i}` (Svelte 5.4+), which
     /// binds an index without an item context.
     pub context_range: Option<Range>,

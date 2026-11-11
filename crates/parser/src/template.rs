@@ -19,21 +19,22 @@ use smol_str::SmolStr;
 use svn_core::Range;
 
 use crate::ast::{
-    CatchBranch, Comment, Component, Element, ElseIfArm, Fragment, ImplicitClose, Interpolation,
-    InterpolationKind, Node, SvelteElement, SvelteElementKind, Text, ThenBranch, is_component_tag,
-    is_void_element,
+    CatchBranch, Comment, Component, EachAsClause, EachBlock, Element, ElseIfArm, Fragment,
+    ImplicitClose, Interpolation, InterpolationKind, Node, SvelteElement, SvelteElementKind, Text,
+    ThenBranch, is_component_tag, is_void_element,
 };
 use crate::attributes::parse_attributes;
 use crate::blocks::{
-    AwaitShortForm, BlockTerminator, build_await_block, build_each_block, build_if_block,
-    build_key_block, build_snippet_block, parse_await_header, parse_each_header, parse_if_header,
-    parse_key_header, parse_snippet_header, peek_and_consume_terminator,
+    AwaitShortForm, BlockTerminator, build_await_block, build_if_block, build_key_block,
+    build_snippet_block, parse_await_header, parse_if_header, parse_key_header,
+    parse_snippet_header, peek_and_consume_terminator, trimmed_range,
 };
 use crate::error::ParseError;
 use crate::html5::closing_tag_omitted;
 use crate::mustache::{MustacheSigil, classify_mustache_sigil, find_mustache_end};
 use crate::scanner::{Scanner, is_svelte_whitespace_at};
 use crate::sections::{SectionCollector, section_tag_at};
+use crate::tag_read::{TagReader, compiler_reads_typescript};
 
 /// Parse one template fragment out of the source string.
 ///
@@ -180,6 +181,10 @@ struct TemplateParser<'src, 'col> {
     /// template element. `None` for the per-run template parses, whose
     /// runs already exclude the sections.
     sections: Option<&'col mut SectionCollector<'src>>,
+    /// The compiler reads the component's JavaScript as TypeScript
+    /// ([`compiler_reads_typescript`]), which decides where it ends an
+    /// `{#each}` tag.
+    ts: bool,
 }
 
 impl<'src, 'col> TemplateParser<'src, 'col> {
@@ -197,6 +202,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             last_auto_closed: None,
             auto_close_trigger: None,
             sections: None,
+            ts: compiler_reads_typescript(source),
         }
     }
 
@@ -652,7 +658,42 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
     }
 
     fn parse_each_block(&mut self, block_start: u32) -> Option<Node> {
-        let (expr_range, as_clause) = parse_each_header(&mut self.scanner, &mut self.errors)?;
+        // The tag ends where the compiler's reading of it ends. acorn
+        // stops at an unpaired `}`, so no read goes past the one a brace
+        // count finds.
+        let keyword_end = self.scanner.pos();
+        let source = self.scanner.source();
+        let counted_close = find_mustache_end(source, keyword_end);
+        let limit = counted_close.unwrap_or(self.fragment_end);
+        let reader = TagReader::new(source, self.ts);
+        let (expr_range, as_clause, open_error, open_comments) =
+            match reader.read_each_open(keyword_end, limit) {
+                Ok(open) => {
+                    self.scanner.set_pos(open.end);
+                    let as_clause =
+                        (open.context.is_some() || open.index.is_some() || open.key.is_some())
+                            .then_some(EachAsClause {
+                                context_range: open.context,
+                                index_range: open.index,
+                                key_range: open.key,
+                            });
+                    (open.expression, as_clause, None, open.comments)
+                }
+                Err(error) => {
+                    // The compiler throws, and the component is rejected. The
+                    // block stays, carrying the error: its tag ends at the
+                    // counted `}`, or where the error is.
+                    let end = counted_close.unwrap_or(error.at.max(keyword_end));
+                    let header = trimmed_range(source, keyword_end, end)
+                        .unwrap_or(Range::new(keyword_end, keyword_end));
+                    self.scanner.set_pos(if counted_close.is_some() {
+                        end + 1
+                    } else {
+                        end
+                    });
+                    (header, None, Some(error), Vec::new())
+                }
+            };
         let opening_tag_end = self.scanner.pos();
         let (body_nodes, term) = self.parse_fragment_until(None);
         let body = Fragment {
@@ -688,15 +729,16 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             }
         }
 
-        Some(Node::EachBlock(Box::new(build_each_block(
-            expr_range,
+        Some(Node::EachBlock(Box::new(EachBlock {
+            expression_range: expr_range,
             as_clause,
             body,
             alternate,
             opening_tag_end,
-            block_start,
-            self.scanner.pos(),
-        ))))
+            open_error,
+            open_comments,
+            range: Range::new(block_start, self.scanner.pos()),
+        })))
     }
 
     fn parse_await_block(&mut self, block_start: u32) -> Option<Node> {
@@ -2523,7 +2565,12 @@ mod tests {
         // The compiler throws `expected_token` at the `]`; the block stays
         // so the error has a place.
         let (b, src, _) = each_block_after("<script></script>", "{#each [] as {a]}{/each}");
-        assert_eq!(b.expression_range.slice(&src), "[] as {a]");
+        let error = b.open_error.expect("the compiler's error");
+        assert_eq!(error.at as usize, src.find("a]").unwrap() + 1);
+        assert_eq!(
+            error.kind,
+            crate::tag_read::TagReadErrorKind::ExpectedToken("}")
+        );
     }
 
     #[test]

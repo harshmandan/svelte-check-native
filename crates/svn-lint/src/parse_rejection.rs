@@ -12,11 +12,7 @@
 //!   (`js_parse_error`, e.g. `{a +}`);
 //! - the errors `crate::parse_errors` ports (duplicate attributes,
 //!   misplaced `<svelte:*>` tags, invalid `<svelte:options>` values,
-//!   malformed `{@…}` tags, …);
-//! - in a TypeScript component, an `{#each a, b as item}` head: the
-//!   compiler first reads `a, b as item` as one expression (a sequence
-//!   ending in a type assertion), keeps only `a`, and then needs an
-//!   index identifier after the comma (`expected_identifier`).
+//!   malformed `{@…}` tags and block tags, …).
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Expression;
@@ -101,9 +97,7 @@ pub(crate) fn script_tag_error(
 /// True when the compiler's `parse()` would throw on this template for
 /// one of the reasons in the module doc.
 pub fn template_parse_rejected(fragment: &Fragment, source: &str, lang: ScriptLang) -> bool {
-    if crate::parse_errors::first_template_parse_error(fragment, source, lang == ScriptLang::Ts)
-        .is_some()
-    {
+    if crate::parse_errors::first_template_parse_error(fragment, source).is_some() {
         return true;
     }
     let mut finder = InvalidExpressionFinder {
@@ -180,45 +174,7 @@ impl InvalidExpressionFinder<'_> {
     }
 }
 
-impl InvalidExpressionFinder<'_> {
-    /// The each-head rejection described in the module doc.
-    fn check_each_head(&mut self, block: &svn_parser::EachBlock) {
-        if self.found || self.lang != ScriptLang::Ts {
-            return;
-        }
-        let Some(clause) = &block.as_clause else {
-            return;
-        };
-        let Some(context) = clause.context_range else {
-            return;
-        };
-        // What follows the context (`, i`, `(key)`) cannot turn a
-        // sequence back into a single expression, so the head up to the
-        // context's end decides. A context that is no valid type
-        // (`{ x = 1 }`) fails to read, and the compiler then backs up to
-        // the `as` and reads the head normally.
-        let Some(text) = self
-            .source
-            .get(block.expression_range.start as usize..context.end as usize)
-        else {
-            return;
-        };
-        let source_type = SourceType::default()
-            .with_module(true)
-            .with_typescript(true);
-        self.allocator.reset();
-        let parsed = Parser::new(&self.allocator, text, source_type).parse_expression();
-        if let Ok(Expression::SequenceExpression(_)) = parsed {
-            self.found = true;
-        }
-    }
-}
-
 impl TemplateScopeVisitor for InvalidExpressionFinder<'_> {
-    fn visit_each_block(&mut self, block: &svn_parser::EachBlock) {
-        self.check_each_head(block);
-    }
-
     fn visit_expr(&mut self, range: Range) {
         self.check(range);
     }

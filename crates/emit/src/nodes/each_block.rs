@@ -46,13 +46,12 @@ pub(crate) fn emit_each_block(
     // no context pattern — the placeholder binding covers it like the
     // clause-less `{#each items}`, and is referenced once so an unused
     // placeholder never reports.
-    // The pattern as svelte2tsx writes it: up to its type annotation
+    // The pattern without its type annotation, as svelte2tsx writes it
     // (`item: string` → `item`, `getEnd` in node-utils.ts).
     let context: Option<(&str, svn_core::Range)> = b
         .as_clause
         .as_ref()
         .and_then(|c| c.context_range)
-        .map(|r| svn_core::Range::new(r.start, svn_analyze::each_pattern_end(source, r)))
         .and_then(|r| source.get(r.start as usize..r.end as usize).map(|t| (t, r)));
     let binding_text = context.map_or("__svn_each_unused", |(t, _)| t);
     let index: Option<(&str, svn_core::Range)> = b

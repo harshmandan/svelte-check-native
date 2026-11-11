@@ -485,15 +485,8 @@ fn collect_fragment_comments(fragment: &Fragment, source: &str, before: u32, out
                 }
             }
             Node::EachBlock(b) => {
-                expr(b.expression_range);
-                if let Some(clause) = &b.as_clause {
-                    for range in [clause.context_range, clause.index_range, clause.key_range]
-                        .into_iter()
-                        .flatten()
-                    {
-                        out.extend(js_comments_in(source, range));
-                    }
-                }
+                // Every comment the compiler's reads of the tag lexed.
+                out.extend(b.open_comments.iter().copied());
                 collect_fragment_comments(&b.body, source, before, out);
                 if let Some(alt) = &b.alternate {
                     collect_fragment_comments(alt, source, before, out);

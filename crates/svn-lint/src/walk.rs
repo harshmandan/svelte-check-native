@@ -229,11 +229,7 @@ pub fn walk_parsed(
 
     // A template the compiler's `parse()` rejects fails before any
     // analysis.
-    if let Some(finding) = crate::parse_errors::first_template_parse_error(
-        fragment,
-        source,
-        doc.script_lang() == svn_parser::ScriptLang::Ts,
-    ) {
+    if let Some(finding) = crate::parse_errors::first_template_parse_error(fragment, source) {
         ctx.emit_error(finding.code, finding.message, finding.range);
     }
 

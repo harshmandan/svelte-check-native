@@ -131,12 +131,14 @@ fn cast_keyword(text: &str, from: u32, ts: bool) -> Option<u32> {
     })
 }
 
-/// The end of the last comment acorn lexes in `text` before `to`
-/// (strings and template literals hold no comments).
-pub fn last_comment_end(text: &str, to: u32, ts: bool) -> Option<u32> {
-    let text = text.get(..to as usize)?;
+/// The comments acorn lexes in `text` before `to`, in order, as
+/// `(start, end)` (strings and template literals hold no comments).
+pub fn comments_before(text: &str, to: u32, ts: bool) -> Vec<(u32, u32)> {
+    let Some(text) = text.get(..to as usize) else {
+        return Vec::new();
+    };
     if !text.contains("//") && !text.contains("/*") {
-        return None;
+        return Vec::new();
     }
     // An opening parenthesis keeps the text in expression position; oxc
     // keeps the comments it lexed even when it then fails.
@@ -147,9 +149,9 @@ pub fn last_comment_end(text: &str, to: u32, ts: bool) -> Option<u32> {
         .program
         .comments
         .iter()
-        .map(|c| c.span.end - 1)
-        .filter(|&end| end <= to)
-        .last()
+        .map(|c| (c.span.start - 1, c.span.end - 1))
+        .filter(|&(_, end)| end <= to)
+        .collect()
 }
 
 /// The start of the first token at or after `at`: whitespace and

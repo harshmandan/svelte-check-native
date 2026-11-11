@@ -222,3 +222,46 @@ fn compile_option_error_comes_from_the_svelte_config_at_the_file_start() {
         ]
     );
 }
+
+/// The default engine diagnoses the files of the TypeScript program, which
+/// follows imports past the tsconfig's `include`: a rejected component
+/// outside it is reported when a file of the program imports it, and not
+/// otherwise.
+#[test]
+fn rejected_component_outside_the_tsconfig_counts_when_imported() {
+    let dir = workspace(&[
+        (
+            "src/App.svelte",
+            "<script lang=\"ts\">\n  import Imported from '../lib/Imported.svelte';\n</script>\n<Imported />\n",
+        ),
+        (
+            "src/ambient.d.ts",
+            "declare module '*.svelte' {\n  const component: any;\n  export default component;\n}\n",
+        ),
+        ("lib/Imported.svelte", UNCLOSED),
+        ("lib/Lonely.svelte", UNCLOSED),
+    ]);
+    let (diagnostics, completed) = check(dir.path(), &[]);
+    let found: Vec<_> = diagnostics
+        .iter()
+        .map(|d| (d["filename"].clone(), d["code"].clone()))
+        .collect();
+    assert_eq!(
+        found,
+        vec![
+            (
+                serde_json::json!("lib/Imported.svelte"),
+                serde_json::json!("element_unclosed"),
+            ),
+            (
+                serde_json::json!("lib/Imported.svelte"),
+                serde_json::json!(-1)
+            ),
+        ]
+    );
+    // App and Imported; Lonely stays out.
+    assert!(
+        completed.starts_with("COMPLETED 2 FILES 2 ERRORS"),
+        "{completed}"
+    );
+}

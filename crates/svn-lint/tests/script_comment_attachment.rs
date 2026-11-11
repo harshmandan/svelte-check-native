@@ -44,3 +44,9 @@ fn comment_after_an_operand_trails_it() {
     let body = "const u = a /* svelte-ignore state_referenced_locally */ ?? count; var a;";
     assert_eq!(codes(body), ["state_referenced_locally"]);
 }
+
+#[test]
+fn comment_in_a_template_substitution_leads_its_expression() {
+    let body = "const n = `${/* svelte-ignore state_referenced_locally */ count}`;";
+    assert!(codes(body).is_empty(), "{:?}", codes(body));
+}

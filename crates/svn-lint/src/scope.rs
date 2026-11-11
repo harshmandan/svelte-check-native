@@ -1079,7 +1079,6 @@ impl TreeBuilder {
             // `// svelte-ignore` comments (they're inside `{…}`),
             // so skip the precollect for perf.
             script_comments: crate::ignore::ScriptComments::empty(),
-            script_content: effective_slice,
             ignore_frames: Vec::new(),
             // Template expressions count toward the runes await
             // trigger (upstream: fragment create_scopes has_await).
@@ -1594,11 +1593,7 @@ impl TreeBuilder {
         // the file's real runes flag — upstream's extract_svelte_ignore
         // is strict in runes mode and lax (legacy dashed names accepted)
         // otherwise.
-        let script_comments = crate::ignore::ScriptComments::build(
-            program.comments.iter().map(|c| (c.span.start, c.span.end)),
-            script.content,
-            runes,
-        );
+        let script_comments = crate::ignore::ScriptComments::build(program, script.content, runes);
         let mut walker = ScriptWalker {
             tree: self,
             base_offset: base,
@@ -1611,7 +1606,6 @@ impl TreeBuilder {
             is_instance,
             at_program_top: false,
             script_comments,
-            script_content: script.content,
             ignore_frames: Vec::new(),
             counts_await: is_instance,
             hooks: Some(ScriptRuleHooks {
@@ -2282,7 +2276,7 @@ fn resolve_by_name(scopes: &[Scope], from: ScopeId, name: &str) -> Option<Bindin
     None
 }
 
-struct ScriptWalker<'b, 'src> {
+struct ScriptWalker<'b> {
     tree: &'b mut TreeBuilder,
     base_offset: u32,
     /// Stack of scopes; top is current.
@@ -2322,10 +2316,6 @@ struct ScriptWalker<'b, 'src> {
     /// Offsets are script-local (oxc's span origin = script content
     /// start).
     script_comments: crate::ignore::ScriptComments,
-    /// Script source text (= `ScriptSection::content`) — needed so
-    /// the leading-comment lookup can verify gaps and same-line
-    /// trailing positions against the raw bytes.
-    script_content: &'src str,
     /// Live stack of ignore-code sets — one frame per node we
     /// entered that had leading `// svelte-ignore` comments. Active
     /// codes at any time = flatten all frames. Snapshot is cloned
@@ -2405,7 +2395,7 @@ struct ScriptWalker<'b, 'src> {
     node_spans: Vec<(u32, u32)>,
 }
 
-impl<'b, 'src> ScriptWalker<'b, 'src> {
+impl<'b> ScriptWalker<'b> {
     fn cur_scope(&self) -> ScopeId {
         // Invariant: scope_stack is seeded with `root_scope` in
         // `build_script` and every push is paired with a pop.
@@ -2581,9 +2571,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         let Some(start) = node_start else {
             return false;
         };
-        let codes = self
-            .script_comments
-            .leading_ignores(self.script_content, start);
+        let codes = self.script_comments.leading_ignores(start);
         if codes.is_empty() {
             false
         } else {

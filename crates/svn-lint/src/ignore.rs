@@ -4,6 +4,10 @@
 //! including the 9 legacy→new rename entries + runes-mode comma
 //! parsing + lax non-runes-mode parsing.
 
+use oxc_ast::AstKind;
+use oxc_ast::ast::{ArrayExpressionElement, Program, TemplateLiteral};
+use oxc_ast_visit::Visit;
+use oxc_span::{GetSpan, Span};
 use smol_str::SmolStr;
 use svn_core::Range;
 use svn_parser::ast::{Comment, Node};
@@ -275,66 +279,47 @@ fn is_ident_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'$')
 }
 
-/// Index of ALL comments in one script body, powering the
-/// leading-comment `svelte-ignore` lookup. Mirrors upstream's estree
-/// comment attachment (`phases/1-parse/acorn.js::add_comments`):
-/// every queued comment becomes a `leadingComment` of the next node
-/// whose start lies after it — no matter how many comments stack up,
-/// what separates them from each other, or whether blank lines
-/// intervene — EXCEPT a comment consumed as a `trailingComment` of
-/// the previous node: same line, separated from it only by `,`, `)`,
-/// spaces and tabs (acorn.js:210-212). The analyze walk then honors
-/// ignores from ALL leading comments of every node
-/// (`2-analyze/index.js:118-131`), which is why suppression works at
-/// arbitrary expression positions upstream.
+/// The `svelte-ignore` comments of one script body, keyed by the node
+/// each one leads.
 ///
-/// Reproduced here as a backward chain scan from a node's start:
-/// hop over each comment whose gap to the current cursor is
-/// whitespace-only, collecting its codes, and stop at a comment that
-/// classifies as same-line trailing of whatever precedes it. Plain
-/// (non-ignore) comments still chain — that's what makes stacked
-/// comment runs work.
+/// The compiler parses a script with acorn and attaches comments to
+/// the estree afterwards (`phases/1-parse/acorn.js`, `add_comments`):
+/// walking the tree, every queued comment that starts before a node
+/// becomes a `leadingComment` of that node, and after a node's children
+/// the next comment becomes its `trailingComment` when it is the last
+/// node of a block, array or object, or when only `,`, `)`, spaces and
+/// tabs separate the two. The analyze walk then applies the ignores of
+/// a node's leading comments to the node and everything inside it
+/// (`2-analyze/index.js`). [`ScriptComments::build`] replays that
+/// attachment over the oxc tree.
 pub(crate) struct ScriptComments {
-    /// Every comment in the script body, sorted by end offset.
-    /// Offsets are script-local, matching oxc spans (delimiters
-    /// included).
-    entries: Vec<CommentEntry>,
-    /// Fast gate: no svelte-ignore comment anywhere → every lookup
-    /// answers "no codes" without touching the entries.
-    has_ignores: bool,
-}
-
-struct CommentEntry {
-    start: u32,
-    end: u32,
-    /// Suppression codes when the comment is a `svelte-ignore`;
-    /// empty for every other comment.
-    codes: Vec<SmolStr>,
+    /// `(node start, codes)` for every `svelte-ignore` comment attached
+    /// as a leading comment, in comment order. Offsets are
+    /// script-local, matching oxc spans.
+    leading: Vec<(u32, Vec<SmolStr>)>,
 }
 
 impl ScriptComments {
     /// No comments at all — every lookup answers "no codes".
     pub(crate) fn empty() -> Self {
         Self {
-            entries: Vec::new(),
-            has_ignores: false,
+            leading: Vec::new(),
         }
     }
 
-    /// `spans` are the (start, end) byte spans of every comment in
-    /// `content`, delimiters included (oxc's `Comment::span`).
-    pub(crate) fn build(
-        spans: impl Iterator<Item = (u32, u32)>,
-        content: &str,
-        runes: bool,
-    ) -> Self {
-        let mut entries: Vec<CommentEntry> = spans
-            .filter_map(|(start, end)| {
-                let text = content.get(start as usize..end as usize)?;
-                let codes = crate::scope_util::strip_comment_delimiters(text)
+    /// Attach the comments of `program` (parsed from `content`) the way
+    /// acorn's comment handler does and keep the `svelte-ignore` codes
+    /// of every leading comment.
+    pub(crate) fn build(program: &Program<'_>, content: &str, runes: bool) -> Self {
+        let codes: Vec<Vec<SmolStr>> = program
+            .comments
+            .iter()
+            .map(|c| {
+                content
+                    .get(c.span.start as usize..c.span.end as usize)
+                    .and_then(crate::scope_util::strip_comment_delimiters)
                     .and_then(|body| {
-                        let trimmed = body.trim_start();
-                        let rest = trimmed.strip_prefix("svelte-ignore")?;
+                        let rest = body.trim_start().strip_prefix("svelte-ignore")?;
                         match rest.chars().next() {
                             Some(ch) if ch.is_whitespace() => {
                                 Some(parse_ignore_codes(&rest[ch.len_utf8()..], runes))
@@ -342,144 +327,179 @@ impl ScriptComments {
                             _ => None,
                         }
                     })
-                    .unwrap_or_default();
-                Some(CommentEntry { start, end, codes })
+                    .unwrap_or_default()
             })
             .collect();
-        entries.sort_by_key(|e| e.end);
-        let has_ignores = entries.iter().any(|e| !e.codes.is_empty());
-        Self {
-            entries,
-            has_ignores,
+        if codes.iter().all(Vec::is_empty) {
+            return Self::empty();
         }
+        let mut queue: Vec<(u32, u32, usize)> = program
+            .comments
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.span.start, c.span.end, i))
+            .collect();
+        queue.sort_by_key(|&(start, _, _)| start);
+        let mut attacher = CommentAttacher {
+            source: content,
+            queue: queue.into(),
+            frames: Vec::new(),
+            skipped: Vec::new(),
+            leading: Vec::new(),
+        };
+        attacher.visit_program(program);
+        let leading = attacher
+            .leading
+            .into_iter()
+            .filter_map(|(start, i)| {
+                let c = codes.get(i).filter(|c| !c.is_empty())?;
+                Some((start, c.clone()))
+            })
+            .collect();
+        Self { leading }
     }
 
     pub(crate) fn has_ignores(&self) -> bool {
-        self.has_ignores
+        !self.leading.is_empty()
     }
 
-    /// Suppression codes of the comment run leading a node that
-    /// starts at `node_start` (script-local offset into `content`).
-    pub(crate) fn leading_ignores(&self, content: &str, node_start: u32) -> Vec<SmolStr> {
+    /// Suppression codes of the comments leading the node that starts
+    /// at `node_start` (script-local offset). A node shares its start
+    /// with the nodes it begins with; the compiler attaches to the
+    /// outermost of them, whose subtree holds the others.
+    pub(crate) fn leading_ignores(&self, node_start: u32) -> Vec<SmolStr> {
         let mut codes: Vec<SmolStr> = Vec::new();
-        if !self.has_ignores {
-            return codes;
-        }
-        let bytes = content.as_bytes();
-        let mut cursor = (node_start as usize).min(bytes.len());
-        // Comments are disjoint, so after hopping to a comment's
-        // start every earlier entry ends at or before it — walk the
-        // sorted list leftward without re-searching.
-        let mut idx = self.entries.partition_point(|e| (e.end as usize) <= cursor);
-        while idx > 0 {
-            let entry = &self.entries[idx - 1];
-            let (start, end) = (entry.start as usize, entry.end as usize);
-            if !bytes[end..cursor].iter().all(|b| b.is_ascii_whitespace()) {
-                break;
-            }
-            if is_same_line_trailing(bytes, start) {
-                break;
-            }
-            for c in &entry.codes {
+        for (_, entry) in self.leading.iter().filter(|(s, _)| *s == node_start) {
+            for c in entry {
                 if !codes.contains(c) {
                     codes.push(c.clone());
                 }
             }
-            cursor = start;
-            idx -= 1;
         }
         codes
     }
 }
 
-/// Is the comment starting at `comment_start` a same-line trailing
-/// comment of the token before it? Mirrors acorn.js:210-212, which
-/// consumes a comment as `trailingComments` of the previous node when
-/// only `[,) \t]*` separates them on one line. Scanning backward:
-/// hitting the line start first means nothing precedes on this line
-/// (leading); otherwise the first blocking byte decides — something
-/// that can end an expression (`1`, `'a'`, `]`, `;`, …) means the
-/// comment trails it, an opener/operator (`(`, `:`, `=`, …) means the
-/// comment leads whatever comes next.
-fn is_same_line_trailing(bytes: &[u8], comment_start: usize) -> bool {
-    let mut i = comment_start;
-    let mut skipped_close_paren = false;
-    while i > 0 {
-        i -= 1;
-        match bytes[i] {
-            b'\n' => return false,
-            b')' => skipped_close_paren = true,
-            b',' | b' ' | b'\t' => {}
-            // A `(` reached after skipping a `)` is the opener of a
-            // completed call/group (`noop() // c`) — the comment
-            // trails that expression. A bare `(` (`take( // c`)
-            // means the comment leads the first argument.
-            b'(' => return skipped_close_paren,
-            b => return ends_expression_at(bytes, i, b),
-        }
-    }
-    false
+/// Replays acorn.js's `add_comments` over an oxc tree. The estree acorn
+/// builds differs from oxc's in a few nodes, which are passed over:
+/// parentheses (scripts are parsed without `preserveParens`), array
+/// holes (`null` in estree) and the parameter list wrapper.
+struct CommentAttacher<'s> {
+    source: &'s str,
+    /// Comments not yet attached, by start: `(start, end, index)`.
+    queue: std::collections::VecDeque<(u32, u32, usize)>,
+    /// The estree nodes currently open, outermost first.
+    frames: Vec<Frame>,
+    /// One entry per entered oxc node: whether it was passed over.
+    skipped: Vec<bool>,
+    /// `(node start, comment index)` of every leading comment.
+    leading: Vec<(u32, usize)>,
 }
 
-/// Does the byte `b` at index `i` end an expression, making a
-/// same-line comment after it trailing? Acorn anchors the gap check
-/// at node END positions, so beyond the single-byte class this looks
-/// one step further back for multi-byte enders whose node closes on
-/// their LAST byte — each verified against the real compiler:
-///
-/// - `i++ // c` — the UpdateExpression ends after the doubled
-///   operator (an INFIX `a + // c` keeps leading: single `+`).
-/// - `n! // c` — a TS non-null assertion glued to an expression end.
-/// - `1. // c` — a numeric literal's trailing dot.
-///
-/// Known residuals (undecidable or not worth the bytes): a regex
-/// literal's closing `/` should be trailing (`= /x/ // c`), but `/`
-/// is also the division operator before a line-broken RHS
-/// (`a / // c`), and telling them apart needs a lexer — we keep
-/// classifying `/` as leading, over-suppressing after a regex
-/// literal. A PREFIX operator dangling before the comment
-/// (`++ // c` with the operand on the next line) misreads as
-/// trailing.
-fn ends_expression_at(bytes: &[u8], i: usize, b: u8) -> bool {
-    if is_expression_end_byte(b) {
-        return true;
-    }
-    match b {
-        // Adjacent doubled bytes are the update operator; spaced
-        // runs (`a + + // c` unary chains) stay leading.
-        b'+' | b'-' => i > 0 && bytes[i - 1] == b,
-        // TS non-null: walk back over the `!` run (`x!!` stacks) and
-        // require an expression end right before it, so a bare
-        // prefix `!` awaiting its operand stays leading.
-        b'!' => {
-            let mut j = i;
-            while j > 0 && bytes[j - 1] == b'!' {
-                j -= 1;
-            }
-            j > 0 && is_expression_end_byte(bytes[j - 1])
-        }
-        // Numeric literal's trailing dot: a digit run glued to the
-        // dot that is NOT the tail of an identifier (`x1. // c` is a
-        // line-broken member access — leading) or of a literal that
-        // already contains a dot (`1.5. // c`).
-        b'.' => {
-            let mut j = i;
-            while j > 0 && bytes[j - 1].is_ascii_digit() {
-                j -= 1;
-            }
-            j < i
-                && !(j > 0
-                    && (bytes[j - 1].is_ascii_alphanumeric()
-                        || matches!(bytes[j - 1], b'_' | b'$' | b'.')))
-        }
-        _ => false,
+struct Frame {
+    span: Span,
+    /// The span of the node's last child in a list whose last node
+    /// keeps every comment up to the list's end (a block or program
+    /// body, array elements, object properties).
+    last_in_list: Option<Span>,
+}
+
+fn passed_over(kind: AstKind<'_>) -> bool {
+    matches!(
+        kind,
+        AstKind::ParenthesizedExpression(_)
+            | AstKind::Elision(_)
+            | AstKind::FormalParameters(_)
+            | AstKind::Hashbang(_)
+    )
+}
+
+fn last_in_list(kind: AstKind<'_>) -> Option<Span> {
+    match kind {
+        AstKind::Program(p) => p
+            .body
+            .last()
+            .map(GetSpan::span)
+            .or_else(|| p.directives.last().map(|d| d.span)),
+        AstKind::BlockStatement(b) => b.body.last().map(GetSpan::span),
+        AstKind::FunctionBody(b) => b
+            .statements
+            .last()
+            .map(GetSpan::span)
+            .or_else(|| b.directives.last().map(|d| d.span)),
+        AstKind::ArrayExpression(a) => a.elements.last().and_then(|el| match el {
+            ArrayExpressionElement::Elision(_) => None,
+            ArrayExpressionElement::SpreadElement(s) => Some(s.span),
+            other => other
+                .as_expression()
+                .map(|e| e.without_parentheses().span()),
+        }),
+        AstKind::ObjectExpression(o) => o.properties.last().map(GetSpan::span),
+        _ => None,
     }
 }
 
-fn is_expression_end_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric()
-        || b >= 0x80
-        || matches!(b, b'_' | b'$' | b'\'' | b'"' | b'`' | b']' | b'}' | b';')
+impl<'a> Visit<'a> for CommentAttacher<'_> {
+    /// Acorn creates a template literal's `expressions` before its
+    /// `quasis`, and the estree walk visits keys in creation order.
+    fn visit_template_literal(&mut self, it: &TemplateLiteral<'a>) {
+        let kind = AstKind::TemplateLiteral(self.alloc(it));
+        self.enter_node(kind);
+        self.visit_expressions(&it.expressions);
+        self.visit_template_elements(&it.quasis);
+        self.leave_node(kind);
+    }
+
+    fn enter_node(&mut self, kind: AstKind<'a>) {
+        let skip = passed_over(kind);
+        self.skipped.push(skip);
+        if skip {
+            return;
+        }
+        let span = kind.span();
+        while let Some(&(start, _, index)) = self.queue.front()
+            && start < span.start
+        {
+            self.queue.pop_front();
+            self.leading.push((span.start, index));
+        }
+        self.frames.push(Frame {
+            span,
+            last_in_list: last_in_list(kind),
+        });
+    }
+
+    fn leave_node(&mut self, _kind: AstKind<'a>) {
+        if self.skipped.pop() != Some(false) {
+            return;
+        }
+        let Some(node) = self.frames.pop() else {
+            return;
+        };
+        let Some(&(next_start, _, _)) = self.queue.front() else {
+            return;
+        };
+        let parent = self.frames.last();
+        if parent.is_some_and(|p| p.span.end == node.span.end) {
+            return;
+        }
+        if let Some(parent) = parent.filter(|p| p.last_in_list == Some(node.span)) {
+            while self
+                .queue
+                .front()
+                .is_some_and(|&(start, _, _)| start < parent.span.end)
+            {
+                self.queue.pop_front();
+            }
+        } else if node.span.end <= next_start
+            && self
+                .source
+                .get(node.span.end as usize..next_start as usize)
+                .is_some_and(|gap| gap.bytes().all(|b| matches!(b, b',' | b')' | b' ' | b'\t')))
+        {
+            self.queue.pop_front();
+        }
+    }
 }
 
 /// Byte class of upstream's runes-mode token pattern `[\w$-]` (JS `\w`

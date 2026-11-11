@@ -2396,8 +2396,6 @@ fn check_project(
     // and report only the syntax error.
     let mut broken_files: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     if sources.svelte {
-        svelte_sources.truncate(svelte_sources_in_scope_end);
-
         // Track which (code, path, offset) tuples we've already
         // pushed so `--svelte-warnings=both` can dedup bridge/native
         // overlap without double-counting.
@@ -2430,7 +2428,7 @@ fn check_project(
         let mut rejections_reported: std::collections::HashSet<PathBuf> =
             std::collections::HashSet::new();
         if !disable_enhance && !dropped_files.is_empty() {
-            let rejected: Vec<(PathBuf, String)> = svelte_sources
+            let rejected: Vec<(PathBuf, String)> = svelte_sources[..svelte_sources_in_scope_end]
                 .iter()
                 .filter(|(p, _)| dropped_files.contains(p))
                 .map(|(p, s)| (p.clone(), String::from(&**s)))
@@ -2452,6 +2450,12 @@ fn check_project(
 
         let run_bridge = matches!(svelte_warnings_mode, SvelteWarningsMode::Bridge);
         if run_bridge {
+            // Every discovered component, the out-of-tsconfig-scope aux
+            // tail included: compiler diagnostics are not scoped by the
+            // tsconfig (the native pass above lints the same set). A
+            // monorepo root whose tsconfig includes no components
+            // otherwise compiles nothing.
+            //
             // `compile_batch` wants owned Strings (they cross a worker
             // boundary); copy out of the shared Arcs — bridge mode is
             // the opt-in slow path and already spawns JS subprocesses.
@@ -2498,8 +2502,14 @@ fn check_project(
                         }
                     }
                 }
-                Err(_) => {
-                    // Bridge unavailable — proceed with TS diagnostics only.
+                Err(e) => {
+                    // Proceed with the other diagnostics, but say that
+                    // none of the compiler's could be collected rather
+                    // than report a clean run.
+                    eprintln!(
+                        "svelte-check-native: could not run svelte/compiler for compiler \
+                         warnings ({e}); no compiler diagnostics are reported"
+                    );
                 }
             }
         }

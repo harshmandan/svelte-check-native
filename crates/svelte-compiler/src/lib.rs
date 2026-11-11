@@ -586,9 +586,13 @@ fn compile_chunk(
         match worker.compile_one(&path, &source) {
             Ok(d) => out.push((path, d)),
             Err(BridgeError::SubprocessDied) => return Err(BridgeError::SubprocessDied),
-            Err(_) => {
-                // Per-file failures are swallowed (returned as empty
-                // result) so one bad file doesn't kill the whole run.
+            Err(e) => {
+                // One bad file doesn't kill the whole run: it gets an
+                // empty result, and the reason is said.
+                eprintln!(
+                    "svelte-check-native: svelte/compiler gave no answer for {}: {e}",
+                    path.display()
+                );
                 out.push((path, Vec::new()));
             }
         }

@@ -2561,6 +2561,34 @@ mod tests {
     }
 
     #[test]
+    fn await_value_tag_ends_where_the_compilers_read_ends() {
+        // The same `?:` rewrite as an `{#each}` context: the value's
+        // reading ends on the type's own `}`, which closes the tag.
+        for template in [
+            "{#await p then v: { a?: number }}x{/await}",
+            "{#await p}{:then v: { a?: number }}x{/await}",
+        ] {
+            let src = format!("<script lang=\"ts\"></script>{template}");
+            let range = Range::new(27, src.len() as u32);
+            let (frag, errors) = parse_template(&src, range);
+            assert!(errors.is_empty(), "{template}: {errors:?}");
+            let Some(Node::AwaitBlock(b)) = frag.nodes.first() else {
+                panic!("expected an AwaitBlock for {template:?}");
+            };
+            let then = b.then_branch.as_ref().expect("then branch");
+            assert_eq!(
+                then.context_range.map(|r| r.slice(&src)),
+                Some("v: { a?: number"),
+                "{template}"
+            );
+            let [Node::Text(text)] = then.body.nodes.as_slice() else {
+                panic!("expected one text node, got {:?}", then.body.nodes);
+            };
+            assert_eq!(text.range.slice(&src), "}x", "{template}");
+        }
+    }
+
+    #[test]
     fn each_tag_with_unpaired_brackets_is_still_a_block() {
         // The compiler throws `expected_token` at the `]`; the block stays
         // so the error has a place.

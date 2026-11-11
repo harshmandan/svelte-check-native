@@ -5,8 +5,7 @@ function $$render_e40e2c10() {
     let visible = true;
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("svelte:head", {});             { svelteHTML.createElement("style", {});             }
-        }
+        { svelteHTML.createElement("svelte:head", {});         }
         if ((visible)) {
             { svelteHTML.createElement("p", {});             }
         }

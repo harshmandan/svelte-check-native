@@ -2166,6 +2166,15 @@ pub(crate) fn emit_template_node(
             if e.name.eq_ignore_ascii_case("!doctype") {
                 return;
             }
+            // Every `<style>…</style>` in the file, at any depth, is taken
+            // out of the template check: svelte2tsx finds them all with
+            // one case-sensitive regex (`htmlxparser.ts`) and removes them
+            // (`handleStyleTag`), so a nested `<style>`'s attributes are
+            // not typed and the names they read stay unused. A nested
+            // `<script>` stays an element.
+            if e.name == "style" {
+                return;
+            }
             crate::nodes::let_directive::emit_slot_parented_node(
                 buf,
                 source,

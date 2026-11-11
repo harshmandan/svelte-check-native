@@ -5,15 +5,12 @@ function $$render_e40e2c10() {
     const name: string = 'widget';
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("svelte:head", {});             { svelteHTML.createElement("style", {});             }
-            { svelteHTML.createElement("script", {
+        { svelteHTML.createElement("svelte:head", {});             { svelteHTML.createElement("script", {
                 "type": `application/ld+json`,
             });
             }
         }
-        { svelteHTML.createElement("svg", {});             { svelteHTML.createElement("style", {});             }
-            { svelteHTML.createElement("style", {});             }
-        }
+        { svelteHTML.createElement("svg", {});         }
         { svelteHTML.createElement("p", {});             name;
         }
     });

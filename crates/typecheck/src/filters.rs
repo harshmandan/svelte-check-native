@@ -372,6 +372,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn start_tag_name_stops_where_the_html_scanner_does() {
+        // svelte-check measures the name with an HTML tokenizer whose tag
+        // names are `[_:\w][_:\w-.\d]*`, so a `$` ends the highlighted
+        // name even though the Svelte parser reads `Child$x` whole.
+        let source = "<Child$x a={1} />";
+        assert_eq!(start_tag_name_around(source, 8), Some((1, 6)));
+        let source = "<kids.$Kid a={1} />";
+        assert_eq!(start_tag_name_around(source, 10), Some((1, 6)));
+        let source = "<svelte:component this={C} />";
+        assert_eq!(start_tag_name_around(source, 17), Some((1, 17)));
+    }
+
+    #[test]
     fn binding_error_message_rewrites_english_shape() {
         let overlay = "__svn_inst_0.$$bindings = 'notBindable';";
         let span = "__svn_inst_0.$$bindings".len() as u32;

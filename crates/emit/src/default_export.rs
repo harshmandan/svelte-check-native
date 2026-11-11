@@ -128,6 +128,7 @@ pub(crate) fn emit_default_export_declarations_ts(
     has_synth_events_alias: bool,
     has_strict_events_decl: bool,
     runes_mode: bool,
+    has_no_props: bool,
     ambients: AmbientRefs,
 ) {
     // Upstream's `addComponentExport.ts:343` selects between three
@@ -301,18 +302,36 @@ pub(crate) fn emit_default_export_declarations_ts(
     // required optional fields.
     let g_prefix: String = generics.map(|g| format!("<{g}>")).unwrap_or_default();
     let _ = writeln!(buf, "interface $$IsomorphicComponent {{");
-    let _ = writeln!(
-        buf,
-        "    new {g_prefix}(options: import('svelte').ComponentConstructorOptions<{props_arg}>): import('svelte').SvelteComponent<{svelte_component_props}, {events_src}, {slots_src}> & {{ $$bindings?: {bindings_src} }} & {exports_src};"
-    );
-    // The call signature takes the props plus the `$$events` /
-    // `$$slots` carriers, or only those when the component has no
-    // props (upstream's `__sveltets_2_IsomorphicComponent`).
-    let carriers = format!("{{ $$events?: {events_src}; $$slots?: {slots_src} }}");
-    let _ = writeln!(
-        buf,
-        "    {g_prefix}(internal: unknown, props: {props_arg} extends Record<string, never> ? {carriers} : {props_arg} & {carriers}): {exports_src} & {{ $set?: any; $on?: any }};"
-    );
+    if generics.is_some() {
+        emit_generic_signatures(
+            buf,
+            &g_prefix,
+            &props_typed,
+            &events_src,
+            &slots_src,
+            &bindings_src,
+            &exports_src,
+            GenericSurface {
+                uses_slots: fragment_contains_slot(fragment),
+                has_events,
+                runes_mode,
+                no_props: !uses_any_props && has_no_props,
+            },
+        );
+    } else {
+        let _ = writeln!(
+            buf,
+            "    new (options: import('svelte').ComponentConstructorOptions<{props_arg}>): import('svelte').SvelteComponent<{svelte_component_props}, {events_src}, {slots_src}> & {{ $$bindings?: {bindings_src} }} & {exports_src};"
+        );
+        // The call signature takes the props plus the `$$events` /
+        // `$$slots` carriers, or only those when the component has no
+        // props (upstream's `__sveltets_2_IsomorphicComponent`).
+        let carriers = format!("{{ $$events?: {events_src}; $$slots?: {slots_src} }}");
+        let _ = writeln!(
+            buf,
+            "    (internal: unknown, props: {props_arg} extends Record<string, never> ? {carriers} : {props_arg} & {carriers}): {exports_src} & {{ $set?: any; $on?: any }};"
+        );
+    }
     let _ = writeln!(buf, "    z_$$bindings?: {bindings_any_src};");
     let _ = writeln!(buf, "}}");
     // `__svn_events` marker keeps the typed-events overload in
@@ -435,4 +454,62 @@ fn emit_fn_component_default_export(buf: &mut EmitBuffer, render_name: &SmolStr)
         "type __svn_component_default = ReturnType<typeof __svn_component_default>;"
     );
     buf.push_str("export default __svn_component_default;\n");
+}
+
+/// What upstream's generic default export reads off the component when
+/// it writes the call signature.
+struct GenericSurface {
+    /// The template has a `<slot>` (svelte2tsx `usesSlots`).
+    uses_slots: bool,
+    /// svelte2tsx `events.hasEvents()`.
+    has_events: bool,
+    runes_mode: bool,
+    /// svelte2tsx `!canHaveAnyProp && exportedNames.hasNoProps()`.
+    no_props: bool,
+}
+
+/// Constructor and call signatures of a generic component, as
+/// svelte2tsx's `addGenericsComponentExport` writes them. Unlike the
+/// non-generic shape (the shim's `__sveltets_2_IsomorphicComponent`),
+/// every choice here is made while emitting, not with a conditional
+/// type: `P extends Record<string, never> ? …` on a concrete props
+/// type sends props that resolve to `never` to the no-props branch.
+#[allow(clippy::too_many_arguments)]
+fn emit_generic_signatures(
+    buf: &mut EmitBuffer,
+    g_prefix: &str,
+    props: &str,
+    events: &str,
+    slots: &str,
+    bindings: &str,
+    exports: &str,
+    surface: GenericSurface,
+) {
+    let children = if surface.uses_slots {
+        " & { children?: any }"
+    } else {
+        ""
+    };
+    let _ = writeln!(
+        buf,
+        "    new {g_prefix}(options: import('svelte').ComponentConstructorOptions<{props}{children}>): import('svelte').SvelteComponent<{props}, {events}, {slots}> & {{ $$bindings?: {bindings} }} & {exports};"
+    );
+    let mut carriers: Vec<String> = Vec::new();
+    if surface.has_events || !surface.runes_mode {
+        carriers.push(format!("$$events?: {events}"));
+    }
+    if surface.uses_slots {
+        carriers.push(format!("$$slots?: {slots}"));
+        carriers.push("children?: any".to_string());
+    }
+    let carriers = format!("{{{}}}", carriers.join(", "));
+    let props_param = if surface.no_props {
+        carriers
+    } else {
+        format!("{props} & {carriers}")
+    };
+    let _ = writeln!(
+        buf,
+        "    {g_prefix}(internal: unknown, props: {props_param}): {exports};"
+    );
 }

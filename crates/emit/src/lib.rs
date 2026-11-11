@@ -1828,6 +1828,13 @@ fn emit_document_with_render_name(
             events_alias_body.is_some(),
             has_strict_events_decl,
             runes_mode,
+            // svelte2tsx `ExportedNames.hasNoProps`: a runes component
+            // without a `$props()` call, a legacy one without exports.
+            if runes_mode {
+                !props_info.props_rune
+            } else {
+                export_type_infos.is_empty()
+            },
             ambients,
         );
     } else {

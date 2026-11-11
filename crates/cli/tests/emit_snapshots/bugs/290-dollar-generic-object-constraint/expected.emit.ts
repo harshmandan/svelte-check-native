@@ -22,7 +22,7 @@ declare class __svn_Render_18ae338e<T extends { a: string, b: number }> {
 }
 interface $$IsomorphicComponent {
     new <T extends { a: string, b: number }>(options: import('svelte').ComponentConstructorOptions<ReturnType<__svn_Render_18ae338e<T>['props']>>): import('svelte').SvelteComponent<ReturnType<__svn_Render_18ae338e<T>['props']>, ReturnType<__svn_Render_18ae338e<T>['events']>, ReturnType<__svn_Render_18ae338e<T>['slots']>> & { $$bindings?: ReturnType<__svn_Render_18ae338e<T>['bindings']> } & ReturnType<__svn_Render_18ae338e<T>['exports']>;
-    <T extends { a: string, b: number }>(internal: unknown, props: ReturnType<__svn_Render_18ae338e<T>['props']> extends Record<string, never> ? { $$events?: ReturnType<__svn_Render_18ae338e<T>['events']>; $$slots?: ReturnType<__svn_Render_18ae338e<T>['slots']> } : ReturnType<__svn_Render_18ae338e<T>['props']> & { $$events?: ReturnType<__svn_Render_18ae338e<T>['events']>; $$slots?: ReturnType<__svn_Render_18ae338e<T>['slots']> }): ReturnType<__svn_Render_18ae338e<T>['exports']> & { $set?: any; $on?: any };
+    <T extends { a: string, b: number }>(internal: unknown, props: ReturnType<__svn_Render_18ae338e<T>['props']> & {$$events?: ReturnType<__svn_Render_18ae338e<T>['events']>}): ReturnType<__svn_Render_18ae338e<T>['exports']>;
     z_$$bindings?: ReturnType<__svn_Render_18ae338e<any>['bindings']>;
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;

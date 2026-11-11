@@ -453,6 +453,36 @@ const CASES: &[(bool, &str, Expected)] = &[
     (false, "{#if 1}{@const a = 1 /*c*/}{/if}", None),
     (false, "{#key a /*c*/}{/key}", None),
     (false, "{#if /*c*/ a /*c*/}{/if}", None),
+    (
+        false,
+        "{#await p}{:then }{/await}",
+        Some((
+            "expected_pattern",
+            "Expected identifier or destructure pattern\nhttps://svelte.dev/e/expected_pattern",
+            47,
+        )),
+    ),
+    (
+        false,
+        "{#await p}{:catch\n}{/await}",
+        Some((
+            "expected_pattern",
+            "Expected identifier or destructure pattern\nhttps://svelte.dev/e/expected_pattern",
+            48,
+        )),
+    ),
+    (
+        false,
+        "{#await p then v}{:catch }{/await}",
+        Some((
+            "expected_pattern",
+            "Expected identifier or destructure pattern\nhttps://svelte.dev/e/expected_pattern",
+            55,
+        )),
+    ),
+    (false, "{#await p then }{/await}", None),
+    (false, "{#await p catch }{/await}", None),
+    (false, "{#await p}{:then}{:catch}{/await}", None),
     (false, "{@html a /*c*/}", None),
     (false, "{@debug/*c*/ a}", None),
     (false, "{#each [] as  q , i  ( q )  }{/each}", None),
@@ -964,6 +994,36 @@ const CASES: &[(bool, &str, Expected)] = &[
     (true, "{#if 1}{@const a = 1 /*c*/}{/if}", None),
     (true, "{#key a /*c*/}{/key}", None),
     (true, "{#if /*c*/ a /*c*/}{/if}", None),
+    (
+        true,
+        "{#await p}{:then }{/await}",
+        Some((
+            "expected_pattern",
+            "Expected identifier or destructure pattern\nhttps://svelte.dev/e/expected_pattern",
+            45,
+        )),
+    ),
+    (
+        true,
+        "{#await p}{:catch\n}{/await}",
+        Some((
+            "expected_pattern",
+            "Expected identifier or destructure pattern\nhttps://svelte.dev/e/expected_pattern",
+            46,
+        )),
+    ),
+    (
+        true,
+        "{#await p then v}{:catch }{/await}",
+        Some((
+            "expected_pattern",
+            "Expected identifier or destructure pattern\nhttps://svelte.dev/e/expected_pattern",
+            53,
+        )),
+    ),
+    (true, "{#await p then }{/await}", None),
+    (true, "{#await p catch }{/await}", None),
+    (true, "{#await p}{:then}{:catch}{/await}", None),
     (true, "{@html a /*c*/}", None),
     (true, "{@debug/*c*/ a}", None),
     (true, "{#each [] as  q , i  ( q )  }{/each}", None),

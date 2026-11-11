@@ -1,0 +1,11 @@
+{
+    "errors": [
+        { "file": "Page.svelte", "line": 10, "column": 21, "code": 2322 },
+        { "file": "Page.svelte", "line": 12, "column": 21, "code": 2322 },
+        { "file": "Page.svelte", "line": 14, "column": 20, "code": 2322 },
+        { "file": "Page.svelte", "line": 15, "column": 22, "code": 2322 },
+        { "file": "Page.svelte", "line": 15, "column": 24, "code": 2345 },
+        { "file": "Page.svelte", "line": 16, "column": 20, "code": 2322 }
+    ],
+    "_note": "A get/set binding on a DOM element (`bind:clientWidth={null, set}`) is an attribute of the element, as svelte2tsx writes every get/set binding but `bind:this`: `\"bind:clientWidth\": get_set_binding(get, set)`, one-way names included. The element's attribute type checks the setter, so a setter taking `number | undefined` is fine and a `string` setter is a type error on the binding's key. Checking the setter against the bare DOM property type (`satisfies HTMLElement['clientWidth']`) rejected the wider setter and put the error on the setter."
+}

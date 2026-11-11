@@ -5,7 +5,7 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         { svelteHTML.createElement("div", {
             ...__svn_empty({"data-foo": (true)}),
-            ...__svn_empty({"data-bare": __svn_any()}),
+            ...__svn_empty({"data-bare": true}),
             ...__svn_empty({"data-bar": `to`}),
         });
         }

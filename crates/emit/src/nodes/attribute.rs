@@ -290,16 +290,11 @@ pub(crate) fn emit_plain(
     match &p.value {
         None => {
             // Boolean attribute: `<input required>` → `"required": true,`
-            // `<div popover>` carve-out: upstream emits `"": ""`.
-            // For data-* boolean attrs, upstream uses `__sveltets_2_any()`
-            // as the value placeholder (Attribute.ts:91). Match it.
-            let value = if wrap {
-                "__svn_any()"
-            } else if name == "popover" {
-                "\"\""
-            } else {
-                "true"
-            };
+            // `<div popover>` carve-out: upstream emits `"": ""`. A bare
+            // `data-*` attribute is `true` too (Attribute.ts adds the
+            // `__sveltets_2_any()` placeholder only for an attribute that
+            // reaches it with no value at all, which a bare one does not).
+            let value = if name == "popover" { "\"\"" } else { "true" };
             buf.push_str(&indent);
             buf.push_str(key_prefix);
             write_attribute_key(buf, &key_name, name_range, false);

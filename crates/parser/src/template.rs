@@ -19,22 +19,21 @@ use smol_str::SmolStr;
 use svn_core::Range;
 
 use crate::ast::{
-    CatchBranch, Comment, Component, EachAsClause, EachBlock, Element, ElseIfArm, Fragment,
-    ImplicitClose, Interpolation, InterpolationKind, Node, SvelteElement, SvelteElementKind, Text,
-    ThenBranch, is_component_tag, is_void_element,
+    AwaitBlock, CatchBranch, Comment, Component, EachAsClause, EachBlock, Element, ElseIfArm,
+    Fragment, ImplicitClose, Interpolation, InterpolationKind, Node, SnippetBlock, SvelteElement,
+    SvelteElementKind, Text, ThenBranch, is_component_tag, is_void_element,
 };
 use crate::attributes::parse_attributes;
 use crate::blocks::{
-    AwaitShortForm, BlockTerminator, build_await_block, build_if_block, build_key_block,
-    build_snippet_block, parse_await_header, parse_if_header, parse_key_header,
-    parse_snippet_header, peek_and_consume_terminator, trimmed_range,
+    BlockTerminator, build_if_block, build_key_block, parse_if_header, parse_key_header,
+    peek_and_consume_terminator, trimmed_range,
 };
 use crate::error::ParseError;
 use crate::html5::closing_tag_omitted;
 use crate::mustache::{MustacheSigil, classify_mustache_sigil, find_mustache_end};
 use crate::scanner::{Scanner, is_svelte_whitespace_at};
 use crate::sections::{SectionCollector, section_tag_at};
-use crate::tag_read::{TagReader, compiler_reads_typescript};
+use crate::tag_read::{AwaitBranch, TagReader, compiler_reads_typescript};
 
 /// Parse one template fragment out of the source string.
 ///
@@ -305,7 +304,8 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                 Some((MustacheSigil::Continuation | MustacheSigil::BlockClose, _))
             ) {
                 let term_start = self.scanner.pos();
-                if let Some(term) = peek_and_consume_terminator(&mut self.scanner, &mut self.errors)
+                if let Some(term) =
+                    peek_and_consume_terminator(&mut self.scanner, &mut self.errors, self.ts)
                 {
                     self.last_terminator_range = Range::new(term_start, self.scanner.pos());
                     return (nodes, Some(term));
@@ -742,99 +742,107 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
     }
 
     fn parse_await_block(&mut self, block_start: u32) -> Option<Node> {
-        let (expr_range, short) = parse_await_header(&mut self.scanner, &mut self.errors)?;
+        // The tag ends where the compiler's reading of it ends; no read
+        // goes past the `}` a brace count finds.
+        let keyword_end = self.scanner.pos();
+        let source = self.scanner.source();
+        let counted_close = find_mustache_end(source, keyword_end);
+        let reader = TagReader::new(source, self.ts);
+        let read = reader.read_await_open(keyword_end, counted_close.unwrap_or(self.fragment_end));
+        let (expr_range, branch, open_error) = match read {
+            Ok(open) => {
+                self.scanner.set_pos(open.end);
+                (open.expression, open.branch, None)
+            }
+            Err(error) => {
+                // The compiler throws, and the component is rejected. The
+                // block stays, carrying the error: its tag ends at the
+                // counted `}`, or where the error is.
+                let end = counted_close.unwrap_or(error.at.max(keyword_end));
+                let header = trimmed_range(source, keyword_end, end)
+                    .unwrap_or(Range::new(keyword_end, keyword_end));
+                self.scanner.set_pos(if counted_close.is_some() {
+                    end + 1
+                } else {
+                    end
+                });
+                (header, AwaitBranch::Pending, Some(error))
+            }
+        };
 
         let (mut pending, mut then_branch, mut catch_branch) = (None, None, None);
-
-        match short {
-            AwaitShortForm::Then(ctx) => {
-                // `{#await p then v}` — body is the then-branch directly,
-                // BUT `{:catch}` is still allowed afterward in Svelte's
-                // grammar. So parse until either `:catch` or `{/await}`.
-                let then_start = self.scanner.pos();
-                let (body, mut term) = self.parse_fragment_until(None);
+        let start = self.scanner.pos();
+        let (nodes, mut term) = self.parse_fragment_until(None);
+        let body = Fragment {
+            nodes,
+            range: Range::new(start, self.scanner.pos()),
+        };
+        match branch {
+            AwaitBranch::Pending => pending = Some(body),
+            AwaitBranch::Then(context_range) => {
                 then_branch = Some(ThenBranch {
-                    context_range: ctx,
-                    body: Fragment {
-                        nodes: body,
-                        range: Range::new(then_start, self.scanner.pos()),
-                    },
+                    context_range,
+                    body,
+                    open_error: None,
                 });
-                if let Some(BlockTerminator::Catch { context_range }) = &term {
-                    let cctx = *context_range;
-                    let catch_start = self.scanner.pos();
-                    let (catch_nodes, t2) = self.parse_fragment_until(None);
-                    catch_branch = Some(CatchBranch {
-                        context_range: cctx,
-                        body: Fragment {
-                            nodes: catch_nodes,
-                            range: Range::new(catch_start, self.scanner.pos()),
-                        },
-                    });
-                    term = t2;
-                }
-                self.finish_await_block(term, block_start);
             }
-            AwaitShortForm::Catch(ctx) => {
-                let catch_start = self.scanner.pos();
-                let (body, t) = self.parse_fragment_until(None);
+            AwaitBranch::Catch(context_range) => {
                 catch_branch = Some(CatchBranch {
-                    context_range: ctx,
-                    body: Fragment {
-                        nodes: body,
-                        range: Range::new(catch_start, self.scanner.pos()),
-                    },
+                    context_range,
+                    body,
+                    open_error: None,
                 });
-                self.finish_await_block(t, block_start);
-            }
-            AwaitShortForm::None => {
-                // Full form: pending, then optional :then, optional :catch, {/await}.
-                let pending_start = self.scanner.pos();
-                let (pending_nodes, mut term) = self.parse_fragment_until(None);
-                pending = Some(Fragment {
-                    nodes: pending_nodes,
-                    range: Range::new(pending_start, self.scanner.pos()),
-                });
-                // :then?
-                if let Some(BlockTerminator::Then { context_range }) = &term {
-                    let ctx = *context_range;
-                    let then_start = self.scanner.pos();
-                    let (then_nodes, t2) = self.parse_fragment_until(None);
-                    then_branch = Some(ThenBranch {
-                        context_range: ctx,
-                        body: Fragment {
-                            nodes: then_nodes,
-                            range: Range::new(then_start, self.scanner.pos()),
-                        },
-                    });
-                    term = t2;
-                }
-                // :catch?
-                if let Some(BlockTerminator::Catch { context_range }) = &term {
-                    let ctx = *context_range;
-                    let catch_start = self.scanner.pos();
-                    let (catch_nodes, t2) = self.parse_fragment_until(None);
-                    catch_branch = Some(CatchBranch {
-                        context_range: ctx,
-                        body: Fragment {
-                            nodes: catch_nodes,
-                            range: Range::new(catch_start, self.scanner.pos()),
-                        },
-                    });
-                    term = t2;
-                }
-                self.finish_await_block(term, block_start);
             }
         }
+        // `{:then}` after the pending branch, then `{:catch}` after either.
+        if pending.is_some()
+            && let Some(BlockTerminator::Then {
+                context_range,
+                error,
+            }) = &term
+        {
+            let (context_range, open_error) = (*context_range, error.clone());
+            let start = self.scanner.pos();
+            let (nodes, next) = self.parse_fragment_until(None);
+            then_branch = Some(ThenBranch {
+                context_range,
+                body: Fragment {
+                    nodes,
+                    range: Range::new(start, self.scanner.pos()),
+                },
+                open_error,
+            });
+            term = next;
+        }
+        if catch_branch.is_none()
+            && let Some(BlockTerminator::Catch {
+                context_range,
+                error,
+            }) = &term
+        {
+            let (context_range, open_error) = (*context_range, error.clone());
+            let start = self.scanner.pos();
+            let (nodes, next) = self.parse_fragment_until(None);
+            catch_branch = Some(CatchBranch {
+                context_range,
+                body: Fragment {
+                    nodes,
+                    range: Range::new(start, self.scanner.pos()),
+                },
+                open_error,
+            });
+            term = next;
+        }
+        self.finish_await_block(term, block_start);
 
-        Some(Node::AwaitBlock(Box::new(build_await_block(
-            expr_range,
+        Some(Node::AwaitBlock(Box::new(AwaitBlock {
+            expression_range: expr_range,
             pending,
             then_branch,
             catch_branch,
-            block_start,
-            self.scanner.pos(),
-        ))))
+            open_error,
+            range: Range::new(block_start, self.scanner.pos()),
+        })))
     }
 
     fn finish_await_block(&mut self, term: Option<BlockTerminator>, block_start: u32) {
@@ -874,12 +882,40 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
     }
 
     fn parse_snippet_block(&mut self, block_start: u32) -> Option<Node> {
-        let (name, params_range, generics_range) =
-            parse_snippet_header(&mut self.scanner, &mut self.errors)?;
+        let keyword_end = self.scanner.pos();
+        let source = self.scanner.source();
+        let reader = TagReader::new(source, self.ts);
+        let (name, params_range, generics_range, open_error) =
+            match reader.read_snippet_open(keyword_end) {
+                Ok(open) => {
+                    self.scanner.set_pos(open.end);
+                    let name: SmolStr = open.name.slice(source).into();
+                    (name, open.parameters, open.generics, None)
+                }
+                Err(error) => {
+                    // The compiler throws, and the component is rejected.
+                    // The block stays, carrying the error: its tag ends at
+                    // the counted `}`, or where the error is.
+                    let counted_close = find_mustache_end(source, keyword_end);
+                    let end = counted_close.unwrap_or(error.at.max(keyword_end));
+                    self.scanner.set_pos(if counted_close.is_some() {
+                        end + 1
+                    } else {
+                        end
+                    });
+                    // The name, when one was read before the error.
+                    let name_start = reader.skip_whitespace(keyword_end);
+                    let name_end = reader.read_identifier(name_start).unwrap_or(name_start);
+                    let name: SmolStr = source[name_start as usize..name_end as usize].into();
+                    let at = Range::new(error.at, error.at);
+                    (name, at, None, Some(error))
+                }
+            };
+        let body_start = self.scanner.pos();
         let (body_nodes, term) = self.parse_fragment_until(None);
         let body = Fragment {
             nodes: body_nodes,
-            range: Range::new(params_range.end + 1, self.scanner.pos()),
+            range: Range::new(body_start, self.scanner.pos()),
         };
         match term {
             Some(BlockTerminator::Close { tag }) if tag == "snippet" => {}
@@ -890,14 +926,14 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                 });
             }
         }
-        Some(Node::SnippetBlock(Box::new(build_snippet_block(
+        Some(Node::SnippetBlock(Box::new(SnippetBlock {
             name,
-            params_range,
+            parameters_range: params_range,
             generics_range,
             body,
-            block_start,
-            self.scanner.pos(),
-        ))))
+            open_error,
+            range: Range::new(block_start, self.scanner.pos()),
+        })))
     }
 
     fn parse_text(&mut self) -> Node {
@@ -2578,7 +2614,7 @@ mod tests {
             let then = b.then_branch.as_ref().expect("then branch");
             assert_eq!(
                 then.context_range.map(|r| r.slice(&src)),
-                Some("v: { a?: number"),
+                Some("v: { a?: number "),
                 "{template}"
             );
             let [Node::Text(text)] = then.body.nodes.as_slice() else {

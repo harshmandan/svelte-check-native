@@ -94,14 +94,9 @@ impl Finder<'_> {
         }
     }
 
-    /// The value of a `then` / `catch` branch whose body is `body`.
-    fn branch_value(&mut self, value: Option<Range>, body: &Fragment, continuation: bool) {
-        let error = match value {
-            Some(r) => self.reader().branch_value(r),
-            None if continuation => self.reader().missing_branch_value(body.range.start),
-            None => None,
-        };
-        self.tag_error(error);
+    /// The error the parser met reading a tag the way the compiler does.
+    fn read_error(&mut self, error: Option<&svn_parser::tag_read::TagReadError>) {
+        self.tag_error(error.cloned().map(TagError::from));
     }
 
     /// The whitespace after the keyword of the block tag at `start`.
@@ -190,29 +185,23 @@ impl Finder<'_> {
                 }
             }
             Node::EachBlock(b) => {
-                let error = self.reader().each(b);
-                self.tag_error(error);
+                self.read_error(b.open_error.as_ref());
                 self.fragment(&b.body, false);
                 if let Some(alt) = &b.alternate {
                     self.fragment(alt, false);
                 }
             }
             Node::AwaitBlock(b) => {
-                self.block_keyword(b.range.start, "await");
+                self.read_error(b.open_error.as_ref());
                 if let Some(pending) = &b.pending {
                     self.fragment(pending, false);
                 }
-                // A branch is its own `{:then}` / `{:catch}` tag when a
-                // branch precedes it; otherwise it is written inline in
-                // the `{#await}` tag.
-                let mut continuation = b.pending.is_some();
                 if let Some(then) = &b.then_branch {
-                    self.branch_value(then.context_range, &then.body, continuation);
+                    self.read_error(then.open_error.as_ref());
                     self.fragment(&then.body, false);
-                    continuation = true;
                 }
                 if let Some(catch) = &b.catch_branch {
-                    self.branch_value(catch.context_range, &catch.body, continuation);
+                    self.read_error(catch.open_error.as_ref());
                     self.fragment(&catch.body, false);
                 }
             }
@@ -221,17 +210,7 @@ impl Finder<'_> {
                 self.fragment(&b.body, false);
             }
             Node::SnippetBlock(b) => {
-                self.block_keyword(b.range.start, "snippet");
-                // The snippet's name is read as an identifier.
-                let tag = &self.source[b.range.start as usize..];
-                if let Some(keyword) = tag.find("snippet") {
-                    let after = &tag[keyword + "snippet".len()..];
-                    let at = b.range.start
-                        + (keyword + "snippet".len() + after.len() - after.trim_start().len())
-                            as u32;
-                    self.reserved_word(b.name.as_str(), at);
-                }
-                self.snippet_parameters(b);
+                self.read_error(b.open_error.as_ref());
                 self.fragment(&b.body, false);
             }
             Node::Interpolation(i) => self.tag(i),
@@ -392,33 +371,6 @@ impl Finder<'_> {
                 )
             };
             self.report(brace, code, message, Self::point(brace));
-        }
-    }
-
-    /// A snippet's parameter list is read as an arrow function's.
-    fn snippet_parameters(&mut self, b: &svn_parser::ast::SnippetBlock) {
-        let params = b.parameters_range.slice(self.source);
-        let generics = b
-            .generics_range
-            .map(|g| format!("<{}>", g.slice(self.source)))
-            .unwrap_or_default();
-        let text = format!("{generics}({params}) => {{}}");
-        let alloc = Allocator::default();
-        let source_type = SourceType::default()
-            .with_module(true)
-            .with_typescript(self.ts);
-        let parsed = oxc_parser::Parser::new(&alloc, &text, source_type).parse_expression();
-        if let Err(errors) = parsed {
-            let message = errors
-                .first()
-                .map_or_else(|| "Unexpected token".to_string(), |e| e.message.to_string());
-            let at = b.parameters_range.start;
-            self.report(
-                at,
-                Code::js_parse_error,
-                format!("{message}\nhttps://svelte.dev/e/js_parse_error"),
-                Self::point(at),
-            );
         }
     }
 

@@ -13,20 +13,13 @@
 //! branch-tag or `{/kind}` close". The child parser scans for those; when it
 //! sees one, it returns control here to dispatch the next branch.
 
-use smol_str::SmolStr;
 use svn_core::Range;
 
-use crate::ast::{
-    AwaitBlock, CatchBranch, ElseIfArm, Fragment, IfBlock, KeyBlock, SnippetBlock, ThenBranch,
-};
+use crate::ast::{ElseIfArm, Fragment, IfBlock, KeyBlock};
 use crate::error::ParseError;
-use crate::mustache::{
-    MustacheSigil, can_start_regex, classify_mustache_sigil, find_mustache_end, skip_ascii_string,
-    skip_regex_literal, skip_template_literal,
-};
-use crate::scanner::{
-    Scanner, is_svelte_whitespace_at, is_svelte_whitespace_before, unicode_identifier_len,
-};
+use crate::mustache::{MustacheSigil, classify_mustache_sigil, find_mustache_end};
+use crate::scanner::{Scanner, is_svelte_whitespace_before};
+use crate::tag_read::{TagReadError, TagReader};
 
 /// What block terminator was found in a child fragment scan.
 #[derive(Debug)]
@@ -38,10 +31,17 @@ pub(crate) enum BlockTerminator {
     Else,
     /// `{:else if condition}` — trailing expression range captured.
     ElseIf { condition_range: Range },
-    /// `{:then [binding]}` — optional binding context range.
-    Then { context_range: Option<Range> },
-    /// `{:catch [binding]}` — optional binding context range.
-    Catch { context_range: Option<Range> },
+    /// `{:then [binding]}` — optional binding context range, and the
+    /// error the compiler throws reading the tag.
+    Then {
+        context_range: Option<Range>,
+        error: Option<TagReadError>,
+    },
+    /// `{:catch [binding]}` — the same for `catch`.
+    Catch {
+        context_range: Option<Range>,
+        error: Option<TagReadError>,
+    },
 }
 
 /// Try to recognize a branch tag (`{:...}`) or close tag (`{/...}`) at the
@@ -50,6 +50,7 @@ pub(crate) enum BlockTerminator {
 pub(crate) fn peek_and_consume_terminator(
     scanner: &mut Scanner<'_>,
     errors: &mut Vec<ParseError>,
+    ts: bool,
 ) -> Option<BlockTerminator> {
     let start = scanner.pos();
     if scanner.peek_byte() != Some(b'{') {
@@ -133,35 +134,35 @@ pub(crate) fn peek_and_consume_terminator(
             }
         }
         "then" | "catch" => {
-            scanner.skip_svelte_whitespace();
-            // Optional binding before `}`. Round-8 follow-up #3:
-            // destructure patterns (`{:catch { message }}`) contain
-            // nested `{...}` braces; scan depth-aware via
-            // `find_mustache_end` instead of stopping at the first
-            // `}` (which would land inside the destructure pattern).
-            let ctx_start = scanner.pos();
-            let close_pos = find_mustache_end(scanner.source(), ctx_start);
-            let Some(close_pos) = close_pos else {
-                errors.push(ParseError::MalformedOpenTag {
-                    range: Range::new(start, scanner.pos()),
-                });
-                scanner.set_pos(start);
-                return None;
-            };
-            let ctx_end = close_pos;
-            scanner.set_pos(ctx_end);
-            scanner.advance_byte(); // consume the `}`
-            let ctx_trimmed_start = skip_ws_start(scanner.source(), ctx_start, ctx_end);
-            let ctx_trimmed_end = skip_ws_end(scanner.source(), ctx_trimmed_start, ctx_end);
-            let context_range = if ctx_trimmed_start < ctx_trimmed_end {
-                Some(Range::new(ctx_trimmed_start, ctx_trimmed_end))
-            } else {
-                None
+            // The tag ends where the compiler's reading of its value ends;
+            // no read goes past the `}` a brace count finds.
+            let keyword_end = word_end;
+            let counted_close = find_mustache_end(scanner.source(), keyword_end);
+            let limit = counted_close.unwrap_or(scanner.source().len() as u32);
+            let reader = TagReader::new(scanner.source(), ts);
+            let (context_range, error) = match reader.read_branch(keyword_end, limit) {
+                Ok(branch) => {
+                    scanner.set_pos(branch.end);
+                    (branch.value, None)
+                }
+                Err(error) => {
+                    // The compiler throws, and the component is rejected.
+                    // The tag ends at the counted `}`, or where the error
+                    // is.
+                    scanner.set_pos(counted_close.map_or(error.at.max(keyword_end), |c| c + 1));
+                    (None, Some(error))
+                }
             };
             if word == "then" {
-                Some(BlockTerminator::Then { context_range })
+                Some(BlockTerminator::Then {
+                    context_range,
+                    error,
+                })
             } else {
-                Some(BlockTerminator::Catch { context_range })
+                Some(BlockTerminator::Catch {
+                    context_range,
+                    error,
+                })
             }
         }
         _ => {
@@ -220,126 +221,6 @@ pub(crate) fn parse_if_header(
     Some(Range::new(start, end))
 }
 
-/// Parse `{#await expression [then pattern | catch pattern]}` header.
-///
-/// Returns `(expression_range, short_form)` where `short_form` is one of
-/// `None` (standard block, will use `{:then}` and `{:catch}` branches),
-/// `Some((then_context, None))` for `{#await p then v}`, or
-/// `Some((None, catch_context))` for `{#await p catch e}`.
-pub(crate) fn parse_await_header(
-    scanner: &mut Scanner<'_>,
-    errors: &mut Vec<ParseError>,
-) -> Option<(Range, AwaitShortForm)> {
-    scanner.skip_svelte_whitespace();
-    let header_start = scanner.pos();
-    let header_end = find_matching_close_brace(scanner)?;
-    if header_end <= header_start {
-        errors.push(ParseError::MalformedOpenTag {
-            range: Range::new(header_start, header_end.max(header_start)),
-        });
-        return None;
-    }
-
-    let header = &scanner.source()[header_start as usize..header_end as usize];
-
-    // Look for the `then` or `catch` separator keyword at depth zero. Any
-    // whitespace run may surround it (upstream: read_expression +
-    // allow_whitespace + eat('then')), and the trailing context binding is
-    // optional (`{#await p then}` is the no-binding shorthand).
-    //
-    // `then` and `catch` are also valid identifiers, so an operand merely
-    // NAMED `then` ({#await flag ? then : fallback}) must stay inside the
-    // promise expression — upstream acorn-parses the expression first and
-    // only then eats the keyword. Each candidate is therefore checked
-    // with [`is_await_branch_split`] before it is allowed to split.
-    let find_branch_keyword = |kw: &str| {
-        find_keywords_at_depth_zero(header, kw)
-            .into_iter()
-            .find(|&p| is_await_branch_split(header, p, kw.len()))
-    };
-    let (short, split_at) = if let Some(p) = find_branch_keyword("then") {
-        let ctx_start = header_start + (p + 4) as u32;
-        let ctx = trimmed_range(scanner.source(), ctx_start, header_end);
-        (AwaitShortForm::Then(ctx), Some(p))
-    } else if let Some(p) = find_branch_keyword("catch") {
-        let ctx_start = header_start + (p + 5) as u32;
-        let ctx = trimmed_range(scanner.source(), ctx_start, header_end);
-        (AwaitShortForm::Catch(ctx), Some(p))
-    } else {
-        (AwaitShortForm::None, None)
-    };
-
-    let expression_range = match split_at {
-        // Trim the whitespace run before the keyword off the expression.
-        Some(p) => Range::new(
-            header_start,
-            header_start + skip_ws_end(header, 0, p as u32),
-        ),
-        None => Range::new(header_start, header_end),
-    };
-
-    scanner.set_pos(header_end + 1);
-    Some((expression_range, short))
-}
-
-/// Whether the `then`/`catch` keyword at `p` in an await header is the
-/// branch separator rather than an identifier inside the promise
-/// expression. Approximates upstream's parse-expression-first order with
-/// two shape checks: the last significant byte before the keyword must
-/// be able to END an expression (identifier/literal tail, closing
-/// bracket, quote, backtick, or TS non-null `!`), and what follows the
-/// keyword must start a binding pattern — or the header must end there
-/// (`{#await p then}` has no binding).
-fn is_await_branch_split(header: &str, p: usize, kw_len: usize) -> bool {
-    let bytes = header.as_bytes();
-    let mut i = p;
-    // Block comments between the expression and the keyword are
-    // skipped along with the whitespace, as acorn skips them.
-    loop {
-        while i > 0 && bytes[i - 1].is_ascii_whitespace() {
-            i -= 1;
-        }
-        if i >= 2 && &bytes[i - 2..i] == b"*/" {
-            match header[..i - 2].rfind("/*") {
-                Some(open) => i = open,
-                None => break,
-            }
-        } else {
-            break;
-        }
-    }
-    if i == 0 {
-        // Nothing before the keyword: `{#await then}` awaits a variable
-        // NAMED `then`, it isn't the branch shorthand.
-        return false;
-    }
-    let prev = bytes[i - 1];
-    let prev_can_end_expression = prev.is_ascii_alphanumeric()
-        || prev >= 0x80
-        || matches!(
-            prev,
-            b'_' | b'$' | b')' | b']' | b'}' | b'"' | b'\'' | b'`' | b'!'
-        );
-    if !prev_can_end_expression {
-        return false;
-    }
-    let mut j = p + kw_len;
-    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-        j += 1;
-    }
-    match bytes.get(j) {
-        None => true,
-        Some(&b) => b.is_ascii_alphabetic() || b >= 0x80 || matches!(b, b'_' | b'$' | b'{' | b'['),
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum AwaitShortForm {
-    None,
-    Then(Option<Range>),
-    Catch(Option<Range>),
-}
-
 /// `{#key expression}` header.
 pub(crate) fn parse_key_header(
     scanner: &mut Scanner<'_>,
@@ -348,294 +229,7 @@ pub(crate) fn parse_key_header(
     parse_if_header(scanner, errors)
 }
 
-/// `{#snippet name(params)}` / `{#snippet name<T>(params)}` header.
-///
-/// Returns `(name, params_range, generics_range)` where `params_range`
-/// is the byte range of the parameter list (inside the parens, not
-/// including them) and `generics_range` is the byte range of the
-/// optional TS type-parameter list (inside the `<>`, not including
-/// them).
-pub(crate) fn parse_snippet_header(
-    scanner: &mut Scanner<'_>,
-    errors: &mut Vec<ParseError>,
-) -> Option<(SmolStr, Range, Option<Range>)> {
-    scanner.skip_svelte_whitespace();
-
-    // Snippet names are full-Unicode identifiers (upstream
-    // read_identifier via acorn's isIdentifierStart/Char).
-    let name_start = scanner.pos();
-    let name_end = name_start + unicode_identifier_len(&scanner.source()[name_start as usize..]);
-    scanner.set_pos(name_end);
-    if name_end == name_start {
-        errors.push(ParseError::MalformedOpenTag {
-            range: Range::new(name_start, name_end.max(name_start + 1)),
-        });
-        return None;
-    }
-    let name: SmolStr = scanner.source()[name_start as usize..name_end as usize].into();
-
-    scanner.skip_svelte_whitespace();
-
-    // Optional TS generic signature between the name and the parameter
-    // list: `{#snippet row<T>(x: T)}` (Svelte 5.19+). Upstream matches
-    // a balanced `<...>` (match_bracket with `{'<': '>'}`) that skips
-    // quoted strings; nested angle pairs count, everything else doesn't.
-    let mut generics_range: Option<Range> = None;
-    if scanner.peek_byte() == Some(b'<') {
-        let open = scanner.pos();
-        let Some(close) = find_matching_angle_bracket(scanner.source(), open) else {
-            errors.push(ParseError::MalformedOpenTag {
-                range: Range::new(open, scanner.source().len() as u32),
-            });
-            return None;
-        };
-        generics_range = Some(Range::new(open + 1, close));
-        scanner.set_pos(close + 1);
-        scanner.skip_svelte_whitespace();
-    }
-
-    if scanner.peek_byte() != Some(b'(') {
-        errors.push(ParseError::MalformedOpenTag {
-            range: Range::new(scanner.pos(), scanner.pos()),
-        });
-        return None;
-    }
-    scanner.advance_byte();
-    let params_start = scanner.pos();
-
-    // Find matching `)`. Strings, char literals, template literals (with
-    // their `${...}` interpolations), regex literals, and comments are all
-    // skipped so a `)` inside any of them doesn't close the params early —
-    // mirroring `find_mustache_end`'s `}`-finding lexical tracking.
-    let bytes = scanner.source().as_bytes();
-    let mut i = params_start as usize;
-    let mut paren_depth: i32 = 1;
-    // Brace depth + template stack track `${...}` interpolations exactly as
-    // in `find_mustache_end`, so a `)` inside an interpolation is governed by
-    // its own balanced braces rather than the outer paren count.
-    let mut brace_depth: i32 = 0;
-    let mut template_brace_stack: Vec<i32> = Vec::new();
-    let mut close_paren: Option<usize> = None;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'(' => {
-                paren_depth += 1;
-                i += 1;
-            }
-            b')' => {
-                paren_depth -= 1;
-                if paren_depth == 0 {
-                    close_paren = Some(i);
-                    break;
-                }
-                i += 1;
-            }
-            b'{' => {
-                brace_depth += 1;
-                i += 1;
-            }
-            b'}' => {
-                brace_depth -= 1;
-                if let Some(&top) = template_brace_stack.last() {
-                    if brace_depth == top {
-                        // Returning from `${...}` into the template literal.
-                        template_brace_stack.pop();
-                        i += 1;
-                        i = skip_template_literal(
-                            bytes,
-                            i,
-                            &mut template_brace_stack,
-                            &mut brace_depth,
-                        )?;
-                        continue;
-                    }
-                }
-                i += 1;
-            }
-            b'"' => i = skip_ascii_string(bytes, i + 1, b'"')?,
-            b'\'' => i = skip_ascii_string(bytes, i + 1, b'\'')?,
-            b'`' => {
-                i = skip_template_literal(
-                    bytes,
-                    i + 1,
-                    &mut template_brace_stack,
-                    &mut brace_depth,
-                )?
-            }
-            b'/' => match bytes.get(i + 1).copied() {
-                Some(b'/') => {
-                    // Line comment to end of line.
-                    i += 2;
-                    while i < bytes.len() && !matches!(bytes[i], b'\n' | b'\r') {
-                        i += 1;
-                    }
-                }
-                Some(b'*') => {
-                    // Block comment to `*/`.
-                    i += 2;
-                    while i + 1 < bytes.len() {
-                        if bytes[i] == b'*' && bytes[i + 1] == b'/' {
-                            i += 2;
-                            break;
-                        }
-                        i += 1;
-                    }
-                }
-                _ if can_start_regex(bytes, params_start as usize, i) => {
-                    i = skip_regex_literal(bytes, i + 1)?;
-                }
-                _ => i += 1,
-            },
-            _ => i += 1,
-        }
-    }
-    let params_end = close_paren
-        .map(|p| p as u32)
-        .unwrap_or(scanner.source().len() as u32);
-    scanner.set_pos(params_end);
-    if scanner.peek_byte() != Some(b')') {
-        errors.push(ParseError::MalformedOpenTag {
-            range: Range::new(params_start, params_end),
-        });
-        return None;
-    }
-    scanner.advance_byte(); // past `)`
-    scanner.skip_svelte_whitespace();
-    if scanner.peek_byte() != Some(b'}') {
-        errors.push(ParseError::MalformedOpenTag {
-            range: Range::new(scanner.pos(), scanner.pos()),
-        });
-        return None;
-    }
-    scanner.advance_byte();
-
-    Some((name, Range::new(params_start, params_end), generics_range))
-}
-
-/// Find the `>` matching the `<` at `open`, counting nested angle pairs
-/// and skipping quoted/template strings — the same shape as upstream's
-/// `match_bracket` with the `{'<': '>'}` bracket set. Returns the byte
-/// offset of the matching `>`.
-fn find_matching_angle_bracket(src: &str, open: u32) -> Option<u32> {
-    let bytes = src.as_bytes();
-    debug_assert_eq!(bytes.get(open as usize), Some(&b'<'));
-    let mut depth: i32 = 0;
-    let mut i = open as usize;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'<' => {
-                depth += 1;
-                i += 1;
-            }
-            b'>' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i as u32);
-                }
-                i += 1;
-            }
-            b'"' => i = skip_ascii_string(bytes, i + 1, b'"')?,
-            b'\'' => i = skip_ascii_string(bytes, i + 1, b'\'')?,
-            b'`' => {
-                // Template-literal type: scan to the closing backtick
-                // (may span lines, unlike the quote forms).
-                i += 1;
-                while i < bytes.len() && bytes[i] != b'`' {
-                    i += if bytes[i] == b'\\' { 2 } else { 1 };
-                }
-                if i >= bytes.len() {
-                    return None;
-                }
-                i += 1;
-            }
-            _ => i += 1,
-        }
-    }
-    None
-}
-
 // ===== Lexical helpers ===================================================
-
-/// Find every standalone keyword occurrence (`as` / `then` / `catch`)
-/// at depth 0 (outside strings / template literals / nested parens /
-/// brackets / braces / comments). The keyword matches only when preceded
-/// by at least one whitespace byte and followed by whitespace or the end
-/// of `src` — mirroring upstream's `read_expression`,
-/// `allow_whitespace()`, `match(keyword)` sequence, which accepts any
-/// whitespace run (spaces, tabs, CR/LF) around the keyword, not just
-/// single spaces. Returns the byte offsets of the keyword itself, in
-/// source order.
-fn find_keywords_at_depth_zero(src: &str, keyword: &str) -> Vec<usize> {
-    let bytes = src.as_bytes();
-    let kw = keyword.as_bytes();
-    let mut i = 0;
-    let mut depth: i32 = 0;
-    let mut found = Vec::new();
-
-    while i < bytes.len() {
-        if depth == 0
-            && is_svelte_whitespace_before(bytes, i)
-            && bytes[i..].starts_with(kw)
-            && (i + kw.len() >= bytes.len() || is_svelte_whitespace_at(bytes, i + kw.len()))
-        {
-            found.push(i);
-            i += kw.len();
-            continue;
-        }
-        match bytes[i] {
-            b'(' | b'[' | b'{' => depth += 1,
-            b')' | b']' | b'}' => depth -= 1,
-            b'"' | b'\'' => {
-                let q = bytes[i];
-                i += 1;
-                while i < bytes.len() && bytes[i] != q {
-                    if bytes[i] == b'\\' {
-                        i += 2;
-                    } else {
-                        i += 1;
-                    }
-                }
-            }
-            b'`' => {
-                i += 1;
-                while i < bytes.len() && bytes[i] != b'`' {
-                    if bytes[i] == b'\\' {
-                        i += 2;
-                    } else {
-                        i += 1;
-                    }
-                }
-            }
-            b'/' => match bytes.get(i + 1).copied() {
-                Some(b'/') => {
-                    // Line comment to end of line. `//` is unambiguously a
-                    // comment in expression context (an empty `//` regex is
-                    // invalid), so no regex/division disambiguation is needed.
-                    i += 2;
-                    while i < bytes.len() && bytes[i] != b'\n' {
-                        i += 1;
-                    }
-                }
-                Some(b'*') => {
-                    // Block comment to `*/`. Leave `i` on the closing `/` so
-                    // the trailing `i += 1` steps past it.
-                    i += 2;
-                    while i + 1 < bytes.len() {
-                        if bytes[i] == b'*' && bytes[i + 1] == b'/' {
-                            i += 1;
-                            break;
-                        }
-                        i += 1;
-                    }
-                }
-                _ => {}
-            },
-            _ => {}
-        }
-        i += 1;
-    }
-    found
-}
 
 pub(crate) fn trimmed_range(src: &str, start: u32, end: u32) -> Option<Range> {
     let s = skip_ws_start(src, start, end);
@@ -663,24 +257,6 @@ pub(crate) fn build_if_block(
     }
 }
 
-/// Assemble an AwaitBlock.
-pub(crate) fn build_await_block(
-    expression_range: Range,
-    pending: Option<Fragment>,
-    then_branch: Option<ThenBranch>,
-    catch_branch: Option<CatchBranch>,
-    block_start: u32,
-    block_end: u32,
-) -> AwaitBlock {
-    AwaitBlock {
-        expression_range,
-        pending,
-        then_branch,
-        catch_branch,
-        range: Range::new(block_start, block_end),
-    }
-}
-
 /// Assemble a KeyBlock.
 pub(crate) fn build_key_block(
     expression_range: Range,
@@ -690,24 +266,6 @@ pub(crate) fn build_key_block(
 ) -> KeyBlock {
     KeyBlock {
         expression_range,
-        body,
-        range: Range::new(block_start, block_end),
-    }
-}
-
-/// Assemble a SnippetBlock.
-pub(crate) fn build_snippet_block(
-    name: SmolStr,
-    parameters_range: Range,
-    generics_range: Option<Range>,
-    body: Fragment,
-    block_start: u32,
-    block_end: u32,
-) -> SnippetBlock {
-    SnippetBlock {
-        name,
-        parameters_range,
-        generics_range,
         body,
         range: Range::new(block_start, block_end),
     }
@@ -724,7 +282,7 @@ mod tests {
         let src = "{:else iffy}";
         let mut scanner = Scanner::new(src);
         let mut errors = Vec::new();
-        let term = peek_and_consume_terminator(&mut scanner, &mut errors);
+        let term = peek_and_consume_terminator(&mut scanner, &mut errors, false);
         assert!(
             !matches!(term, Some(BlockTerminator::ElseIf { .. })),
             "got {term:?}"
@@ -743,7 +301,7 @@ mod tests {
         ] {
             let mut scanner = Scanner::new(src);
             let mut errors = Vec::new();
-            let term = peek_and_consume_terminator(&mut scanner, &mut errors);
+            let term = peek_and_consume_terminator(&mut scanner, &mut errors, false);
             match (expect_close, term) {
                 (true, Some(BlockTerminator::Close { .. }))
                 | (false, Some(BlockTerminator::Else)) => {}
@@ -763,7 +321,7 @@ mod tests {
         for src in ["{//x}", "{/* x */ y}", "{ /* x */ y}"] {
             let mut scanner = Scanner::new(src);
             let mut errors = Vec::new();
-            let term = peek_and_consume_terminator(&mut scanner, &mut errors);
+            let term = peek_and_consume_terminator(&mut scanner, &mut errors, false);
             assert!(
                 term.is_none(),
                 "expected no terminator for {src:?}, got {term:?}"
@@ -785,7 +343,7 @@ mod tests {
         let src = "{:else if ready}";
         let mut scanner = Scanner::new(src);
         let mut errors = Vec::new();
-        let term = peek_and_consume_terminator(&mut scanner, &mut errors);
+        let term = peek_and_consume_terminator(&mut scanner, &mut errors, false);
         let Some(BlockTerminator::ElseIf { condition_range }) = term else {
             panic!("expected ElseIf, got {term:?}");
         };
@@ -798,7 +356,7 @@ mod tests {
         let src = "{:else if}";
         let mut scanner = Scanner::new(src);
         let mut errors = Vec::new();
-        let term = peek_and_consume_terminator(&mut scanner, &mut errors);
+        let term = peek_and_consume_terminator(&mut scanner, &mut errors, false);
         assert!(
             !matches!(term, Some(BlockTerminator::ElseIf { .. })),
             "got {term:?}"
@@ -850,49 +408,18 @@ mod tests {
     }
 
     #[test]
-    fn snippet_params_are_string_aware() {
-        // `)` inside a default-value string must not close the params
-        // early: `{#snippet s(a = ")")}`.
-        let src = r#"s(a = ")")}"#;
-        let mut scanner = Scanner::new(src);
-        let mut errors = Vec::new();
-        let result = parse_snippet_header(&mut scanner, &mut errors);
-        let Some((name, params, _)) = result else {
-            panic!("expected a snippet header, errors: {errors:?}");
-        };
-        assert_eq!(name, "s");
-        assert_eq!(params.slice(src), r#"a = ")""#);
-        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
-    }
-
-    #[test]
-    fn snippet_params_are_regex_aware() {
-        // `)` inside a regex literal must not close the params early.
-        let src = "s(a = /)/)}";
-        let mut scanner = Scanner::new(src);
-        let mut errors = Vec::new();
-        let result = parse_snippet_header(&mut scanner, &mut errors);
-        let Some((name, params, _)) = result else {
-            panic!("expected a snippet header, errors: {errors:?}");
-        };
-        assert_eq!(name, "s");
-        assert_eq!(params.slice(src), "a = /)/");
-        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
-    }
-
-    #[test]
-    fn snippet_params_are_block_comment_aware() {
-        // `)` inside a block comment must not close the params early.
-        let src = "s(a /* ) */)}";
-        let mut scanner = Scanner::new(src);
-        let mut errors = Vec::new();
-        let result = parse_snippet_header(&mut scanner, &mut errors);
-        let Some((name, params, _)) = result else {
-            panic!("expected a snippet header, errors: {errors:?}");
-        };
-        assert_eq!(name, "s");
-        assert_eq!(params.slice(src), "a /* ) */");
-        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    fn snippet_params_end_at_the_first_balancing_parenthesis() {
+        // The compiler counts parentheses one character at a time, in
+        // strings, regular expressions and comments too, so each of these
+        // ends early and acorn then throws.
+        for src in [r#"s(a = ")")}"#, "s(a = /)/)}", "s(a /* ) */)}"] {
+            let mut scanner = Scanner::new(src);
+            let mut errors = Vec::new();
+            assert!(
+                parse_snippet_header(&mut scanner, &mut errors).is_none(),
+                "{src}"
+            );
+        }
     }
 
     #[test]
@@ -956,12 +483,9 @@ mod tests {
 
     #[test]
     fn await_header_comment_before_then_splits() {
-        // The promise expression ends before the comment, as acorn reads
-        // it; the comment is not part of what precedes the keyword.
-        for (src, expr) in [
-            ("p /*c*/ then v}", "p /*c*/"),
-            ("p/* a */ /* b */ catch e}", "p/* a */ /* b */"),
-        ] {
+        // The promise expression is acorn's node: the comments after it
+        // are not part of it.
+        for (src, expr) in [("p /*c*/ then v}", "p"), ("p/* a */ /* b */ catch e}", "p")] {
             let mut scanner = Scanner::new(src);
             let mut errors = Vec::new();
             let (range, short) =
@@ -1028,35 +552,6 @@ mod tests {
         let (expr, short) = parse_await_header(&mut scanner, &mut errors).expect("header parses");
         assert_eq!(expr.slice(src), "p");
         assert!(matches!(short, AwaitShortForm::Then(None)), "got {short:?}");
-    }
-
-    /// First-match convenience over [`find_keywords_at_depth_zero`],
-    /// mirroring how header parsing consumes the candidate list.
-    fn find_keyword_at_depth_zero(src: &str, keyword: &str) -> Option<usize> {
-        find_keywords_at_depth_zero(src, keyword).into_iter().next()
-    }
-
-    #[test]
-    fn find_keyword_at_depth_zero_whitespace_variants() {
-        // Any whitespace run around the keyword matches — upstream does
-        // read_expression + allow_whitespace + match(keyword).
-        assert_eq!(find_keyword_at_depth_zero("foo as bar", "as"), Some(4));
-        assert_eq!(find_keyword_at_depth_zero("foo\nas bar", "as"), Some(4));
-        assert_eq!(find_keyword_at_depth_zero("foo\tas\tbar", "as"), Some(4));
-        assert_eq!(find_keyword_at_depth_zero("foo\r\nas bar", "as"), Some(5));
-        assert_eq!(find_keyword_at_depth_zero("foo  as\n bar", "as"), Some(5));
-        // Keyword at end of src (no binding after it).
-        assert_eq!(find_keyword_at_depth_zero("p then", "then"), Some(2));
-        // Not a standalone keyword: part of an identifier.
-        assert_eq!(find_keyword_at_depth_zero("foo aster", "as"), None);
-        assert_eq!(find_keyword_at_depth_zero("foo.as bar", "as"), None);
-        // Inside parens: depth != 0, skip to the top-level one.
-        assert_eq!(
-            find_keyword_at_depth_zero("foo(a as b)\nas c", "as"),
-            Some(12)
-        );
-        // Inside a string: skipped.
-        assert_eq!(find_keyword_at_depth_zero("\"x as y\" as z", "as"), Some(9));
     }
 
     #[test]
@@ -1246,12 +741,6 @@ mod tests {
     }
 
     #[test]
-    fn find_keywords_at_depth_zero_returns_all() {
-        assert_eq!(find_keywords_at_depth_zero("a as b as c", "as"), vec![2, 7]);
-        assert_eq!(find_keywords_at_depth_zero("(a as b) as c", "as"), vec![9]);
-    }
-
-    #[test]
     fn each_header_clause_parts() {
         let cases = [
             ("items as item}", "item", None, None),
@@ -1308,5 +797,67 @@ mod tests {
             key_range: c.key_range.map(shift),
         });
         Some((shift(block.expression_range), clause))
+    }
+
+    /// A block tag `{#<keyword> <header>{/<keyword>}` parsed in a
+    /// TypeScript component; `offset` is where `header` starts.
+    fn parse_block(keyword: &str, header: &str) -> (crate::ast::Fragment, u32, String) {
+        let script = "<script lang=\"ts\"></script>";
+        let src = format!("{script}{{#{keyword} {header}{{/{keyword}}}");
+        let template = Range::new(script.len() as u32, src.len() as u32);
+        let (fragment, _) = crate::template::parse_template(&src, template);
+        let offset = (script.len() + keyword.len() + 3) as u32;
+        (fragment, offset, src)
+    }
+
+    #[derive(Debug)]
+    enum AwaitShortForm {
+        None,
+        Then(Option<Range>),
+        Catch(Option<Range>),
+    }
+
+    /// The `{#await}` header `header` (up to and including its `}`) as
+    /// the template parser reads it, with ranges in `header`.
+    fn parse_await_header(
+        scanner: &mut Scanner<'_>,
+        _errors: &mut Vec<ParseError>,
+    ) -> Option<(Range, AwaitShortForm)> {
+        let (fragment, offset, _) = parse_block("await", scanner.source());
+        let Some(crate::ast::Node::AwaitBlock(block)) = fragment.nodes.into_iter().next() else {
+            return None;
+        };
+        if block.open_error.is_some() {
+            return None;
+        }
+        let shift = |r: Range| Range::new(r.start - offset, r.end - offset);
+        let short = match (&block.pending, &block.then_branch, &block.catch_branch) {
+            (Some(_), _, _) => AwaitShortForm::None,
+            (None, Some(then), _) => AwaitShortForm::Then(then.context_range.map(shift)),
+            (None, None, Some(catch)) => AwaitShortForm::Catch(catch.context_range.map(shift)),
+            _ => return None,
+        };
+        Some((shift(block.expression_range), short))
+    }
+
+    /// The `{#snippet}` header `header` (up to and including its `}`) as
+    /// the template parser reads it, with ranges in `header`.
+    fn parse_snippet_header(
+        scanner: &mut Scanner<'_>,
+        _errors: &mut Vec<ParseError>,
+    ) -> Option<(String, Range, Option<Range>)> {
+        let (fragment, offset, _) = parse_block("snippet", scanner.source());
+        let Some(crate::ast::Node::SnippetBlock(block)) = fragment.nodes.into_iter().next() else {
+            return None;
+        };
+        if block.open_error.is_some() {
+            return None;
+        }
+        let shift = |r: Range| Range::new(r.start - offset, r.end - offset);
+        Some((
+            block.name.to_string(),
+            shift(block.parameters_range),
+            block.generics_range.map(shift),
+        ))
     }
 }

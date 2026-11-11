@@ -1,13 +1,14 @@
 //! The compiler's errors for the reads inside a block tag.
 //!
-//! The reads themselves are [`svn_parser::tag_read`]'s: the parser ends
-//! and splits an `{#each}` tag with them and keeps the error on the
-//! block, and the other tags are read here, starting from where our
-//! parser placed them. Each function returns the first error the compiler
-//! throws there, as a lint finding.
+//! The reads themselves are [`svn_parser::tag_read`]'s. The parser ends
+//! and splits the `{#each}`, `{#await}`, `{:then}`, `{:catch}` and
+//! `{#snippet}` tags with them and keeps the compiler's error on the node
+//! (see `From<TagReadError>`); the keyword whitespace of the other tags
+//! and the pattern of a `{@const}` are read here, from where our parser
+//! placed them. Each function returns the first error the compiler throws
+//! there, as a lint finding.
 
-use svn_core::Range;
-use svn_parser::ast::{EachBlock, Interpolation};
+use svn_parser::ast::Interpolation;
 use svn_parser::tag_read::{self, Comments, TagReadError, TagReadErrorKind};
 
 use crate::codes::Code;
@@ -36,14 +37,6 @@ impl TagError {
             at,
             code: Code::expected_whitespace,
             message: messages::expected_whitespace(),
-        }
-    }
-
-    fn expected_pattern(at: u32) -> Self {
-        Self {
-            at,
-            code: Code::expected_pattern,
-            message: messages::expected_pattern(),
         }
     }
 }
@@ -131,42 +124,6 @@ impl<'s> TagReader<'s> {
     pub(super) fn whitespace_before_part(&self, part_start: u32) -> Option<TagError> {
         (!self.reader.whitespace_before(part_start))
             .then(|| TagError::expected_whitespace(part_start))
-    }
-
-    /// `{#each …}`: the parser read its opening tag.
-    pub(super) fn each(&self, block: &EachBlock) -> Option<TagError> {
-        block.open_error.clone().map(TagError::from)
-    }
-
-    /// The value of a `then` / `catch` (inline in `{#await}` or in a
-    /// `{:then}` / `{:catch}` tag), as our parser delimited it: the
-    /// text between the keyword's whitespace and the closing `}`.
-    pub(super) fn branch_value(&self, value: Range) -> Option<TagError> {
-        if let Some(e) = self.whitespace_before_part(value.start) {
-            return Some(e);
-        }
-        let close = Some(self.reader.skip_whitespace(value.end))
-            .filter(|&c| self.reader.byte(c) == Some(b'}'))
-            .unwrap_or(value.end);
-        let end = match self
-            .reader
-            .read_pattern(value.start, close, &mut Comments::default())
-        {
-            Ok((_, end)) => end,
-            Err(e) => return Some(e.into()),
-        };
-        let at = self.reader.skip_whitespace(end);
-        (self.reader.byte(at) != Some(b'}')).then(|| TagError::expected_token(at, "}"))
-    }
-
-    /// A `{:then}` / `{:catch}` tag our parser found no value in, whose
-    /// body starts at `body_start`. Only a `}` right after the keyword
-    /// ends the tag without a value; after whitespace the compiler
-    /// reads a pattern, and finds the `}`.
-    pub(super) fn missing_branch_value(&self, body_start: u32) -> Option<TagError> {
-        let close = body_start.checked_sub(1)?;
-        (self.reader.byte(close) == Some(b'}') && self.reader.whitespace_before(close))
-            .then(|| TagError::expected_pattern(close))
     }
 
     /// `{@const pattern = init}`, up to its `=`.

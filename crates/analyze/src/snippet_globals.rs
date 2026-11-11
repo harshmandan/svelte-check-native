@@ -225,7 +225,7 @@ mod tests {
     #[test]
     fn params_and_inner_bindings_are_not_globals() {
         let g = globals(
-            "{#snippet row(item: Item, i)}{#each item.kids as kid}{@const k = kid.id}<Card {kid} label={k} onclick={() => open(i)} />{/each}{@render inner()}{#snippet inner()}{count}{/snippet}{/snippet}",
+            "<script lang=\"ts\"></script>{#snippet row(item: Item, i)}{#each item.kids as kid}{@const k = kid.id}<Card {kid} label={k} onclick={() => open(i)} />{/each}{@render inner()}{#snippet inner()}{count}{/snippet}{/snippet}",
         );
         assert_eq!(g, vec!["Card", "open", "count"]);
     }

@@ -635,6 +635,9 @@ pub struct AwaitBlock {
     pub then_branch: Option<ThenBranch>,
     /// `{:catch err}` branch. May appear as `{#await p catch e}` short form.
     pub catch_branch: Option<CatchBranch>,
+    /// The error the compiler throws reading the `{#await …}` tag; the
+    /// component is rejected.
+    pub open_error: Option<crate::tag_read::TagReadError>,
     pub range: Range,
 }
 
@@ -644,12 +647,16 @@ pub struct ThenBranch {
     /// a binding.
     pub context_range: Option<Range>,
     pub body: Fragment,
+    /// The error the compiler throws reading a `{:then}` tag.
+    pub open_error: Option<crate::tag_read::TagReadError>,
 }
 
 #[derive(Debug, Clone)]
 pub struct CatchBranch {
     pub context_range: Option<Range>,
     pub body: Fragment,
+    /// The error the compiler throws reading a `{:catch}` tag.
+    pub open_error: Option<crate::tag_read::TagReadError>,
 }
 
 /// `{#key expr}...{/key}`
@@ -672,6 +679,9 @@ pub struct SnippetBlock {
     /// generic signature.
     pub generics_range: Option<Range>,
     pub body: Fragment,
+    /// The error the compiler throws reading the opening tag; the
+    /// component is rejected.
+    pub open_error: Option<crate::tag_read::TagReadError>,
     pub range: Range,
 }
 

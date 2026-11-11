@@ -36,7 +36,6 @@ const CAST_WITHOUT_TYPESCRIPT: &str =
 /// acorn's message for the error oxc reports as `oxc`.
 fn acorn_message(oxc: &str) -> &'static str {
     match oxc {
-        "Unterminated string" => "Unterminated string constant",
         "Cannot assign to this expression" => "Assigning to rvalue",
         _ => "Unexpected token",
     }
@@ -91,8 +90,37 @@ pub fn read_expression(text: &str, ts: bool) -> Read {
             message: "Unexpected token",
         };
     };
-    let label = first.labels.first().map_or(len, |l| l.span().start);
-    let message = first.message.as_ref();
+    let mut label = first.labels.first().map_or(len, |l| l.span().start);
+    let mut message = first.message.as_ref();
+    // A fatal error drops the tokenizer's errors from `parse_expression`;
+    // one before it is the one acorn meets first.
+    let earlier = tokenizer_error(text, ts).filter(|&(at, _)| at <= label);
+    if let Some((at, tokenizer_message)) = earlier {
+        label = at;
+        message = tokenizer_message;
+    }
+    // Errors of acorn's tokenizer, thrown where the token starts.
+    match message {
+        "Unterminated string" if text[label as usize..].starts_with('`') => {
+            return Read::Error {
+                at: label + 1,
+                message: "Unterminated template",
+            };
+        }
+        "Unterminated string" => {
+            return Read::Error {
+                at: label,
+                message: "Unterminated string constant",
+            };
+        }
+        "Unterminated multiline comment" => {
+            return Read::Error {
+                at: label,
+                message: "Unterminated comment",
+            };
+        }
+        _ => {}
+    }
     let at = match message {
         // acorn throws at the start of the assignment's left side.
         "Cannot assign to this expression" => {
@@ -113,6 +141,26 @@ pub fn read_expression(text: &str, ts: bool) -> Read {
             message: acorn_message(message),
         },
     }
+}
+
+/// The first error oxc's tokenizer reports in `text` read as an
+/// expression: where, and its message.
+fn tokenizer_error(text: &str, ts: bool) -> Option<(u32, &'static str)> {
+    if !text.contains(['"', '\'', '`', '/']) {
+        return None;
+    }
+    let wrapped = format!("({text}");
+    let alloc = Allocator::default();
+    let parsed = oxc_parser::Parser::new(&alloc, &wrapped, source_type(ts)).parse();
+    parsed.diagnostics.iter().find_map(|d| {
+        let message = match d.message.as_ref() {
+            "Unterminated string" => "Unterminated string",
+            "Unterminated multiline comment" => "Unterminated multiline comment",
+            _ => return None,
+        };
+        let at = d.labels.first()?.span().start.checked_sub(1)?;
+        Some((at, message))
+    })
 }
 
 /// The first `as` keyword in `text` from `from` that follows a complete
@@ -194,6 +242,12 @@ pub enum BracketError {
 /// `match_bracket()` from the `{` / `[` / `(` at `start` in `text`: the
 /// position after its partner. Strings are skipped, comments are not.
 pub fn match_bracket(text: &str, start: u32) -> Result<u32, BracketError> {
+    match_brackets(text, start, &[(b'(', b')'), (b'[', b']'), (b'{', b'}')])
+}
+
+/// `match_bracket()` with its `brackets` argument: only these pairs
+/// count (a snippet's type parameters use `<` / `>` alone).
+pub fn match_brackets(text: &str, start: u32, pairs: &[(u8, u8)]) -> Result<u32, BracketError> {
     let bytes = text.as_bytes();
     let mut stack: Vec<u8> = Vec::new();
     let mut i = start as usize;
@@ -202,13 +256,13 @@ pub fn match_bracket(text: &str, start: u32) -> Result<u32, BracketError> {
         i += 1;
         match c {
             b'\'' | b'"' | b'`' => i = match_quote(text, i, c)?,
-            b'(' | b'[' | b'{' => stack.push(c),
-            b')' | b']' | b'}' => {
-                let expected = match stack.pop() {
-                    Some(b'(') => b')',
-                    Some(b'[') => b']',
-                    _ => b'}',
-                };
+            _ if pairs.iter().any(|&(open, _)| open == c) => stack.push(c),
+            _ if pairs.iter().any(|&(_, close)| close == c) => {
+                let open = stack.pop();
+                let expected = pairs
+                    .iter()
+                    .find(|&&(o, _)| Some(o) == open)
+                    .map_or(b'}', |&(_, close)| close);
                 if c != expected {
                     return Err(BracketError::Mismatch {
                         at: i as u32 - 1,
@@ -387,6 +441,31 @@ mod tests {
             Read::Error {
                 at: 0,
                 message: "Assigning to rvalue"
+            }
+        );
+    }
+
+    #[test]
+    fn tokenizer_errors_are_thrown_where_the_token_starts() {
+        assert_eq!(
+            read_expression("(/* ) => {}", false),
+            Read::Error {
+                at: 1,
+                message: "Unterminated comment"
+            }
+        );
+        assert_eq!(
+            read_expression("(a = \") => {}", false),
+            Read::Error {
+                at: 5,
+                message: "Unterminated string constant"
+            }
+        );
+        assert_eq!(
+            read_expression("(a = `) => {}", false),
+            Read::Error {
+                at: 6,
+                message: "Unterminated template"
             }
         );
     }

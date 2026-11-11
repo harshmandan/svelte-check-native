@@ -8,7 +8,17 @@ function $$render_e40e2c10() {
                         if ((i)) {
                             {
                                 const __svn_C_54 = __svn_ensure_component(Component);
-                                new __svn_C_54({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                                const __svn_inst_54 = new __svn_C_54({
+                                    target: __svn_any(),
+                                    props: {
+                                        f: () => { async () => {
+                                            };
+                                            return __svn_snippet_return();
+                                        },
+                                    },
+                                });
+                                /*svn:ignore_start*/const { f } = __svn_inst_54.$$prop_def;/*svn:ignore_end*/
+                                /*svn:ignore_start*/void f;/*svn:ignore_end*/
                             }
                         }
                     }

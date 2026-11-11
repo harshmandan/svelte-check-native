@@ -86,6 +86,45 @@ pub struct EachOpen {
     pub comments: Vec<Range>,
 }
 
+/// Which branch an `{#await}` opening tag starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AwaitBranch {
+    Pending,
+    /// `then`, with its value.
+    Then(Option<Range>),
+    /// `catch`, with its error.
+    Catch(Option<Range>),
+}
+
+/// An `{#await}` opening tag as the compiler read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AwaitOpen {
+    pub expression: Range,
+    pub branch: AwaitBranch,
+    /// Just past the `}` that closes the tag.
+    pub end: u32,
+}
+
+/// A `{:then}` / `{:catch}` tag as the compiler read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchOpen {
+    pub value: Option<Range>,
+    /// Just past the `}` that closes the tag.
+    pub end: u32,
+}
+
+/// A `{#snippet}` opening tag as the compiler read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnippetOpen {
+    pub name: Range,
+    /// The type parameters inside their `<>`.
+    pub generics: Option<Range>,
+    /// The parameters inside their parentheses.
+    pub parameters: Range,
+    /// Just past the `}` that closes the tag.
+    pub end: u32,
+}
+
 /// The comments acorn's reads in one tag collected.
 #[derive(Debug, Default)]
 pub struct Comments {
@@ -500,6 +539,149 @@ impl<'s> TagReader<'s> {
             key,
             end: index + 1,
             comments,
+        })
+    }
+
+    /// The `}` the compiler requires at `at`, after whitespace: just past
+    /// it.
+    fn closing_brace(&self, at: u32) -> Result<u32, TagReadError> {
+        let at = self.skip_whitespace(at);
+        if self.byte(at) != Some(b'}') {
+            return Err(TagReadError::new(at, TagReadErrorKind::ExpectedToken("}")));
+        }
+        Ok(at + 1)
+    }
+
+    /// A value after `then` / `catch` starting at `start` (whitespace
+    /// required first): its range, the pattern with its annotation as
+    /// svelte2tsx writes it, and where the reading carries on.
+    fn branch_value(&self, start: u32, limit: u32) -> Result<(Range, u32), TagReadError> {
+        let value = self.require_whitespace(start)?;
+        let (pattern_end, end) = self.read_pattern(value, limit, &mut Comments::default())?;
+        Ok((Range::new(value, pattern_end.max(end)), end))
+    }
+
+    /// The `{#await}` opening tag whose keyword ends at `keyword_end`.
+    pub fn read_await_open(&self, keyword_end: u32, limit: u32) -> Result<AwaitOpen, TagReadError> {
+        let start = self.require_whitespace(keyword_end)?;
+        let mut comments = Comments::default();
+        let expression_end = self.read_expression(start, limit, &mut comments)?;
+        let index = self.skip_whitespace(expression_end.max(comments.last_end));
+        let rest = &self.source[index as usize..];
+        let keyword = if rest.starts_with("then") {
+            Some("then")
+        } else if rest.starts_with("catch") {
+            Some("catch")
+        } else {
+            None
+        };
+        let (branch, index) = match keyword {
+            None => (AwaitBranch::Pending, index),
+            Some(keyword) => {
+                let after = index + keyword.len() as u32;
+                // `then}` / `then }`: the branch without a value.
+                let (value, at) = if self.byte(self.skip_whitespace(after)) == Some(b'}') {
+                    (None, after)
+                } else {
+                    let (value, end) = self.branch_value(after, limit)?;
+                    (Some(value), end)
+                };
+                let branch = if keyword == "then" {
+                    AwaitBranch::Then(value)
+                } else {
+                    AwaitBranch::Catch(value)
+                };
+                (branch, at)
+            }
+        };
+        Ok(AwaitOpen {
+            expression: Range::new(start, expression_end),
+            branch,
+            end: self.closing_brace(index)?,
+        })
+    }
+
+    /// A `{:then}` / `{:catch}` tag whose keyword ends at `keyword_end`.
+    pub fn read_branch(&self, keyword_end: u32, limit: u32) -> Result<BranchOpen, TagReadError> {
+        if self.byte(keyword_end) == Some(b'}') {
+            return Ok(BranchOpen {
+                value: None,
+                end: keyword_end + 1,
+            });
+        }
+        let (value, end) = self.branch_value(keyword_end, limit)?;
+        Ok(BranchOpen {
+            value: Some(value),
+            end: self.closing_brace(end)?,
+        })
+    }
+
+    /// The `{#snippet}` opening tag whose keyword ends at `keyword_end`.
+    /// Its parameter list ends at the first `)` that balances the `(`
+    /// opening it, counted one character at a time (strings and
+    /// comments too), and is then read by acorn as an arrow function's.
+    pub fn read_snippet_open(&self, keyword_end: u32) -> Result<SnippetOpen, TagReadError> {
+        let start = self.require_whitespace(keyword_end)?;
+        let name_end = self.read_identifier(start)?;
+        if name_end == start {
+            return Err(TagReadError::new(
+                start,
+                TagReadErrorKind::ExpectedIdentifier,
+            ));
+        }
+        let params_start = self.skip_whitespace(name_end);
+        let mut index = params_start;
+        let mut generics = None;
+        if self.ts && self.byte(index) == Some(b'<') {
+            let end = acorn::match_brackets(self.source, index, &[(b'<', b'>')])
+                .map_err(TagReadError::bracket)?;
+            generics = Some(Range::new(index + 1, end - 1));
+            index = end;
+        }
+        index = self.skip_whitespace(index);
+        if self.byte(index) != Some(b'(') {
+            return Err(TagReadError::new(
+                index,
+                TagReadErrorKind::ExpectedToken("("),
+            ));
+        }
+        let open = index;
+        index += 1;
+        // The compiler reads a template whose end is trimmed.
+        let template_end = self.source.trim_end().len() as u32;
+        let mut depth = 1;
+        while index < template_end && !(self.byte(index) == Some(b')') && depth == 1) {
+            match self.byte(index) {
+                Some(b'(') => depth += 1,
+                Some(b')') => depth -= 1,
+                _ => {}
+            }
+            index += 1;
+        }
+        if self.byte(index) != Some(b')') || index >= template_end {
+            return Err(TagReadError::new(
+                index,
+                TagReadErrorKind::ExpectedToken(")"),
+            ));
+        }
+        let close = index;
+        let params = self
+            .source
+            .get(params_start as usize..=close as usize)
+            .unwrap_or("");
+        if let Read::Error { at, message } =
+            acorn::read_expression(&format!("{params} => {{}}"), self.ts)
+        {
+            return Err(TagReadError::new(
+                params_start + at,
+                TagReadErrorKind::JsParse(message),
+            ));
+        }
+        Ok(SnippetOpen {
+            name: Range::new(start, name_end),
+            generics,
+            parameters: Range::new(open + 1, close),
+            end: self.closing_brace(close + 1)?,
         })
     }
 

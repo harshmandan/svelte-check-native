@@ -23,9 +23,13 @@ function $$render_e40e2c10() {
             "bind:value": (__svn_get_set_binding(() => v,  new_v => v = new_v)),
         });
         }
-        { svelteHTML.createElement("div", {});             void (__svn_get_set_binding(null,  set) satisfies HTMLElement['clientWidth']);
+        { svelteHTML.createElement("div", {
+            "bind:clientWidth": (__svn_get_set_binding(null,  set)),
+        });
         }
-        { svelteHTML.createElement("div", {});             void (__svn_get_set_binding(null,  set) satisfies DOMRectReadOnly);
+        { svelteHTML.createElement("div", {
+            "bind:contentRect": (__svn_get_set_binding(null,  set)),
+        });
         }
         {
             const __svn_C_9f = __svn_ensure_component(Input);

@@ -11,14 +11,6 @@
     },
     {
       "status": "bug",
-      "sample": "htmlx2jsx/binding-get-set.v5",
-      "kind": "element",
-      "upstream": "H.getsetbinding(null,set)",
-      "reason": "Get/set binding on a one-way element property (`bind:clientWidth={null, set}`): upstream checks it as the `\"bind:clientWidth\"` attribute of the element; we check `__svn_get_set_binding(null, set) satisfies HTMLElement['clientWidth']` instead, against a different type.",
-      "title": "get/set binding on a one-way element property"
-    },
-    {
-      "status": "bug",
       "sample": "htmlx2jsx/component-slot-attribute-as-prop.v5",
       "kind": "component",
       "reason": "`slot=\"x\"` on a component: upstream drops it only when the component's parent in the template is another component (Attribute.ts, `element.parent instanceof InlineComponent`); inside a `{#snippet}` it is passed as a prop. We drop it everywhere.",

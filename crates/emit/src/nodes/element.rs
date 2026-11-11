@@ -679,13 +679,15 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
                     }
                     emit_dom_event_handler(buf, source, d, depth + 1);
                 }
-                // A `bind:` the typed binding passes don't model is
-                // still an attribute upstream (`"bind:NAME": EXPR` in the
-                // createElement literal, Binding.ts `preserveBind`): a name
-                // the element's attribute type doesn't declare fires
-                // TS2353 there, and the expression is read.
+                // A `bind:` the typed binding passes don't model, and any
+                // get/set pair but `bind:this`, is an attribute upstream
+                // (`"bind:NAME": EXPR` in the createElement literal,
+                // Binding.ts `preserveBind`): a name the element's
+                // attribute type doesn't declare fires TS2353 there, a
+                // value it doesn't accept TS2322, and the expression is
+                // read.
                 if d.kind == svn_parser::DirectiveKind::Bind
-                    && (crate::nodes::binding::is_untyped_binding(d.name.as_str())
+                    && (crate::nodes::binding::is_attribute_binding(d)
                         || (d.name.as_str() == "this"
                             && tag_literal
                             && tag_name.starts_with("svelte:")

@@ -21,8 +21,21 @@ use crate::nodes::element::element_type_annotation;
 /// `bind:value`, `bind:checked` and `bind:files` are among them — the
 /// element's attribute type (`svelte/elements`) is what checks their
 /// value.
-pub(crate) fn is_untyped_binding(name: &str) -> bool {
+fn is_untyped_binding(name: &str) -> bool {
     !matches!(name, "this" | "group") && svn_analyze::dom_binding::type_for(name).is_none()
+}
+
+/// A DOM `bind:` directive upstream writes into the element's attribute
+/// literal as `"bind:NAME": …`: an untyped name (above), or any get/set
+/// pair (`bind:NAME={get, set}`) but `bind:this`. A get/set binding never
+/// reaches Binding.ts's `group` and one-way branches, which only handle a
+/// plain expression, so `bind:clientWidth={null, set}` is the attribute
+/// `"bind:clientWidth": __sveltets_2_get_set_binding(null, set)` and the
+/// element's attribute type checks the setter.
+pub(crate) fn is_attribute_binding(d: &svn_parser::Directive) -> bool {
+    let name = d.name.as_str();
+    is_untyped_binding(name)
+        || (name != "this" && matches!(d.value, Some(svn_parser::DirectiveValue::BindPair { .. })))
 }
 
 /// Emit a type-check line per `bind:NAME` directive on a DOM element.
@@ -177,42 +190,25 @@ pub(crate) fn emit_element_bind_checks_inline(
                     }
                     (std::borrow::Cow::Borrowed(directive.name.as_str()), None)
                 }
-                // Svelte 5 `bind:X={get, set}` on DOM — two cases:
-                //
-                // - `bind:this={get, set}`: mirror upstream's direct
-                //   `(set)($$_element)` call. Setter's parameter is
-                //   checked by assignability — accepts the element
-                //   type or any supertype. Getter ignored.
-                //
-                // - Other directives (`bind:clientWidth={null, set}`,
-                //   `bind:value={get, set}`): route through the
-                //   `__svn_get_set_binding` helper with a `satisfies`
-                //   trailer so the setter's parameter is unified with
-                //   the DOM target's type, exactly like the component
-                //   path in `write_prop_shape`. TS1360 fires on
-                //   mismatch.
-                Some(svn_parser::DirectiveValue::BindPair {
-                    getter_range,
-                    setter_range,
-                    ..
-                }) => {
+                // Svelte 5 `bind:this={get, set}` on DOM: mirror
+                // upstream's direct `(set)($$_element)` call. The
+                // setter's parameter is checked by assignability — it
+                // accepts the element type or any supertype. The getter
+                // is ignored. Every other get/set pair is an attribute
+                // of the element (`is_attribute_binding`), written with
+                // its other attributes, so nothing is emitted here.
+                Some(svn_parser::DirectiveValue::BindPair { setter_range, .. }) => {
+                    if name != "this" {
+                        continue;
+                    }
                     let Some(ty) = &ty else {
                         continue;
                     };
-                    let getter = &source[getter_range.start as usize..getter_range.end as usize];
                     let setter = &source[setter_range.start as usize..setter_range.end as usize];
                     buf.push_str(&indent);
-                    if name == "this" {
-                        buf.push_str("(");
-                        buf.append_with_source(setter, *setter_range);
-                        let _ = writeln!(buf, ")(null as any as {ty});");
-                    } else {
-                        buf.push_str("void (__svn_get_set_binding(");
-                        buf.append_with_source(getter, *getter_range);
-                        buf.push_str(", ");
-                        buf.append_with_source(setter, *setter_range);
-                        let _ = writeln!(buf, ") satisfies {ty});");
-                    }
+                    buf.push_str("(");
+                    buf.append_with_source(setter, *setter_range);
+                    let _ = writeln!(buf, ")(null as any as {ty});");
                     continue;
                 }
                 _ => continue,

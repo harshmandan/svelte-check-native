@@ -646,6 +646,7 @@ declare function __svn_get_set_binding<T>(
     get: (() => T) | null | undefined,
     set: (t: T) => void,
 ): T;
+declare const __sveltets_2_get_set_binding: typeof __svn_get_set_binding;
 
 /**
  * Slot-prop type-checker factory. Mirrors upstream

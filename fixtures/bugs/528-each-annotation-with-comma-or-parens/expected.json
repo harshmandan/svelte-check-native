@@ -1,6 +1,6 @@
 {
     "errors": [
-        { "file": "Page.svelte", "line": 10, "column": 11, "code": 2345 }
+        { "file": "Page.svelte", "line": 9, "column": 10, "code": 2345 }
     ],
     "_note": "The compiler reads an {#each} pattern's type annotation with acorn-typescript (`_ as <type>`), so a comma inside `Map<string, number>` or the parentheses of `(a: string) => void` belong to the type. Our parser split the clause with a byte scanner: it took the comma as the index separator and the `(` as the key, found no valid split, and the component was dropped."
 }

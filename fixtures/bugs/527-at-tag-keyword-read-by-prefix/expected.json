@@ -1,6 +1,6 @@
 {
     "errors": [
-        { "file": "Page.svelte", "line": 6, "column": 8, "code": 2304 }
+        { "file": "Page.svelte", "line": 5, "column": 7, "code": 2304 }
     ],
     "_note": "The compiler reads a `{@…}` keyword by prefix: `{@debugx}` is `{@debug x}` and `{@debugger}` debugs `ger`, so the component is valid and svelte-check --tsgo type-checks it (`ger` is not declared). We read the keyword as the whole word, called the tag unknown and dropped the file."
 }

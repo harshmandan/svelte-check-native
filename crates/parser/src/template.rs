@@ -2477,6 +2477,33 @@ mod tests {
     }
 
     #[test]
+    fn at_tag_keyword_is_read_by_prefix() {
+        // The compiler takes the first of html / debug / const / render
+        // that the text after `@` starts with: `{@debugx}` debugs `x`,
+        // `{@constx a}` is a `{@const}` whose whitespace is missing.
+        let cases = [
+            ("{@debugx}", InterpolationKind::AtDebug, "x"),
+            ("{@debugger}", InterpolationKind::AtDebug, "ger"),
+            ("{@constx a = 1}", InterpolationKind::AtConst, "x a = 1"),
+            ("{@htmlfoo bar}", InterpolationKind::AtHtml, "foo bar"),
+            ("{@renderx()}", InterpolationKind::AtRender, "x()"),
+            ("{@HTML x}", InterpolationKind::AtTag, "HTML x"),
+            ("{@attachx}", InterpolationKind::AtTag, "attachx"),
+        ];
+        for (src, kind, expression) in cases {
+            let frag = parse_ok(src);
+            let [Node::Interpolation(i)] = frag.nodes.as_slice() else {
+                panic!(
+                    "expected one Interpolation for {src:?}, got {:?}",
+                    frag.nodes
+                );
+            };
+            assert_eq!(i.kind, kind, "{src:?}");
+            assert_eq!(i.expression_range.slice(src), expression, "{src:?}");
+        }
+    }
+
+    #[test]
     fn whitespace_after_open_brace_before_declaration_tag() {
         let src = "{ const y = 1}";
         let frag = parse_ok(src);

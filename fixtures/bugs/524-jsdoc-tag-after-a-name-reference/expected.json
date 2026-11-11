@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Exported props of a checked JavaScript component whose JSDoc mentions `@type` in places TypeScript's JSDoc parser reads differently from a plain `@`-after-whitespace split. `@see Props@type {…}` is a `@type` tag (TypeScript starts a new tag right after the `@see` name reference), so svelte2tsx widens `glued` and the comparison is clean. Inside `{@link …}` and inside backticks in a tag's text there is no tag. Expected list matches svelte-check 4.7.6 --tsgo with TypeScript 6.0.3."
+}

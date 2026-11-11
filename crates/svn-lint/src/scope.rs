@@ -24,11 +24,11 @@
 //! `state_referenced_locally` to light up with upstream-byte parity.
 
 use oxc_ast::ast::{
-    ArrayPattern, AssignmentExpression, AssignmentTarget, BindingPattern, CallExpression,
-    ChainElement, Class, ClassBody, ClassElement, Expression, ForStatementInit, FunctionBody,
-    IdentifierReference, LabeledStatement, ObjectExpression, ObjectPattern, ObjectPropertyKind,
-    Program, PropertyKey, SimpleAssignmentTarget, Statement, UpdateExpression, VariableDeclaration,
-    VariableDeclarator,
+    ArrayPattern, AssignmentExpression, AssignmentTarget, BindingIdentifier, BindingPattern,
+    CallExpression, ChainElement, Class, ClassBody, ClassElement, Expression, ForStatementInit,
+    FunctionBody, IdentifierReference, LabeledStatement, ObjectExpression, ObjectPattern,
+    ObjectPropertyKind, Program, PropertyKey, SimpleAssignmentTarget, Statement, UpdateExpression,
+    VariableDeclaration, VariableDeclarator,
 };
 use oxc_span::GetSpan;
 use smol_str::{SmolStr, ToSmolStr};
@@ -1795,9 +1795,9 @@ impl TreeBuilder {
                 // Skip references that ARE the declaring identifier
                 // itself — upstream's Identifier visitor bails in
                 // `is_reference(node, parent)` for the declaration
-                // site.
-                let declared_at = self.bindings[bid.0 as usize].range;
-                if declared_at.start == r.range.start && declared_at.end == r.range.end {
+                // site. Compared by start: a typed declaration's range
+                // runs on over its annotation (`declarator_name_end`).
+                if self.bindings[bid.0 as usize].range.start == r.range.start {
                     continue;
                 }
                 self.bindings[bid.0 as usize].references.push(Reference {
@@ -1827,8 +1827,9 @@ impl TreeBuilder {
         for u in std::mem::take(&mut self.pending_updates) {
             if let Some(bid) = resolve_by_name(&self.scopes, u.scope, &u.name) {
                 let b = &mut self.bindings[bid.0 as usize];
-                // Skip self-reference at declaration site.
-                if b.range.start == u.range.start && b.range.end == u.range.end {
+                // Skip self-reference at declaration site (by start, as
+                // for references above).
+                if b.range.start == u.range.start {
                     continue;
                 }
                 if u.is_reassign {
@@ -3603,7 +3604,9 @@ impl<'b> ScriptWalker<'b> {
         // absence of an explicit `props` option on it.
         if is_props {
             let warn_range = match &d.id {
-                BindingPattern::BindingIdentifier(id) => Some(self.abs(id.span.start, id.span.end)),
+                BindingPattern::BindingIdentifier(id) => {
+                    Some(self.abs(id.span.start, declarator_name_end(d, id)))
+                }
                 BindingPattern::ObjectPattern(op) => {
                     op.rest.as_ref().map(|r| self.abs(r.span.start, r.span.end))
                 }
@@ -3617,7 +3620,21 @@ impl<'b> ScriptWalker<'b> {
             }
         }
 
-        self.declare_pattern_with(&d.id, decl_kind, binding_kind, &initial, is_props);
+        match &d.id {
+            // The name alone: its span is the compiler's, which takes in
+            // the declarator's type annotation (see `declarator_name_end`).
+            BindingPattern::BindingIdentifier(id) => {
+                self.declare_with_ignores(
+                    self.cur_scope(),
+                    SmolStr::from(id.name.as_str()),
+                    self.abs(id.span.start, declarator_name_end(d, id)),
+                    binding_kind,
+                    decl_kind,
+                    initial.clone(),
+                );
+            }
+            _ => self.declare_pattern_with(&d.id, decl_kind, binding_kind, &initial, is_props),
+        }
 
         if let Some(h) = self.hooks {
             self.check_module_import_conflict(&d.id);
@@ -5296,4 +5313,15 @@ fn assignment_target_identifiers<'a>(
             }
         }
     }
+}
+
+/// Where the compiler's node for a declarator's name ends. Svelte parses
+/// TypeScript with acorn's TypeScript plugin, which makes the
+/// declarator's type annotation part of the Identifier (`x: number`,
+/// `x!: number`), so warnings reported on the binding (`binding.node`)
+/// cover it. oxc keeps the annotation on the declarator.
+fn declarator_name_end(d: &VariableDeclarator<'_>, id: &BindingIdentifier<'_>) -> u32 {
+    d.type_annotation
+        .as_ref()
+        .map_or(id.span.end, |annotation| annotation.span.end)
 }

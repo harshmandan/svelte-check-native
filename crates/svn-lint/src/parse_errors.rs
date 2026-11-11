@@ -93,6 +93,19 @@ impl Finder<'_> {
         }
     }
 
+    /// The value of a `then` / `catch` branch whose body is `body`.
+    fn branch_value(&mut self, value: Option<Range>, body: &Fragment, continuation: bool) {
+        let error = match value {
+            Some(r) => {
+                self.reserved_identifier(r);
+                self.reader().branch_value(r)
+            }
+            None if continuation => self.reader().missing_branch_value(body.range.start),
+            None => None,
+        };
+        self.tag_error(error);
+    }
+
     /// The whitespace after the keyword of the block tag at `start`.
     fn block_keyword(&mut self, start: u32, keyword: &str) {
         let error = self.reader().keyword_whitespace(start, b'#', keyword);
@@ -199,20 +212,17 @@ impl Finder<'_> {
                 if let Some(pending) = &b.pending {
                     self.fragment(pending, false);
                 }
+                // A branch is its own `{:then}` / `{:catch}` tag when a
+                // branch precedes it; otherwise it is written inline in
+                // the `{#await}` tag.
+                let mut continuation = b.pending.is_some();
                 if let Some(then) = &b.then_branch {
-                    if let Some(r) = then.context_range {
-                        self.reserved_identifier(r);
-                        let error = self.reader().branch_value(r);
-                        self.tag_error(error);
-                    }
+                    self.branch_value(then.context_range, &then.body, continuation);
                     self.fragment(&then.body, false);
+                    continuation = true;
                 }
                 if let Some(catch) = &b.catch_branch {
-                    if let Some(r) = catch.context_range {
-                        self.reserved_identifier(r);
-                        let error = self.reader().branch_value(r);
-                        self.tag_error(error);
-                    }
+                    self.branch_value(catch.context_range, &catch.body, continuation);
                     self.fragment(&catch.body, false);
                 }
             }

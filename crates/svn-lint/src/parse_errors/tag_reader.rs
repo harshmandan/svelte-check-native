@@ -547,6 +547,16 @@ impl<'s> TagReader<'s> {
         (self.byte(at) != Some(b'}')).then(|| TagError::expected_token(at, "}"))
     }
 
+    /// A `{:then}` / `{:catch}` tag our parser found no value in, whose
+    /// body starts at `body_start`. Only a `}` right after the keyword
+    /// ends the tag without a value; after whitespace the compiler
+    /// reads a pattern, and finds the `}`.
+    pub(super) fn missing_branch_value(&self, body_start: u32) -> Option<TagError> {
+        let close = body_start.checked_sub(1)?;
+        (self.byte(close) == Some(b'}') && self.whitespace_before(close))
+            .then(|| TagError::expected_pattern(close))
+    }
+
     /// `{@const pattern = init}`.
     pub(super) fn const_tag(&self, tag: &Interpolation) -> Option<TagError> {
         let keyword_end = self.keyword_end(tag.range.start, b'@', "const")?;

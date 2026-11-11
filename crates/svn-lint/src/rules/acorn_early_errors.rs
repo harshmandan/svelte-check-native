@@ -863,29 +863,7 @@ fn pattern_ids<'b, 'a>(pattern: &'b BindingPattern<'a>, out: &mut Vec<&'b Bindin
     }
 }
 
-/// The first token at or after `at`: whitespace and comments skipped.
-pub(crate) fn next_token_start(text: &str, mut at: u32) -> u32 {
-    loop {
-        let Some(rest) = text.get(at as usize..) else {
-            return at;
-        };
-        let trimmed = rest.trim_start();
-        at += (rest.len() - trimmed.len()) as u32;
-        if let Some(line) = trimmed.strip_prefix("//") {
-            let len = line
-                .find(['\n', '\r', '\u{2028}', '\u{2029}'])
-                .unwrap_or(line.len());
-            at += 2 + len as u32;
-        } else if let Some(block) = trimmed.strip_prefix("/*") {
-            match block.find("*/") {
-                Some(end) => at += 2 + end as u32 + 2,
-                None => return text.len() as u32,
-            }
-        } else {
-            return at;
-        }
-    }
-}
+pub(crate) use svn_parser::acorn::next_token_start;
 
 impl<'a> Visit<'a> for Checker<'_, 'a> {
     fn visit_statement(&mut self, it: &Statement<'a>) {

@@ -653,6 +653,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
 
     fn parse_each_block(&mut self, block_start: u32) -> Option<Node> {
         let (expr_range, as_clause) = parse_each_header(&mut self.scanner, &mut self.errors)?;
+        let opening_tag_end = self.scanner.pos();
         let (body_nodes, term) = self.parse_fragment_until(None);
         let body = Fragment {
             nodes: body_nodes,
@@ -692,6 +693,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             as_clause,
             body,
             alternate,
+            opening_tag_end,
             block_start,
             self.scanner.pos(),
         ))))

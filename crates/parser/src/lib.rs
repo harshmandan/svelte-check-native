@@ -21,6 +21,7 @@
 // Tests are allowed to panic loudly on setup failures.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
+pub mod acorn;
 pub mod ast;
 mod attributes;
 mod blocks;

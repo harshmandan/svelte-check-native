@@ -960,6 +960,7 @@ pub(crate) fn build_each_block(
     as_clause: Option<EachAsClause>,
     body: Fragment,
     alternate: Option<Fragment>,
+    opening_tag_end: u32,
     block_start: u32,
     block_end: u32,
 ) -> EachBlock {
@@ -968,6 +969,7 @@ pub(crate) fn build_each_block(
         as_clause,
         body,
         alternate,
+        opening_tag_end,
         range: Range::new(block_start, block_end),
     }
 }

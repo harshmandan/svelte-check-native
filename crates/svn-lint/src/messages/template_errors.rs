@@ -458,6 +458,16 @@ pub fn transition_duplicate(type_: &str) -> String {
     )
 }
 
+/// Unexpected end of input
+pub fn unexpected_eof() -> String {
+    "Unexpected end of input\nhttps://svelte.dev/e/unexpected_eof".to_string()
+}
+
+/// Unterminated string constant
+pub fn unterminated_string_constant() -> String {
+    "Unterminated string constant\nhttps://svelte.dev/e/unterminated_string_constant".to_string()
+}
+
 /// '%word%' is a reserved word in JavaScript and cannot be used here
 pub fn unexpected_reserved_word(word: &str) -> String {
     format!(

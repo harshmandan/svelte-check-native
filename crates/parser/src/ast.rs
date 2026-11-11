@@ -599,6 +599,8 @@ pub struct EachBlock {
     pub body: Fragment,
     /// `{:else}` empty-list body, if present.
     pub alternate: Option<Fragment>,
+    /// Just past the `}` that closes the opening `{#each …}` tag.
+    pub opening_tag_end: u32,
     pub range: Range,
 }
 

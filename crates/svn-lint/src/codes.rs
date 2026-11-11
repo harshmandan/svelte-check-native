@@ -235,8 +235,10 @@ pub enum Code {
     transition_conflict,
     transition_duplicate,
     typescript_invalid_feature,
+    unexpected_eof,
     unexpected_reserved_word,
     unknown_code,
+    unterminated_string_constant,
 }
 
 impl Code {
@@ -505,8 +507,10 @@ impl Code {
             Self::transition_conflict => "transition_conflict",
             Self::transition_duplicate => "transition_duplicate",
             Self::typescript_invalid_feature => "typescript_invalid_feature",
+            Self::unexpected_eof => "unexpected_eof",
             Self::unexpected_reserved_word => "unexpected_reserved_word",
             Self::unknown_code => "unknown_code",
+            Self::unterminated_string_constant => "unterminated_string_constant",
         }
     }
 
@@ -787,15 +791,17 @@ impl Code {
             "transition_conflict" => Some(Self::transition_conflict),
             "transition_duplicate" => Some(Self::transition_duplicate),
             "typescript_invalid_feature" => Some(Self::typescript_invalid_feature),
+            "unexpected_eof" => Some(Self::unexpected_eof),
             "unexpected_reserved_word" => Some(Self::unexpected_reserved_word),
             "unknown_code" => Some(Self::unknown_code),
+            "unterminated_string_constant" => Some(Self::unterminated_string_constant),
             _ => None,
         }
     }
 }
 
 /// All known codes, alphabetically sorted.
-pub const CODES: &[&str; 227] = &[
+pub const CODES: &[&str; 229] = &[
     "a11y_accesskey",
     "a11y_aria_activedescendant_has_tabindex",
     "a11y_aria_attributes",
@@ -1021,8 +1027,10 @@ pub const CODES: &[&str; 227] = &[
     "transition_conflict",
     "transition_duplicate",
     "typescript_invalid_feature",
+    "unexpected_eof",
     "unexpected_reserved_word",
     "unknown_code",
+    "unterminated_string_constant",
 ];
 
 /// The codes above that are compiler errors rather than warnings, kept
@@ -1175,5 +1183,7 @@ pub const COMPILER_ERROR_CODES: &[&str] = &[
     "transition_conflict",
     "transition_duplicate",
     "typescript_invalid_feature",
+    "unexpected_eof",
     "unexpected_reserved_word",
+    "unterminated_string_constant",
 ];

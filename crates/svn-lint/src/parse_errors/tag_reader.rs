@@ -1,7 +1,7 @@
-//! The compiler's character-level reads inside a block tag.
+//! The compiler's reads inside a block tag.
 //!
-//! Most of a tag is JavaScript that the compiler hands to acorn, which
-//! skips comments like any JavaScript parser. The rest is read by the
+//! Most of a tag is JavaScript that the compiler hands to acorn
+//! (acorn-typescript in a TypeScript component). The rest is read by the
 //! compiler's own parser one character at a time (`state/tag.js`,
 //! `read/context.js`): the whitespace a tag keyword must be followed
 //! by, the pattern after an `{#each … as`, a `then` / `catch` or a
@@ -12,13 +12,18 @@
 //!
 //! Each function replays those reads over the source, starting from
 //! where our parser placed the tag, and returns the first error the
-//! compiler throws there. Where the outcome depends on reads this
-//! module does not model, it reports nothing.
+//! compiler throws there. acorn's reads are replayed with oxc (see
+//! [`Read`]). acorn also adds every comment it passes to one list for
+//! the whole component, and reading an expression moves on past the
+//! last comment in that list, so the reads below keep the end of the
+//! last comment acorn collected.
 
 use oxc_allocator::Allocator;
-use oxc_ast::ast::{Expression, Statement};
+use oxc_ast::ast::{Expression, TSAsExpression};
+use oxc_ast_visit::{Visit, walk};
 use oxc_span::{GetSpan, SourceType};
 use svn_core::Range;
+use svn_parser::acorn::{self, BracketError, Read};
 use svn_parser::ast::{EachBlock, Interpolation};
 
 use crate::codes::Code;
@@ -65,24 +70,52 @@ impl TagError {
             message: messages::expected_identifier(),
         }
     }
-}
 
-/// How the compiler continues after a pattern, which decides how its
-/// type annotation is delimited when we hand it to oxc.
-#[derive(Clone, Copy)]
-enum PatternSite {
-    /// An `{#each}` context or a `then` / `catch` value: the pattern
-    /// text alone, without an initializer.
-    Binding,
-    /// A `{@const}`: the pattern is followed by `= init`.
-    Const,
-}
+    fn reserved_word(at: u32, word: &str) -> Self {
+        Self {
+            at,
+            code: Code::unexpected_reserved_word,
+            message: messages::unexpected_reserved_word(word),
+        }
+    }
 
-/// A pattern the reader got past: where it ends, and where the `:` of
-/// its type annotation sits when it has one.
-struct Pattern {
-    end: u32,
-    annotation: Option<u32>,
+    fn unexpected_eof(at: u32) -> Self {
+        Self {
+            at,
+            code: Code::unexpected_eof,
+            message: messages::unexpected_eof(),
+        }
+    }
+
+    fn unterminated_string_constant(at: u32) -> Self {
+        Self {
+            at,
+            code: Code::unterminated_string_constant,
+            message: messages::unterminated_string_constant(),
+        }
+    }
+
+    fn js_parse_error(at: u32, message: &str) -> Self {
+        Self {
+            at,
+            code: Code::js_parse_error,
+            message: format!("{message}\nhttps://svelte.dev/e/js_parse_error"),
+        }
+    }
+
+    /// The error `match_bracket()` throws, in a text starting at
+    /// `origin` in the template.
+    fn bracket(origin: u32, error: BracketError) -> Self {
+        match error {
+            BracketError::Mismatch { at, expected } => {
+                Self::expected_token(origin + at, &expected.to_string())
+            }
+            BracketError::Eof { at } => Self::unexpected_eof(origin + at),
+            BracketError::UnterminatedString { at } => {
+                Self::unterminated_string_constant(origin + at)
+            }
+        }
+    }
 }
 
 pub(super) struct TagReader<'s> {
@@ -140,27 +173,6 @@ impl<'s> TagReader<'s> {
         Ok(self.skip_whitespace(at))
     }
 
-    fn comment_end(&self, at: u32) -> Option<u32> {
-        let rest = self.source.get(at as usize..)?;
-        if rest.starts_with("//") {
-            Some(at + rest.find('\n').unwrap_or(rest.len()) as u32)
-        } else if let Some(body) = rest.strip_prefix("/*") {
-            body.find("*/").map(|i| at + 2 + i as u32 + 2)
-        } else {
-            None
-        }
-    }
-
-    fn skip_whitespace_and_comments(&self, mut at: u32) -> u32 {
-        loop {
-            at = self.skip_whitespace(at);
-            match self.comment_end(at) {
-                Some(end) => at = end,
-                None => return at,
-            }
-        }
-    }
-
     /// `read_identifier()`: the end of the identifier at `at` (`at`
     /// itself when none starts there).
     fn identifier_end(&self, at: u32) -> u32 {
@@ -213,322 +225,235 @@ impl<'s> TagReader<'s> {
         (!self.whitespace_before(part_start)).then(|| TagError::expected_whitespace(part_start))
     }
 
-    /// `match_bracket()` from the `{` / `[` at `start`: the position
-    /// after its partner. Strings are skipped, comments are not.
-    /// `None` where the compiler would throw an error of its own.
-    fn match_bracket(&self, start: u32) -> Option<u32> {
-        let bytes = self.source.as_bytes();
-        let mut stack: Vec<u8> = Vec::new();
-        let mut i = start as usize;
-        while i < bytes.len() {
-            let c = bytes[i];
-            i += 1;
-            match c {
-                b'\'' | b'"' | b'`' => i = self.match_quote(i, c)?,
-                b'(' | b'[' | b'{' => stack.push(c),
-                b')' | b']' | b'}' => {
-                    let open = stack.pop()?;
-                    let expected = match open {
-                        b'(' => b')',
-                        b'[' => b']',
-                        _ => b'}',
-                    };
-                    if c != expected {
-                        return None;
-                    }
-                    if stack.is_empty() {
-                        return Some(i as u32);
-                    }
-                }
-                _ => {}
-            }
+    /// Records the comments acorn collected reading `text` (which starts
+    /// at `origin` in the template) up to `to` in it. Each read adds the
+    /// comments it lexes to the list again, so the last comment is the
+    /// last one the latest read lexed, wherever it lies.
+    fn collect_comments(&self, text: &str, origin: u32, to: u32, last_comment: &mut u32) {
+        if let Some(end) = acorn::last_comment_end(text, to, self.ts) {
+            *last_comment = origin + end;
         }
-        None
     }
 
-    /// `match_quote()`: the position after the string whose body
-    /// starts at `i`.
-    fn match_quote(&self, mut i: usize, quote: u8) -> Option<usize> {
-        let bytes = self.source.as_bytes();
-        let mut escaped = false;
-        while i < bytes.len() {
-            let c = bytes[i];
-            i += 1;
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if c == quote {
-                return Some(i);
-            }
-            if c == b'\\' {
-                escaped = true;
-            }
-            if quote == b'`' && c == b'$' && bytes.get(i) == Some(&b'{') {
-                i = self.match_bracket(i as u32)? as usize;
-            }
+    /// `read_identifier()` at `at`: its end (`at` when none starts
+    /// there), or the error for a reserved word.
+    fn read_identifier(&self, at: u32) -> Result<u32, TagError> {
+        let end = self.identifier_end(at);
+        let name = &self.source[at as usize..end as usize];
+        if super::RESERVED_WORDS.contains(&name) {
+            return Err(TagError::reserved_word(at, name));
         }
-        None
+        Ok(end)
     }
 
-    /// The `)` closing the `(` at `open`, read as JavaScript (strings
-    /// and comments skipped), and whether a comment lies between them.
-    fn matching_paren(&self, open: u32) -> Option<(u32, bool)> {
-        let bytes = self.source.as_bytes();
-        let mut depth = 0u32;
-        let mut has_comment = false;
-        let mut i = open as usize;
-        while i < bytes.len() {
-            match bytes[i] {
-                b'\'' | b'"' | b'`' => {
-                    i = self.match_quote(i + 1, bytes[i])?;
-                    continue;
-                }
-                b'/' => {
-                    if let Some(end) = self.comment_end(i as u32) {
-                        has_comment = true;
-                        i = end as usize;
-                        continue;
-                    }
-                }
-                b'(' | b'[' | b'{' => depth += 1,
-                b')' | b']' | b'}' => {
-                    depth = depth.checked_sub(1)?;
-                    if depth == 0 {
-                        return (bytes[i] == b')').then_some((i as u32, has_comment));
-                    }
-                }
-                _ => {}
-            }
-            i += 1;
-        }
-        None
-    }
-
-    /// `read_pattern()` from `start`, followed by its optional type
-    /// annotation. `region_end` bounds the text our parser read as the
-    /// pattern's part of the tag.
-    fn read_pattern(
-        &self,
-        start: u32,
-        region_end: u32,
-        site: PatternSite,
-    ) -> Result<Option<Pattern>, TagError> {
-        let first = self.char_at(start);
-        let end = if first.is_some_and(oxc_syntax::identifier::is_identifier_start) {
-            self.identifier_end(start)
-        } else if matches!(first, Some('{' | '[')) {
-            match self.match_bracket(start) {
-                Some(end) => end,
-                None => return Ok(None),
-            }
+    /// `read_pattern()` from `start`: where the pattern and its type
+    /// annotation end. `close` is the `}` ending the tag, which no acorn
+    /// read gets past.
+    fn read_pattern(&self, start: u32, close: u32, comments: &mut u32) -> Result<u32, TagError> {
+        let identifier_end = self.read_identifier(start)?;
+        let end = if identifier_end > start {
+            identifier_end
         } else {
-            return Err(TagError::expected_pattern(start));
+            if !matches!(self.byte(start), Some(b'{' | b'[')) {
+                return Err(TagError::expected_pattern(start));
+            }
+            let end =
+                acorn::match_bracket(self.source, start).map_err(|e| TagError::bracket(0, e))?;
+            // acorn reads the pattern as the left side of an assignment,
+            // written where it stands in the template.
+            let pattern = &self.source[start as usize..end as usize];
+            let wrapped = format!("({pattern} = 1)");
+            let origin = start - 1;
+            match acorn::read_expression(&wrapped, self.ts) {
+                Read::Error { at, message } => {
+                    return Err(TagError::js_parse_error(origin + at, message));
+                }
+                Read::Expression { lookahead, .. } => {
+                    self.collect_comments(&wrapped, origin, lookahead, comments);
+                }
+            }
+            end
         };
-        let colon = self.skip_whitespace(end);
+        self.read_type_annotation(end, close, comments)
+    }
+
+    /// `read_type_annotation()` after a pattern ending at `at`: where
+    /// the reading continues.
+    fn read_type_annotation(
+        &self,
+        at: u32,
+        close: u32,
+        comments: &mut u32,
+    ) -> Result<u32, TagError> {
+        let colon = self.skip_whitespace(at);
         if self.byte(colon) != Some(b':') {
-            return Ok(Some(Pattern {
-                end,
-                annotation: None,
-            }));
+            return Ok(at);
         }
-        // The compiler reads the annotation by handing acorn the text
-        // from five characters before the type, with `_ as ` written
-        // over them. Without TypeScript acorn reads only the `_`, and the
-        // compiler carries on reading right after it.
+        // The compiler writes `_ as ` over the five characters before the
+        // type and has acorn read an expression from there. Without
+        // TypeScript acorn reads only the `_`, and the reading carries on
+        // right after it.
+        let after = colon + 1;
+        let Some(origin) = after.checked_sub(acorn::ANNOTATION_PREFIX_LEN) else {
+            return Ok(at);
+        };
         if !self.ts {
-            return Ok(colon.checked_sub(3).map(|end| Pattern {
-                end,
-                annotation: None,
-            }));
+            return Ok(origin + 1);
         }
-        let Some(end) = self.annotated_pattern_end(start, region_end, site) else {
-            return Ok(None);
-        };
-        Ok(Some(Pattern {
-            end,
-            annotation: Some(colon),
-        }))
-    }
-
-    /// Where the type annotation of the pattern at `start` ends, read
-    /// as TypeScript does (trailing comments are not part of it).
-    fn annotated_pattern_end(&self, start: u32, region_end: u32, site: PatternSite) -> Option<u32> {
-        let text = self.source.get(start as usize..region_end as usize)?;
-        let (prefix, wrapped) = match site {
-            PatternSite::Binding => ("let ", format!("let {text} = 0;")),
-            PatternSite::Const => ("const ", format!("const {text};")),
-        };
-        let alloc = Allocator::default();
-        let parsed = oxc_parser::Parser::new(&alloc, &wrapped, SourceType::ts()).parse();
-        if !parsed.diagnostics.is_empty() || parsed.fatal_error {
-            return None;
+        let rest = self
+            .source
+            .get(after as usize..close as usize)
+            .unwrap_or("");
+        let annotation = acorn::read_type_annotation(rest);
+        match annotation.read {
+            Read::Error { at, message } => Err(TagError::js_parse_error(origin + at, message)),
+            Read::Expression { end, lookahead } => {
+                self.collect_comments(&annotation.text, origin, lookahead, comments);
+                Ok(origin + end)
+            }
         }
-        let Some(Statement::VariableDeclaration(decl)) = parsed.program.body.first() else {
-            return None;
-        };
-        let annotation = decl.declarations.first()?.type_annotation.as_ref()?;
-        Some(start + annotation.span.end - prefix.len() as u32)
-    }
-
-    /// Whether `text` reads as one complete expression.
-    fn parses_as_expression(&self, text: &str) -> bool {
-        let alloc = Allocator::default();
-        let source_type = SourceType::default()
-            .with_module(true)
-            .with_typescript(self.ts);
-        oxc_parser::Parser::new(&alloc, text, source_type)
-            .parse_expression()
-            .is_ok()
     }
 
     /// `{#each …}`.
     pub(super) fn each(&self, block: &EachBlock) -> Option<TagError> {
-        let keyword_end = self.keyword_end(block.range.start, b'#', "each")?;
-        if let Err(e) = self.require_whitespace(keyword_end) {
-            return Some(e);
+        self.read_each(block).err()
+    }
+
+    fn read_each(&self, block: &EachBlock) -> Result<(), TagError> {
+        let Some(keyword_end) = self.keyword_end(block.range.start, b'#', "each") else {
+            return Ok(());
+        };
+        let start = self.require_whitespace(keyword_end)?;
+        let Some(close) = block
+            .opening_tag_end
+            .checked_sub(1)
+            .filter(|&c| self.byte(c) == Some(b'}'))
+        else {
+            return Ok(());
+        };
+        let mut comments = 0;
+
+        // The iterable. When acorn throws, the compiler hides the
+        // template from the last `as` before the error onwards and reads
+        // again: `{#each x as { y = z }}` reads the pattern as an object
+        // first.
+        let mut limit = close;
+        let iterable_end = loop {
+            let text = &self.source[start as usize..limit as usize];
+            match acorn::read_expression(text, self.ts) {
+                Read::Expression { end, lookahead } => {
+                    self.collect_comments(text, start, lookahead, &mut comments);
+                    break start + end;
+                }
+                Read::Error { at, message } => {
+                    self.collect_comments(text, start, at, &mut comments);
+                    let at = start + at;
+                    match self.as_before(start, at) {
+                        Some(cut) => limit = cut,
+                        None => return Err(TagError::js_parse_error(at, message)),
+                    }
+                }
+            }
+        };
+
+        // Reading an expression moves past the last collected comment.
+        let mut index = self.skip_whitespace(iterable_end.max(comments));
+        let mut expression_end = iterable_end;
+        if !self.source[index as usize..].starts_with("as") {
+            // No `as` after the iterable: it keeps the first expression
+            // of a sequence, and a TypeScript cast that ends it is the
+            // context.
+            if let Some((end, cast_as)) = self.iterable_without_as(start, iterable_end) {
+                expression_end = end;
+                if let Some(at) = cast_as {
+                    index = at;
+                }
+            }
         }
-        let expression_start = block.expression_range.start;
-        match block.as_clause.as_ref().and_then(|c| c.context_range) {
-            Some(context) => self.each_context(expression_start, context.start, Some(context.end)),
-            None => self.each_without_context(block),
+        let context_end = if self.source[index as usize..].starts_with("as") {
+            let context = self.require_whitespace(index + 2)?;
+            self.read_pattern(context, close, &mut comments)?
+        } else {
+            expression_end
+        };
+
+        let mut index = self.skip_whitespace(context_end);
+        if self.byte(index) == Some(b',') {
+            index = self.skip_whitespace(index + 1);
+            let end = self.read_identifier(index)?;
+            if end == index {
+                return Err(TagError::expected_identifier(index));
+            }
+            index = self.skip_whitespace(end);
+        }
+        if self.byte(index) == Some(b'(') {
+            let key = self.skip_whitespace(index + 1);
+            let text = &self.source[key as usize..close as usize];
+            match acorn::read_expression(text, self.ts) {
+                Read::Error { at, message } => {
+                    return Err(TagError::js_parse_error(key + at, message));
+                }
+                Read::Expression { end, lookahead } => {
+                    self.collect_comments(text, key, lookahead, &mut comments);
+                    index = self.skip_whitespace((key + end).max(comments));
+                }
+            }
+            if self.byte(index) != Some(b')') {
+                return Err(TagError::expected_token(index, ")"));
+            }
+            index = self.skip_whitespace(index + 1);
+        }
+        if self.byte(index) != Some(b'}') {
+            return Err(TagError::expected_token(index, "}"));
+        }
+        Ok(())
+    }
+
+    /// The last `as` that starts before `at - 1` and not before `start`.
+    fn as_before(&self, start: u32, at: u32) -> Option<u32> {
+        let mut cut = at.checked_sub(2)?;
+        loop {
+            if self.source.get(cut as usize..cut as usize + 2) == Some("as") {
+                return Some(cut);
+            }
+            cut = cut.checked_sub(1).filter(|&c| c >= start)?;
         }
     }
 
-    /// An `{#each}` header in which our parser found no `as` context:
-    /// either it has none (`{#each items, i}`), or the compiler finds
-    /// one our parser did not (a TypeScript header).
-    fn each_without_context(&self, block: &EachBlock) -> Option<TagError> {
-        let range = block.expression_range;
-        let text = self.source.get(range.start as usize..range.end as usize)?;
+    /// The iterable `start..end` when no `as` follows it: where its first
+    /// expression ends (parentheses removed, as the compiler removes
+    /// them), and the `as` of a TypeScript cast that ends it.
+    fn iterable_without_as(&self, start: u32, end: u32) -> Option<(u32, Option<u32>)> {
+        let text = self.source.get(start as usize..end as usize)?;
         let alloc = Allocator::default();
-        let source_type = SourceType::default()
-            .with_module(true)
-            .with_typescript(self.ts);
-        let Ok(expression) = oxc_parser::Parser::new(&alloc, text, source_type).parse_expression()
-        else {
-            // JavaScript has no `as`: the compiler's expression ends
-            // where one does, and the context follows it.
-            if self.ts {
-                return None;
-            }
-            let at = self.as_after_javascript_expression(range.start, text)?;
-            let context_start = match self.require_whitespace(at + 2) {
-                Ok(start) => start,
-                Err(e) => return Some(e),
-            };
-            return self.each_context(range.start, context_start, None);
-        };
-        // The compiler reads the header as one expression and, with no
-        // `as` after it, keeps the first element of a sequence.
+        let expression = oxc_parser::Parser::new(
+            &alloc,
+            text,
+            SourceType::default()
+                .with_module(true)
+                .with_typescript(self.ts),
+        )
+        .parse_expression()
+        .ok()?;
         let mut first = unparenthesized(&expression);
         if let Expression::SequenceExpression(sequence) = first {
             first = unparenthesized(sequence.expressions.first()?);
         }
-        if let Expression::TSAsExpression(cast) = first {
-            // A trailing `as` cast is the context: the compiler walks
-            // back from the cast's type to its `as`.
-            let mut at = (range.start + cast.type_annotation.span().start).checked_sub(2)?;
-            while self.source.get(at as usize..at as usize + 2)? != "as" {
-                at = at.checked_sub(1).filter(|&a| a > range.start)?;
-            }
-            let context_start = match self.require_whitespace(at + 2) {
-                Ok(start) => start,
-                Err(e) => return Some(e),
-            };
-            return self.each_context(range.start, context_start, None);
-        }
-        let at = self.skip_whitespace(range.start + first.span().end);
-        self.each_index_and_key(range.start, at, None)
-    }
-
-    /// The first `as` in the header `text` (starting at `start`) that
-    /// follows a complete JavaScript expression: where acorn stops
-    /// reading the iterable and the compiler looks for `as`.
-    fn as_after_javascript_expression(&self, start: u32, text: &str) -> Option<u32> {
-        text.match_indices("as").find_map(|(p, _)| {
-            let in_identifier = text[..p]
-                .chars()
-                .next_back()
-                .is_some_and(oxc_syntax::identifier::is_identifier_part);
-            (!in_identifier && self.parses_as_expression(&text[..p])).then_some(start + p as u32)
-        })
-    }
-
-    /// The `as` context of an `{#each}` and what follows it.
-    fn each_context(
-        &self,
-        expression_start: u32,
-        context_start: u32,
-        context_end: Option<u32>,
-    ) -> Option<TagError> {
-        // Without our parser's bound for the pattern, an annotated one
-        // is not followed.
-        let region_end = context_end.unwrap_or(context_start);
-        let pattern = match self.read_pattern(context_start, region_end, PatternSite::Binding) {
-            Ok(Some(pattern)) => pattern,
-            Ok(None) => return None,
-            Err(e) => return Some(e),
+        let first_end = first.span().end;
+        let mut cast = TrailingCast {
+            end: first_end,
+            type_start: None,
         };
-        let at = self.skip_whitespace(pattern.end);
-        self.each_index_and_key(expression_start, at, pattern.annotation)
-    }
-
-    /// From `at`, after the iterable or the context: `, index`, then
-    /// `(key)`, then the closing `}`.
-    fn each_index_and_key(
-        &self,
-        expression_start: u32,
-        mut at: u32,
-        annotation: Option<u32>,
-    ) -> Option<TagError> {
-        if self.byte(at) == Some(b',') {
-            at = self.skip_whitespace(at + 1);
-            let end = self.identifier_end(at);
-            if end == at {
-                return Some(TagError::expected_identifier(at));
+        cast.visit_expression(first);
+        let cast_as = cast.type_start.and_then(|type_start| {
+            // From two characters before the cast's type back to its `as`.
+            let mut at = (start + type_start).checked_sub(2)?;
+            while self.source.get(at as usize..at as usize + 2)? != "as" {
+                at = at.checked_sub(1)?;
             }
-            at = self.skip_whitespace(end);
-        }
-        if self.byte(at) == Some(b'(') {
-            let (close, key_has_comment) = self.matching_paren(at)?;
-            let after = self.skip_whitespace(close + 1);
-            if self.byte(after) == Some(b'}') {
-                return None;
-            }
-            if self.comment_end(after).is_some()
-                && !key_has_comment
-                && self.read_past_key(expression_start, annotation, close)
-            {
-                // A comment after the key was already collected by an
-                // earlier acorn read that ran through the key. Reading
-                // the key, the compiler moves past the last comment
-                // collected so far, so it looks for the `)` there.
-                return Some(TagError::expected_token(
-                    self.skip_whitespace_and_comments(after),
-                    ")",
-                ));
-            }
-            return Some(TagError::expected_token(after, "}"));
-        }
-        (self.byte(at) != Some(b'}')).then(|| TagError::expected_token(at, "}"))
-    }
-
-    /// Whether one of the acorn reads before the key's ran through the
-    /// key's `)` at `close`, collecting the comments after it: the
-    /// first read of the header as an expression (`items, i (key)` is a
-    /// call; in TypeScript so is `items as item, i (key)`), or, in
-    /// TypeScript, the read of the context's type annotation, which the
-    /// compiler parses as `_ as Type, i (key)`.
-    fn read_past_key(&self, expression_start: u32, annotation: Option<u32>, close: u32) -> bool {
-        let through = |from: u32| self.source.get(from as usize..close as usize + 1);
-        if through(expression_start).is_some_and(|t| self.parses_as_expression(t)) {
-            return true;
-        }
-        self.ts
-            && annotation
-                .and_then(|colon| through(colon + 1))
-                .is_some_and(|t| self.parses_as_expression(&format!("_ as {t}")))
+            Some(at)
+        });
+        Some((start + first_end, cast_as))
     }
 
     /// The value of a `then` / `catch` (inline in `{#await}` or in a
@@ -538,12 +463,14 @@ impl<'s> TagReader<'s> {
         if let Some(e) = self.whitespace_before_part(value.start) {
             return Some(e);
         }
-        let pattern = match self.read_pattern(value.start, value.end, PatternSite::Binding) {
-            Ok(Some(pattern)) => pattern,
-            Ok(None) => return None,
+        let close = Some(self.skip_whitespace(value.end))
+            .filter(|&c| self.byte(c) == Some(b'}'))
+            .unwrap_or(value.end);
+        let end = match self.read_pattern(value.start, close, &mut 0) {
+            Ok(end) => end,
             Err(e) => return Some(e),
         };
-        let at = self.skip_whitespace(pattern.end);
+        let at = self.skip_whitespace(end);
         (self.byte(at) != Some(b'}')).then(|| TagError::expected_token(at, "}"))
     }
 
@@ -557,21 +484,40 @@ impl<'s> TagReader<'s> {
             .then(|| TagError::expected_pattern(close))
     }
 
-    /// `{@const pattern = init}`.
+    /// `{@const pattern = init}`, up to its `=`.
     pub(super) fn const_tag(&self, tag: &Interpolation) -> Option<TagError> {
         let keyword_end = self.keyword_end(tag.range.start, b'@', "const")?;
         let start = match self.require_whitespace(keyword_end) {
             Ok(start) => start,
             Err(e) => return Some(e),
         };
-        let region_end = tag.expression_range.end.max(start);
-        let pattern = match self.read_pattern(start, region_end, PatternSite::Const) {
-            Ok(Some(pattern)) => pattern,
-            Ok(None) => return None,
+        let close = tag.range.end.checked_sub(1)?;
+        let end = match self.read_pattern(start, close, &mut 0) {
+            Ok(end) => end,
             Err(e) => return Some(e),
         };
-        let at = self.skip_whitespace(pattern.end);
+        let at = self.skip_whitespace(end);
         (self.byte(at) != Some(b'=')).then(|| TagError::expected_token(at, "="))
+    }
+}
+
+/// The outermost TypeScript cast that ends where the expression does
+/// (the compiler's walk does not look inside the casts it matches).
+struct TrailingCast {
+    end: u32,
+    type_start: Option<u32>,
+}
+
+impl<'a> Visit<'a> for TrailingCast {
+    fn visit_ts_as_expression(&mut self, it: &TSAsExpression<'a>) {
+        if self.type_start.is_some() {
+            return;
+        }
+        if it.span.end == self.end {
+            self.type_start = Some(it.type_annotation.span().start);
+            return;
+        }
+        walk::walk_ts_as_expression(self, it);
     }
 }
 

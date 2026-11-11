@@ -96,10 +96,7 @@ impl Finder<'_> {
     /// The value of a `then` / `catch` branch whose body is `body`.
     fn branch_value(&mut self, value: Option<Range>, body: &Fragment, continuation: bool) {
         let error = match value {
-            Some(r) => {
-                self.reserved_identifier(r);
-                self.reader().branch_value(r)
-            }
+            Some(r) => self.reader().branch_value(r),
             None if continuation => self.reader().missing_branch_value(body.range.start),
             None => None,
         };
@@ -194,14 +191,6 @@ impl Finder<'_> {
             Node::EachBlock(b) => {
                 let error = self.reader().each(b);
                 self.tag_error(error);
-                if let Some(clause) = &b.as_clause {
-                    for r in [clause.context_range, clause.index_range]
-                        .into_iter()
-                        .flatten()
-                    {
-                        self.reserved_identifier(r);
-                    }
-                }
                 self.fragment(&b.body, false);
                 if let Some(alt) = &b.alternate {
                     self.fragment(alt, false);
@@ -476,17 +465,6 @@ impl Finder<'_> {
             ),
             Some(_) => {}
         }
-    }
-
-    /// A pattern that is a plain identifier must not be a reserved word.
-    fn reserved_identifier(&mut self, range: Range) {
-        let text = range.slice(self.source);
-        let trimmed = text.trim_start();
-        let start = range.start + (text.len() - trimmed.len()) as u32;
-        let end = trimmed
-            .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
-            .unwrap_or(trimmed.len());
-        self.reserved_word(&trimmed[..end], start);
     }
 
     fn reserved_word(&mut self, word: &str, at: u32) {

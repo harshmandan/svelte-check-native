@@ -77,6 +77,7 @@ pub(crate) fn collect_component_instantiation(
             },
             ctor_anchor: Range::new(name_end.saturating_sub(1), name_end),
             fills_parent_slot,
+            tag_name_end: name_end,
         },
         &c.attributes,
         &c.children,
@@ -95,6 +96,9 @@ pub(crate) struct InstantiationRoot {
     pub(crate) ctor: ComponentCtor,
     pub(crate) ctor_anchor: Range,
     pub(crate) fills_parent_slot: bool,
+    /// End of the tag name in the start tag (`<` + 1 + the AST name's
+    /// length) — svelte2tsx's `tagNameEnd`.
+    pub(crate) tag_name_end: u32,
 }
 
 /// Body of [`collect_component_instantiation`] generalised to accept
@@ -116,6 +120,7 @@ pub(crate) fn collect_instantiation_inner(
         ctor,
         ctor_anchor,
         fills_parent_slot,
+        tag_name_end,
     } = root;
     let mut props: Vec<PropShape> = Vec::with_capacity(attributes.len());
     let mut on_events: Vec<OnEventDirective> = Vec::new();
@@ -145,6 +150,7 @@ pub(crate) fn collect_instantiation_inner(
             implicit_children_anchor(
                 StartTag {
                     start: range_start,
+                    name_end: tag_name_end,
                     end: first.range().start,
                     name_move,
                     fills_parent_slot,
@@ -234,6 +240,8 @@ pub(crate) fn collect_instantiation_inner(
 struct StartTag {
     /// Byte offset of the `<`.
     start: u32,
+    /// End of the tag name.
+    name_end: u32,
     /// Where the start tag's rewrite ends: the first child's start.
     end: u32,
     /// The source range moved in as the constructed component value
@@ -266,14 +274,7 @@ struct StartTag {
 ///   character (or the name's last character when there is none).
 fn implicit_children_anchor(tag: StartTag, attributes: &[Attribute], source: &str) -> Range {
     let bytes = source.as_bytes();
-    let tag_name_len = source
-        .get(tag.start as usize + 1..)
-        .map(|rest| {
-            rest.find(|ch: char| ch.is_whitespace() || ch == '/' || ch == '>')
-                .unwrap_or(rest.len())
-        })
-        .unwrap_or(0) as u32;
-    let tag_name_end = tag.start + 1 + tag_name_len;
+    let tag_name_end = tag.name_end;
     let name_last = match tag.name_move {
         Some(r) if r.end > r.start => r.end - 1,
         _ => tag_name_end.saturating_sub(1),

@@ -43,7 +43,7 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
     match s.kind {
         SvelteElementKind::SelfRef => {
             collect_instantiation_inner(
-                self_root(s.range.start, fills_parent_slot),
+                self_root(s, fills_parent_slot),
                 &s.attributes,
                 &s.children,
                 s.range,
@@ -84,9 +84,10 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
                     // the character right after it.
                     ctor_anchor: Range::new(end, end + 1),
                     fills_parent_slot,
+                    tag_name_end: svelte_tag_name_end(s),
                 })
             });
-            let root = this_expr.unwrap_or_else(|| self_root(s.range.start, fills_parent_slot));
+            let root = this_expr.unwrap_or_else(|| self_root(s, fills_parent_slot));
             // Filter out the `this={…}` directive itself from
             // the prop walk so it isn't surfaced as a regular
             // prop on the synthetic component.
@@ -162,11 +163,17 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
 
 /// Root of a `<svelte:self>` (or a `<svelte:component>` without `this`):
 /// an untyped instance, anchored on the tag name.
-fn self_root(node_start: u32, fills_parent_slot: bool) -> InstantiationRoot {
-    let start = node_start + 1;
+fn self_root(s: &svn_parser::SvelteElement, fills_parent_slot: bool) -> InstantiationRoot {
+    let start = s.range.start + 1;
     InstantiationRoot {
         ctor: ComponentCtor::SelfAny,
         ctor_anchor: Range::new(start, start + 1),
         fills_parent_slot,
+        tag_name_end: svelte_tag_name_end(s),
     }
+}
+
+/// End of a `<svelte:…>` tag's name: `<` + `svelte:` + the kind.
+fn svelte_tag_name_end(s: &svn_parser::SvelteElement) -> u32 {
+    s.range.start + 1 + ("svelte:".len() + s.kind.as_str().len()) as u32
 }

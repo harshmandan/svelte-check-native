@@ -178,7 +178,35 @@ function canonString(lit) {
     return JSON.stringify(value);
 }
 
+/**
+ * One name for each synthesised identifier. Runs before whitespace is
+ * removed, so `a of b` cannot run together into one name.
+ */
+function renameSynthesised(text) {
+    return (
+        text
+            .replace(/__sveltets_2_([A-Za-z0-9_]+)/g, (_, n) => canonHelper(n))
+            .replace(/__svn_C_[A-Za-z0-9_]+/g, '$C')
+            .replace(/__svn_inst_[A-Za-z0-9_]+/g, '$I')
+            // svelte2tsx names a component's constructor local after the
+            // reversed tag name plus its depth (`$$_tnenopmoC0C`) and the
+            // instance the same without the trailing `C` (`$$_tnenopmoC0`).
+            .replace(/\$\$_[A-Za-z0-9_]*?\d+C\b/g, '$C')
+            .replace(/\$\$_[A-Za-z][A-Za-z0-9_]*?\d+\b/g, '$I')
+            .replace(/__svn_Render_[0-9a-f]+|__sveltets_Render/g, '$R')
+            .replace(/\$\$render_[0-9a-f]+/g, '$$$$render')
+            // The placeholder item of an `{#each}` without `as`.
+            .replace(/\$\$each_item|__svn_each_unused/g, '$EACH')
+            // The iterable's temp when it shares the item's name.
+            .replace(/\$\$_each\b|__svn_each_arr\b/g, '$EACHARR')
+            .replace(/__svn_([A-Za-z0-9_]+)/g, (_, n) => canonHelper(n))
+            .replace(/\$\$action_\d+/g, 'H.action')
+            .replace(/H\.action\d+/g, 'H.action')
+    );
+}
+
 function normalize(text) {
+    text = renameSynthesised(text);
     let s = '';
     let i = 0;
     while (i < text.length) {
@@ -196,32 +224,27 @@ function normalize(text) {
         if (!/\s/.test(c)) s += c;
         i++;
     }
-    return s
-        .replace(/,([}\])])/g, '$1')
-        .replace(/__sveltets_2_([A-Za-z0-9_]+)/g, (_, n) => canonHelper(n))
-        .replace(/__svn_C_[A-Za-z0-9_]+/g, '$C')
-        .replace(/__svn_inst_[A-Za-z0-9_]+/g, '$I')
-        // svelte2tsx names a component's constructor local after the
-        // reversed tag name plus its depth (`$$_tnenopmoC0C`) and the
-        // instance the same without the trailing `C` (`$$_tnenopmoC0`).
-        .replace(/\$\$_[A-Za-z0-9_]*?\d+C\b/g, '$C')
-        .replace(/\$\$_[A-Za-z][A-Za-z0-9_]*?\d+\b/g, '$I')
-        .replace(/__svn_Render_[0-9a-f]+|__sveltets_Render/g, '$R')
-        .replace(/\$\$render_[0-9a-f]+/g, '$$$$render')
-        .replace(/__svn_([A-Za-z0-9_]+)/g, (_, n) => canonHelper(n))
-        .replace(/\$\$action_\d+/g, 'H.action')
-        .replace(/H\.action\d+/g, 'H.action')
-        // A quoted key that is a plain identifier is the same key bare.
-        .replace(/([{,])"([A-Za-z_$][\w$]*)":/g, '$1$2:')
-        // Snippet and slot bodies: ours return `__svn_snippet_return()`,
-        // upstream `__sveltets_2_any(0)`; both are `any`.
-        .replace(/H\.snippetreturn\(\)/g, 'H.any(0)')
-        .replace(/=>\{returnH\.any\(0\);?\}/g, '=>H.any(0)')
-        .replace(/;\}/g, '}')
-        // svelte2tsx ends a component's block with the bare tag name
-        // (`… } Component}`), a reference for editor navigation with no
-        // effect on types.
-        .replace(/\}[A-Za-z_$][\w$.]*\}/g, '}}');
+    return (
+        s
+            .replace(/,([}\])])/g, '$1')
+            // A quoted key that is a plain identifier is the same key bare.
+            .replace(/([{,])"([A-Za-z_$][\w$]*)":/g, '$1$2:')
+            // Snippet and slot bodies: ours return `__svn_snippet_return()`,
+            // upstream `__sveltets_2_any(0)`; both are `any`.
+            .replace(/H\.snippetreturn\(\)/g, 'H.any(0)')
+            .replace(/=>\{returnH\.any\(0\);?\}/g, '=>H.any(0)')
+            .replace(/;\}/g, '}')
+            // svelte2tsx ends a component's block with the bare tag name
+            // (`… } Component}`), a reference for editor navigation with no
+            // effect on types.
+            .replace(/\}[A-Za-z_$][\w$.]*\}/g, '}}')
+    );
+}
+
+/** `((x))` → `x`: parentheses around a whole expression. */
+function stripOuterParens(s) {
+    while (s.startsWith('(') && matchClose(s, 0) === s.length - 1) s = s.slice(1, -1);
+    return s;
 }
 
 /**
@@ -313,6 +336,33 @@ function extract(text) {
             text: unwrapValues(normalize(text.slice(open, close + 1))),
         });
     }
+    // Template control flow and snippets. Each records the text that
+    // TypeScript checks: the `for (… of …)` header of `{#each}`, the
+    // condition of `{#if}` / `{:else if}`, the awaited expression of
+    // `{#await}`, a snippet's name and parameters, the argument of
+    // `{@render}`.
+    const parenContent = (re, kind, label = () => '') => {
+        let mm;
+        while ((mm = re.exec(text))) {
+            const open = mm.index + mm[0].lastIndexOf('(');
+            const close = matchClose(text, open);
+            found.push({
+                kind,
+                at: mm.index,
+                label: label(mm),
+                text: stripOuterParens(normalize(text.slice(open + 1, close))),
+            });
+        }
+    };
+    parenContent(/\bfor\s*\(\s*(?:let|const|var)\s/g, 'each');
+    parenContent(/\bif\s*\(/g, 'if');
+    parenContent(/\bawait\s*\(/g, 'await');
+    parenContent(/(?:__sveltets_2_ensureSnippet|__svn_ensure_snippet)\(/g, 'render');
+    parenContent(
+        /\bconst\s+([\w$]+)\s*(?:\/\*Ωignore_positionΩ\*\/)?\s*=\s*\/\*\*\s*@returns\s*\{ReturnType<import\('svelte'\)\.Snippet>\}\s*\*\/\s*\(/g,
+        'snippet',
+        (mm) => mm[1]
+    );
     const iso = /interface \$\$IsomorphicComponent\s*\{/g;
     while ((m = iso.exec(text))) {
         const open = m.index + m[0].length - 1;
@@ -341,9 +391,16 @@ function compareSample(corpus, name) {
     const a = extract(fs.readFileSync(ours, 'utf8'));
     const b = extract(fs.readFileSync(theirs, 'utf8'));
     const out = [];
-    for (const kind of ['element', 'component', 'iso']) {
-        const xs = a.filter((c) => c.kind === kind);
-        const ys = b.filter((c) => c.kind === kind);
+    for (const kind of ['element', 'component', 'iso', 'each', 'if', 'await', 'snippet', 'render']) {
+        let xs = a.filter((c) => c.kind === kind);
+        let ys = b.filter((c) => c.kind === kind);
+        // Snippets are declarations; we hoist some to a different place
+        // than svelte2tsx, so their order says nothing.
+        if (kind === 'snippet') {
+            const key = (c) => `${c.label}(${c.text})`;
+            xs = [...xs].sort((p, q) => key(p).localeCompare(key(q)));
+            ys = [...ys].sort((p, q) => key(p).localeCompare(key(q)));
+        }
         // Upstream writes the interface inline only for generic
         // components; the others go through the shim's factory.
         if (kind === 'iso' && ys.length === 0) continue;
@@ -352,7 +409,11 @@ function compareSample(corpus, name) {
             const x = xs[i];
             const y = ys[i];
             // A component is the constructor it goes through plus its props.
-            const same = x && y && x.text === y.text && (kind !== 'component' || x.label === y.label);
+            const same =
+                x &&
+                y &&
+                x.text === y.text &&
+                (!['component', 'snippet'].includes(kind) || x.label === y.label);
             if (same) continue;
             out.push({
                 sample: `${corpus}/${name}`,

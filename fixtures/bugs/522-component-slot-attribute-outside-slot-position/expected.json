@@ -1,0 +1,19 @@
+{
+    "errors": [
+        { "file": "Dynamic.svelte", "line": 5, "column": 57, "code": 2353 },
+        { "file": "Legacy4.svelte", "line": 4, "column": 21, "code": 2353 },
+        { "file": "Legacy4.svelte", "line": 5, "column": 46, "code": 2353 },
+        { "file": "Page.svelte", "line": 8, "column": 9, "code": 2353 },
+        { "file": "Page.svelte", "line": 11, "column": 6, "code": 2353 },
+        { "file": "Page.svelte", "line": 11, "column": 20, "code": 2353 },
+        { "file": "Page.svelte", "line": 12, "column": 7, "code": 2353 },
+        { "file": "Page.svelte", "line": 13, "column": 6, "code": 2353 },
+        { "file": "Page.svelte", "line": 13, "column": 32, "code": 2353 },
+        { "file": "Page.svelte", "line": 14, "column": 38, "code": 2353 },
+        { "file": "Page.svelte", "line": 15, "column": 6, "code": 2353 },
+        { "file": "Page.svelte", "line": 15, "column": 18, "code": 18046 },
+        { "file": "Quoted.svelte", "line": 6, "column": 15, "code": "slot_attribute_invalid" },
+        { "file": "Quoted.svelte", "line": 6, "column": 15, "code": 2353 }
+    ],
+    "_note": "`slot=\"x\"` on a component names a slot of its parent only when the parent is a component: svelte2tsx drops the attribute for a text value when the nearest enclosing element, component or snippet is a component, looking through {#if}/{#each}/{#await}/{#key}, and otherwise passes it as an ordinary prop. A component inside a {#snippet}, a <div>, a <svelte:boundary> or a <svelte:fragment>, or at the top level, therefore gets a `slot` prop it may not declare, and a `slot=\"{x}\"` value is always a prop. Such a component's `let:` reads its own default slot (`item` is the inner Legacy's number), and its implicit `children` error lands where svelte-check puts it with `slot` among the props. Dropping `slot` everywhere missed all of these and lost the `let:` names."
+}

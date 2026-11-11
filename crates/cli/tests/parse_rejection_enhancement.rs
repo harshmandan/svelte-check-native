@@ -267,3 +267,110 @@ fn rejected_component_outside_the_tsconfig_counts_when_imported() {
     // A second run replays tsgo's saved result, program included.
     assert_eq!(check(dir.path(), &[]), (diagnostics, completed));
 }
+
+/// The default engine gives a rejected component's importers its script
+/// alone (the instance script, else the module script). Without
+/// `import` / `export` that is no module, which TypeScript reports at the
+/// specifier; with them it is a module without the component's default
+/// export or its other names.
+#[test]
+fn importers_of_a_rejected_component_see_its_script() {
+    let dir = workspace(&[
+        (
+            "src/App.svelte",
+            "<script lang=\"ts\">\n  import NoModule from './NoModule.svelte';\n  import WithImport, { named, missing } from './WithImport.svelte';\n  import NoScript from './NoScript.svelte';\n  import * as ns from './NoModule.svelte';\n  import { default as X } from './WithImport.svelte';\n  const lazy = import('./NoModule.svelte');\n  void [NoModule, WithImport, named, missing, NoScript, ns, X, lazy];\n</script>\n",
+        ),
+        (
+            "src/more.ts",
+            "export { default as A } from './NoModule.svelte';\nexport { missing as C, named as D } from './WithImport.svelte';\nexport * from './WithImport.svelte';\n",
+        ),
+        (
+            "src/ambient.d.ts",
+            "declare module '*.svelte' {\n  const component: any;\n  export default component;\n}\n",
+        ),
+        ("src/NoModule.svelte", UNCLOSED),
+        (
+            "src/WithImport.svelte",
+            "<script>\n  import { tick } from './tick';\n  export const named = tick;\n</script>\n<div>\n",
+        ),
+        ("src/tick.ts", "export const tick = 1;\n"),
+        ("src/NoScript.svelte", "<div>\n"),
+    ]);
+    let (diagnostics, _) = check(dir.path(), &[]);
+    let root = dir.path().canonicalize().unwrap();
+    let file = |name: &str| root.join("src").join(name).display().to_string();
+    let mut found: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| matches!(d["code"].as_i64(), Some(2306 | 1192 | 2305)))
+        .map(|d| {
+            (
+                d["filename"].as_str().unwrap().to_string(),
+                d["start"]["line"].as_i64().unwrap(),
+                d["start"]["character"].as_i64().unwrap(),
+                d["code"].as_i64().unwrap(),
+                d["message"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    found.sort();
+    let not_module = format!("File '{}' is not a module.", file("NoModule.svelte"));
+    let no_default = format!(
+        "Module '\"{}\"' has no default export.",
+        file("WithImport.svelte")
+    );
+    let mut want = vec![
+        (
+            "src/App.svelte".to_string(),
+            1,
+            23,
+            2306,
+            not_module.clone(),
+        ),
+        ("src/App.svelte".to_string(), 2, 9, 1192, no_default),
+        (
+            "src/App.svelte".to_string(),
+            2,
+            30,
+            2305,
+            "Module '\"./WithImport.svelte\"' has no exported member 'missing'.".to_string(),
+        ),
+        (
+            "src/App.svelte".to_string(),
+            3,
+            23,
+            2306,
+            format!("File '{}' is not a module.", file("NoScript.svelte")),
+        ),
+        (
+            "src/App.svelte".to_string(),
+            4,
+            22,
+            2306,
+            not_module.clone(),
+        ),
+        (
+            "src/App.svelte".to_string(),
+            5,
+            11,
+            2305,
+            "Module '\"./WithImport.svelte\"' has no exported member 'default'.".to_string(),
+        ),
+        (
+            "src/App.svelte".to_string(),
+            6,
+            22,
+            2306,
+            not_module.clone(),
+        ),
+        ("src/more.ts".to_string(), 0, 29, 2306, not_module),
+        (
+            "src/more.ts".to_string(),
+            1,
+            9,
+            2305,
+            "Module '\"./WithImport.svelte\"' has no exported member 'missing'.".to_string(),
+        ),
+    ];
+    want.sort();
+    assert_eq!(found, want);
+}

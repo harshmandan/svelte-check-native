@@ -264,4 +264,6 @@ fn rejected_component_outside_the_tsconfig_counts_when_imported() {
         completed.starts_with("COMPLETED 2 FILES 2 ERRORS"),
         "{completed}"
     );
+    // A second run replays tsgo's saved result, program included.
+    assert_eq!(check(dir.path(), &[]), (diagnostics, completed));
 }

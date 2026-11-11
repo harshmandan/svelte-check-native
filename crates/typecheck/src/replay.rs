@@ -238,13 +238,21 @@ impl ReplayContext {
 
     /// Load the persisted cache and return its diagnostics iff the
     /// stored fingerprint matches the freshly computed one.
-    pub(crate) fn try_load(&self) -> Option<Vec<RawDiagnostic>> {
+    /// The saved run's diagnostics and program files, when nothing it
+    /// read has changed since.
+    pub(crate) fn try_load(&self) -> Option<(Vec<RawDiagnostic>, Vec<PathBuf>)> {
         let text = std::fs::read_to_string(&self.cache_path).ok()?;
         let cache: ReplayCache = serde_json::from_str(&text).ok()?;
-        cache
+        if !cache.fingerprint.matches(&self.fingerprint) {
+            return None;
+        }
+        let program = cache
             .fingerprint
-            .matches(&self.fingerprint)
-            .then_some(cache.diagnostics)
+            .program
+            .iter()
+            .map(|stat| PathBuf::from(&stat.path))
+            .collect();
+        Some((cache.diagnostics, program))
     }
 
     /// Persist this run's diagnostics under the computed fingerprint,

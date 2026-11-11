@@ -64,7 +64,7 @@
 //! the specifier — which the pipeline drops, our TS2307 standing in its
 //! place — and treats the import exactly as unresolved.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use oxc_allocator::Allocator;
@@ -176,45 +176,7 @@ impl SvelteImportResolver {
         let compiler_options = svn_core::tsconfig::load(tsconfig)
             .map(|config| config.compiler_options)
             .unwrap_or_default();
-        let options = ResolveOptions {
-            tsconfig: Some(TsconfigDiscovery::Manual(TsconfigOptions {
-                config_file: tsconfig.to_path_buf(),
-                // Never follow project references: Auto scopes paths
-                // by the referenced project's directory, so a
-                // composite reference sitting beside the entry config
-                // (a common scaffold shape) covers the whole
-                // workspace with its own — usually empty — paths and
-                // shadows the entry config's aliases, inventing
-                // TS2307s. TypeScript resolves a project's own
-                // imports with that project's paths regardless of
-                // references, and every check runs with its own
-                // project's tsconfig here.
-                references: TsconfigReferences::Disabled,
-            })),
-            // `.svelte` resolves the component file; the TS extensions let
-            // `./Foo.svelte` also resolve a `Foo.svelte.ts` runes-module
-            // sibling (`Foo.svelte` + `.ts`), matching TS's own append.
-            extensions: [
-                ".svelte",
-                ".ts",
-                ".tsx",
-                ".d.ts",
-                ".js",
-                ".jsx",
-                ".svelte.ts",
-                ".svelte.js",
-            ]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect(),
-            // `svelte` first: component libraries expose their `.svelte`
-            // entry points under the `svelte` export condition.
-            condition_names: ["svelte", "types", "import", "default"]
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect(),
-            ..ResolveOptions::default()
-        };
+        let options = resolve_options(tsconfig);
         Self {
             inner: Some(Resolver::new(options)),
             check_js: compiler_options.check_js,
@@ -234,6 +196,50 @@ impl SvelteImportResolver {
                         .is_some_and(|sidecar| resolver.resolve(dir, &sidecar).is_ok())
             }
         }
+    }
+}
+
+/// How every check here resolves an import: the tsconfig's `paths` and
+/// `baseUrl`, `node_modules` and `exports`.
+fn resolve_options(tsconfig: &Path) -> ResolveOptions {
+    ResolveOptions {
+        tsconfig: Some(TsconfigDiscovery::Manual(TsconfigOptions {
+            config_file: tsconfig.to_path_buf(),
+            // Never follow project references: Auto scopes paths
+            // by the referenced project's directory, so a
+            // composite reference sitting beside the entry config
+            // (a common scaffold shape) covers the whole
+            // workspace with its own — usually empty — paths and
+            // shadows the entry config's aliases, inventing
+            // TS2307s. TypeScript resolves a project's own
+            // imports with that project's paths regardless of
+            // references, and every check runs with its own
+            // project's tsconfig here.
+            references: TsconfigReferences::Disabled,
+        })),
+        // `.svelte` resolves the component file; the TS extensions let
+        // `./Foo.svelte` also resolve a `Foo.svelte.ts` runes-module
+        // sibling (`Foo.svelte` + `.ts`), matching TS's own append.
+        extensions: [
+            ".svelte",
+            ".ts",
+            ".tsx",
+            ".d.ts",
+            ".js",
+            ".jsx",
+            ".svelte.ts",
+            ".svelte.js",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect(),
+        // `svelte` first: component libraries expose their `.svelte`
+        // entry points under the `svelte` export condition.
+        condition_names: ["svelte", "types", "import", "default"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+        ..ResolveOptions::default()
     }
 }
 
@@ -308,6 +314,67 @@ pub fn missing_svelte_import_diagnostics_in_script(
     }
     let refs = svelte_refs::collect_module(&parsed.program, source_type.is_javascript());
     missing_imports(file, source, refs, resolver)
+}
+
+/// The components among `components` that a file in `program_files`
+/// imports, in `components`' order.
+///
+/// The default engine diagnoses the files of the TypeScript program, and
+/// that program follows an import to a component outside the tsconfig's
+/// `include` as well. Imports resolve as everywhere in this crate, but
+/// without the guard against a user-authored `*.svelte` wildcard, which
+/// only keeps `TS2307`s from firing.
+pub fn components_imported_by(
+    tsconfig: &Path,
+    program_files: &[PathBuf],
+    components: &[PathBuf],
+) -> Vec<PathBuf> {
+    if components.is_empty() {
+        return Vec::new();
+    }
+    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let wanted: HashSet<PathBuf> = components.iter().map(|c| canonical(c)).collect();
+    let resolver = Resolver::new(resolve_options(tsconfig));
+    let mut imported: HashSet<PathBuf> = HashSet::new();
+    for file in program_files {
+        if file.components().any(|c| c.as_os_str() == "node_modules") {
+            continue;
+        }
+        let Ok(source) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        if !source.contains(".svelte") {
+            continue;
+        }
+        let refs = if file.extension().is_some_and(|e| e == "svelte") {
+            let (doc, _) = svn_parser::parse_sections(&source);
+            let (fragment, _) =
+                svn_parser::parse_all_template_runs(&source, &doc.template.text_runs);
+            let is_ts = svn_parser::is_ts_svelte(&source);
+            svelte_refs::collect_component(&doc, &fragment, &source, is_ts)
+        } else {
+            let Ok(source_type) = SourceType::from_path(file) else {
+                continue;
+            };
+            let allocator = Allocator::default();
+            let parsed = Parser::new(&allocator, &source, source_type).parse();
+            svelte_refs::collect_module(&parsed.program, source_type.is_javascript())
+        };
+        let dir = file.parent().unwrap_or_else(|| Path::new("."));
+        for r in refs {
+            if let Ok(resolution) = resolver.resolve(dir, &r.specifier) {
+                let target = canonical(resolution.path());
+                if wanted.contains(&target) {
+                    imported.insert(target);
+                }
+            }
+        }
+    }
+    components
+        .iter()
+        .filter(|c| imported.contains(&canonical(c)))
+        .cloned()
+        .collect()
 }
 
 /// Turn the collected specifiers of one file into `TS2307`s, and stub

@@ -795,13 +795,13 @@ impl CheckSession {
             extended_diagnostics,
         );
         let run = match replay_ctx.as_ref().and_then(|ctx| ctx.try_load()) {
-            Some(diagnostics) => runner::RunOutput {
+            Some((diagnostics, program_files)) => runner::RunOutput {
                 diagnostics,
                 extended_diagnostics: None,
                 // A replay stands in for a previously-completed run;
                 // treat it as having nothing unexplained to account for.
                 nonzero_exit: false,
-                program_files: Vec::new(),
+                program_files,
             },
             None => {
                 let run = run_tsgo(
@@ -1037,9 +1037,31 @@ impl CheckSession {
             ))));
         }
 
+        // The user's files in the program: an overlay or its ambient
+        // stands for its `.svelte` source; the cache's other files (shims,
+        // stubs, Kit mirrors) are ours.
+        let mut program_files: Vec<PathBuf> = Vec::new();
+        let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+        for file in &run.program_files {
+            let file = if path_utils::is_within(file, &layout.svelte_dir) {
+                match layout.original_from_generated(file) {
+                    Some(source) if source.extension().is_some_and(|e| e == "svelte") => source,
+                    _ => continue,
+                }
+            } else if path_utils::is_within(file, &layout.root) {
+                continue;
+            } else {
+                file.clone()
+            };
+            if seen.insert(file.clone()) {
+                program_files.push(file);
+            }
+        }
+
         Ok(CheckOutput {
             diagnostics,
             extended_diagnostics: run.extended_diagnostics,
+            program_files,
         })
     }
 }

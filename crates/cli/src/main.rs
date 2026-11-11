@@ -2318,20 +2318,21 @@ fn check_project(
     // calls; `finish` surfaces the first per-input error (in input
     // order) before running the corpus-level steps + tsgo.
     let mark = std::time::Instant::now();
-    let (mut diagnostics, tsgo_diag_block) = if let Some((session, prepared)) = checker.take() {
-        let outcome = prepared
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()
-            .and_then(|prepared| {
-                session.finish(prepared, tsconfig, tsgo_diagnostics, include_suggestions)
-            });
-        match outcome {
-            Ok(out) => (out.diagnostics, out.extended_diagnostics),
-            Err(err) => return Err(run_failed(&err)),
-        }
-    } else {
-        (Vec::new(), None)
-    };
+    let (mut diagnostics, tsgo_diag_block, program_files) =
+        if let Some((session, prepared)) = checker.take() {
+            let outcome = prepared
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+                .and_then(|prepared| {
+                    session.finish(prepared, tsconfig, tsgo_diagnostics, include_suggestions)
+                });
+            match outcome {
+                Ok(out) => (out.diagnostics, out.extended_diagnostics, out.program_files),
+                Err(err) => return Err(run_failed(&err)),
+            }
+        } else {
+            (Vec::new(), None, Vec::new())
+        };
     let t_typecheck = mark.elapsed();
 
     // TSGO-ENHANCEMENT: merge native TS2307s for missing `.svelte` imports
@@ -2424,14 +2425,29 @@ fn check_project(
         // dropped above, as `--tsgo` drops it: no diagnostic, not
         // counted. The default engine counts it and reports the
         // compiler's error and svelte2tsx's; do the same for every one
-        // svelte2tsx really rejects.
+        // svelte2tsx really rejects. Its program holds the tsconfig's
+        // components and those a file of the program imports, so one
+        // outside the tsconfig counts when tsgo's program imports it.
         let mut rejections_reported: std::collections::HashSet<PathBuf> =
             std::collections::HashSet::new();
         if !disable_enhance && !dropped_files.is_empty() {
-            let rejected: Vec<(PathBuf, String)> = svelte_sources[..svelte_sources_in_scope_end]
+            let rejected_outside: Vec<PathBuf> = svelte_sources[svelte_sources_in_scope_end..]
                 .iter()
                 .filter(|(p, _)| dropped_files.contains(p))
-                .map(|(p, s)| (p.clone(), String::from(&**s)))
+                .map(|(p, _)| p.clone())
+                .collect();
+            let imported: std::collections::HashSet<PathBuf> =
+                svn_enhance::components_imported_by(tsconfig, &program_files, &rejected_outside)
+                    .into_iter()
+                    .collect();
+            let rejected: Vec<(PathBuf, String)> = svelte_sources
+                .iter()
+                .enumerate()
+                .filter(|(i, (p, _))| {
+                    dropped_files.contains(p)
+                        && (*i < svelte_sources_in_scope_end || imported.contains(p))
+                })
+                .map(|(_, (p, s))| (p.clone(), String::from(&**s)))
                 .collect();
             let rejections = svn_enhance::parse_rejections(workspace, &rejected, |p| {
                 config_resolver_ref.for_path(p).preprocess_configured

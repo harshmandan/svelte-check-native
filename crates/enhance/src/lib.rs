@@ -65,7 +65,8 @@ mod svelte_refs;
 
 pub use missing_svelte_imports::{
     EnhancementDiagnostic, MISSING_MODULE_STUB, MissingImports, StubTarget, SvelteImportResolver,
-    missing_svelte_import_diagnostics, missing_svelte_import_diagnostics_in_script, module_stubs,
+    components_imported_by, missing_svelte_import_diagnostics,
+    missing_svelte_import_diagnostics_in_script, module_stubs,
 };
 pub use package_imports::package_import_aliases;
 pub use parse_rejection::{ParseRejection, RejectionDiagnostic, RejectionKind, parse_rejections};

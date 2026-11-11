@@ -325,6 +325,10 @@ pub struct CheckOutput {
     /// recognizable block. The CLI prints this verbatim after the
     /// normal output so users see tsgo's native perf/memory stats.
     pub extended_diagnostics: Option<String>,
+    /// The user's files in tsgo's program, in its order: each overlay as
+    /// its `.svelte` source, the other files as tsgo listed them (lib and
+    /// `node_modules` declarations included).
+    pub program_files: Vec<PathBuf>,
 }
 
 /// Marker (start) for emit-synthesised regions whose diagnostics

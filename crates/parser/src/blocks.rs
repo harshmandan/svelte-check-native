@@ -361,6 +361,52 @@ fn is_valid_identifier(text: &str) -> bool {
 }
 
 fn parse_each_as_clause(clause: &str, base_offset: u32) -> EachAsClause {
+    // A pattern with a type annotation: the compiler reads the annotation
+    // with acorn-typescript, so it ends where that read stops, with the
+    // type's own commas and parentheses. `, index` and `(key)` follow it.
+    if let Some(context_end) = annotated_context_end(clause) {
+        let rest =
+            parse_unannotated_as_clause(&clause[context_end as usize..], base_offset + context_end);
+        if rest.context_range.is_none() {
+            let start = skip_ws_start(clause, 0, context_end);
+            return EachAsClause {
+                context_range: Some(Range::new(base_offset + start, base_offset + context_end)),
+                index_range: rest.index_range,
+                key_range: rest.key_range,
+            };
+        }
+    }
+    parse_unannotated_as_clause(clause, base_offset)
+}
+
+/// Where a pattern and its type annotation end in `clause`, when the
+/// pattern has one: the identifier or bracketed pattern, then `:` and
+/// the type as the compiler reads it.
+fn annotated_context_end(clause: &str) -> Option<u32> {
+    let len = clause.len() as u32;
+    let start = skip_ws_start(clause, 0, len);
+    let pattern = &clause[start as usize..];
+    let pattern_len = match pattern.as_bytes().first()? {
+        b'{' | b'[' => crate::acorn::match_bracket(pattern, 0).ok()?,
+        _ => unicode_identifier_len(pattern),
+    };
+    if pattern_len == 0 {
+        return None;
+    }
+    let colon = skip_ws_start(clause, start + pattern_len, len);
+    if clause.as_bytes().get(colon as usize) != Some(&b':') {
+        return None;
+    }
+    let after = colon + 1;
+    match crate::acorn::read_type_annotation(&clause[after as usize..]).read {
+        crate::acorn::Read::Expression { end, .. } => {
+            Some(after + end.checked_sub(crate::acorn::ANNOTATION_PREFIX_LEN)?)
+        }
+        crate::acorn::Read::Error { .. } => None,
+    }
+}
+
+fn parse_unannotated_as_clause(clause: &str, base_offset: u32) -> EachAsClause {
     // `clause` may look like:
     //   "item"
     //   "item, i"
@@ -1476,8 +1522,8 @@ mod tests {
                 None,
             ),
             (
-                "rows as { a }: { a: string, b?: number }, i (a)}",
-                "{ a }: { a: string, b?: number }",
+                "rows as { a }: { a: string, b: number }, i (a)}",
+                "{ a }: { a: string, b: number }",
                 Some("i"),
                 Some("a"),
             ),

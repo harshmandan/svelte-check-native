@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A generic component's call signature takes its props plus the `$$events` / `$$slots` carriers, or only the carriers when the component declares no props at all. svelte2tsx makes that choice when it writes the component, from whether `$props()` carries a type, not with a conditional type. A type-level `Props extends Record<string, never> ? carriers : Props & carriers` sends a props type that resolves to `never` for some type argument into the no-props branch (`never` is assignable to everything), so a validation pattern that relies on `never` props sees the carriers object instead and indexing it fails."
+}

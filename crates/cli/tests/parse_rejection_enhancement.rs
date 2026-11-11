@@ -257,11 +257,13 @@ fn rejected_component_outside_the_tsconfig_counts_when_imported() {
                 serde_json::json!("lib/Imported.svelte"),
                 serde_json::json!(-1)
             ),
+            // Its script has no `import` / `export`: not a module.
+            (serde_json::json!("src/App.svelte"), serde_json::json!(2306)),
         ]
     );
     // App and Imported; Lonely stays out.
     assert!(
-        completed.starts_with("COMPLETED 2 FILES 2 ERRORS"),
+        completed.starts_with("COMPLETED 2 FILES 3 ERRORS"),
         "{completed}"
     );
     // A second run replays tsgo's saved result, program included.

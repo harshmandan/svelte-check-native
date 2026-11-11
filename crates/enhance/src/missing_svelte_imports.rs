@@ -201,7 +201,7 @@ impl SvelteImportResolver {
 
 /// How every check here resolves an import: the tsconfig's `paths` and
 /// `baseUrl`, `node_modules` and `exports`.
-fn resolve_options(tsconfig: &Path) -> ResolveOptions {
+pub(crate) fn resolve_options(tsconfig: &Path) -> ResolveOptions {
     ResolveOptions {
         tsconfig: Some(TsconfigDiscovery::Manual(TsconfigOptions {
             config_file: tsconfig.to_path_buf(),
@@ -273,7 +273,11 @@ pub fn missing_svelte_import_diagnostics(
 /// [`svn_parser::ts_check_directive`]), so the last of them decides;
 /// otherwise a TS component is checked and a JavaScript one only under
 /// `checkJs: true`.
-fn component_is_type_checked(doc: &Document<'_>, is_ts: bool, check_js: Option<bool>) -> bool {
+pub(crate) fn component_is_type_checked(
+    doc: &Document<'_>,
+    is_ts: bool,
+    check_js: Option<bool>,
+) -> bool {
     let script = doc.instance_script.as_ref().or(doc.module_script.as_ref());
     match script.and_then(|s| svn_parser::ts_check_directive(s.content)) {
         Some(directive) => directive == "@ts-check",
@@ -442,7 +446,7 @@ fn is_relative_specifier(specifier: &str) -> bool {
 /// compiler reads them from the file's leading comments, so a
 /// `/* @ts-check */` block or a `// @ts-check` below the first statement
 /// is ignored.
-fn script_is_type_checked(
+pub(crate) fn script_is_type_checked(
     program: &Program<'_>,
     source_type: SourceType,
     check_js: Option<bool>,

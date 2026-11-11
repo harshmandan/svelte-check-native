@@ -12,23 +12,38 @@
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    ExportAllDeclaration, ExportFromDeclaration, Expression, ImportDeclaration, ImportExpression,
-    Program, StringLiteral, TSExternalModuleReference, TSImportType,
+    ExportAllDeclaration, ExportFromDeclaration, Expression, ImportDeclaration,
+    ImportDeclarationSpecifier, ImportExpression, Program, StringLiteral,
+    TSExternalModuleReference, TSImportType,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_jsdoc::JSDoc;
 use oxc_parser::Parser;
-use oxc_span::{SourceType, Span};
+use oxc_span::{GetSpan, SourceType, Span};
 use svn_analyze::template_scope::{TemplateScopeVisitor, walk_with_visitor};
 use svn_core::Range;
 use svn_parser::{AttrValue, AttrValuePart, Attribute, DirectiveValue, Document, Fragment};
 
 /// A `.svelte` module specifier, with the byte span of its string
-/// literal — quotes included — in the original file.
+/// literal — quotes included — in the original file, and the names an
+/// `import` / `export … from` takes from the module.
 pub(crate) struct SvelteImportRef {
     pub(crate) specifier: String,
     pub(crate) start: u32,
     pub(crate) end: u32,
+    pub(crate) names: Vec<ImportedName>,
+}
+
+/// A name an import takes from a module, at the span of the identifier
+/// TypeScript reports a missing one at.
+pub(crate) struct ImportedName {
+    /// The module's export: `default` for a default import.
+    pub(crate) name: String,
+    pub(crate) start: u32,
+    pub(crate) end: u32,
+    /// A default import (`import X from`), as opposed to a name in
+    /// braces.
+    pub(crate) default_import: bool,
 }
 
 /// Where a parsed piece of source sits in the original file: a span `s`
@@ -220,6 +235,10 @@ struct ImportCollector<'o> {
 
 impl ImportCollector<'_> {
     fn record(&mut self, lit: &StringLiteral<'_>) {
+        self.record_names(lit, Vec::new());
+    }
+
+    fn record_names(&mut self, lit: &StringLiteral<'_>, names: Vec<ImportedName>) {
         let Some(spec) = lit.value.as_str() else {
             return;
         };
@@ -231,13 +250,38 @@ impl ImportCollector<'_> {
             specifier: spec.to_string(),
             start,
             end,
+            names,
         });
+    }
+
+    fn name(&self, name: &str, span: Span, default_import: bool) -> ImportedName {
+        let (start, end) = self.origin.place(span);
+        ImportedName {
+            name: name.to_string(),
+            start,
+            end,
+            default_import,
+        }
     }
 }
 
 impl<'a> Visit<'a> for ImportCollector<'_> {
     fn visit_import_declaration(&mut self, it: &ImportDeclaration<'a>) {
-        self.record(&it.source);
+        let names = it
+            .specifiers
+            .iter()
+            .flatten()
+            .filter_map(|specifier| match specifier {
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(d) => {
+                    Some(self.name("default", d.local.span, true))
+                }
+                ImportDeclarationSpecifier::ImportSpecifier(n) => {
+                    Some(self.name(n.imported.name().as_str(), n.imported.span(), false))
+                }
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => None,
+            })
+            .collect();
+        self.record_names(&it.source, names);
     }
 
     /// `export { Foo } from './Foo.svelte'`. This is its own node kind;
@@ -246,7 +290,18 @@ impl<'a> Visit<'a> for ImportCollector<'_> {
     /// (`ExportDeclaration`, e.g. `export const x =
     /// import('./y.svelte')`) is reached by the default walk.
     fn visit_export_from_declaration(&mut self, it: &ExportFromDeclaration<'a>) {
-        self.record(&it.source);
+        let names = it
+            .specifiers
+            .iter()
+            .map(|specifier| {
+                self.name(
+                    specifier.local.name().as_str(),
+                    specifier.local.span(),
+                    false,
+                )
+            })
+            .collect();
+        self.record_names(&it.source, names);
     }
 
     fn visit_export_all_declaration(&mut self, it: &ExportAllDeclaration<'a>) {

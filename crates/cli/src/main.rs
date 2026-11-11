@@ -1219,24 +1219,34 @@ fn missing_svelte_import_diagnostics(
     let diagnostics = found
         .diagnostics
         .into_iter()
-        .map(|d| svn_typecheck::CheckDiagnostic {
-            // Same `ts`/`js` rule as the tsgo-mapped diagnostics: on a
-            // `.svelte` file the script's language decides, on a module
-            // its extension.
-            source: svn_typecheck::diagnostic_source(&d.file, script_is_ts),
-            source_path: d.file,
-            line: d.line,
-            column: d.column,
-            end_line: d.end_line,
-            end_column: d.end_column,
-            severity: svn_typecheck::Severity::Error,
-            code: svn_typecheck::DiagnosticCode::Numeric(d.code),
-            message: d.message,
-            code_description_url: None,
-            position_unknown: false,
-        })
+        .map(|d| enhancement_type_error(d, script_is_ts))
         .collect();
     (diagnostics, found.stub_targets)
+}
+
+// TSGO-ENHANCEMENT: a TypeScript error from the `svn-enhance` crate as
+// the CLI's diagnostic. `script_is_ts` is the language of the file's
+// script when it is a component.
+fn enhancement_type_error(
+    d: svn_enhance::EnhancementDiagnostic,
+    script_is_ts: bool,
+) -> svn_typecheck::CheckDiagnostic {
+    svn_typecheck::CheckDiagnostic {
+        // Same `ts`/`js` rule as the tsgo-mapped diagnostics: on a
+        // `.svelte` file the script's language decides, on a module its
+        // extension.
+        source: svn_typecheck::diagnostic_source(&d.file, script_is_ts),
+        source_path: d.file,
+        line: d.line,
+        column: d.column,
+        end_line: d.end_line,
+        end_column: d.end_column,
+        severity: svn_typecheck::Severity::Error,
+        code: svn_typecheck::DiagnosticCode::Numeric(d.code),
+        message: d.message,
+        code_description_url: None,
+        position_unknown: false,
+    }
 }
 
 // TSGO-ENHANCEMENT: one file's missing-import TS2307s and the modules
@@ -2461,6 +2471,18 @@ fn check_project(
                         .map(|d| rejection_diagnostic(&rejection.file, d)),
                 );
                 rejections_reported.insert(rejection.file);
+            }
+            // Its importers see the component's script, as the default
+            // engine's language server falls back to it.
+            let reported: Vec<(PathBuf, String)> = rejected
+                .into_iter()
+                .filter(|(p, _)| rejections_reported.contains(p))
+                .collect();
+            for d in svn_enhance::rejected_import_diagnostics(tsconfig, &program_files, &reported) {
+                let script_is_ts = d.file.extension().is_some_and(|e| e == "svelte")
+                    && std::fs::read_to_string(&d.file)
+                        .is_ok_and(|source| svn_parser::is_ts_svelte(&source));
+                diagnostics.push(enhancement_type_error(d, script_is_ts));
             }
         }
 

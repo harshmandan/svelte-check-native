@@ -61,6 +61,7 @@
 mod missing_svelte_imports;
 mod package_imports;
 mod parse_rejection;
+mod rejected_imports;
 mod svelte_refs;
 
 pub use missing_svelte_imports::{
@@ -70,3 +71,4 @@ pub use missing_svelte_imports::{
 };
 pub use package_imports::package_import_aliases;
 pub use parse_rejection::{ParseRejection, RejectionDiagnostic, RejectionKind, parse_rejections};
+pub use rejected_imports::rejected_import_diagnostics;

@@ -151,10 +151,10 @@ pub struct BubbledComponentEvent {
     pub event_name: SmolStr,
     /// Source-text of the component identifier (or dotted form like
     /// `UI.Dropdown`). Used in emit's `typeof <root>` reference; if
-    /// it's a synthetic root (`__svn_self_default` for
-    /// `<svelte:self>` / `(<expr>)` for `<svelte:component>`), emit
-    /// falls back to `Record<string, any>` for the event type
-    /// (matches upstream's any-fallback for dynamic components).
+    /// it's a `<svelte:component>` expression (`(<expr>)`), emit falls
+    /// back to `Record<string, any>` for the event type (matches
+    /// upstream's any-fallback for dynamic components). `<svelte:self>`
+    /// never records one: bubbling its own events is a no-op.
     pub component_root: SmolStr,
     /// Source-byte position of the directive (start of the
     /// `on:NAME` token). Used by emit to merge DOM + component
@@ -293,15 +293,25 @@ pub struct ActionDirective {
     pub params_range: Option<Range>,
 }
 
+/// What a component instantiation is constructed from.
+#[derive(Debug, Clone)]
+pub enum ComponentCtor {
+    /// A component value passed through `__svn_ensure_component(root)`
+    /// and constructed with `new`: a component tag (`MyButton`,
+    /// `ui.MyButton`) or the `this={…}` expression of
+    /// `<svelte:component>`. `range` is where `root` was written.
+    Ensured { root: SmolStr, range: Range },
+    /// `<svelte:self>` (and a `<svelte:component>` without `this`):
+    /// svelte2tsx's untyped `__sveltets_2_createComponentAny({ props })`.
+    /// A component cannot name its own type inside its render function.
+    SelfAny,
+}
+
 /// One `<Component ...>` site eligible for excess-property checking.
 #[derive(Debug, Clone)]
 pub struct ComponentInstantiation {
-    /// Root identifier of the component name (e.g. `MyButton` from
-    /// `<MyButton />` or `<ui.MyButton />`).
-    pub component_root: SmolStr,
-    /// Source range `component_root` was written at: the tag name, or
-    /// the `this={…}` expression of `<svelte:component>`.
-    pub root_range: Range,
+    /// What the instance is constructed from.
+    pub ctor: ComponentCtor,
     /// Source range a diagnostic on the synthesized constructor
     /// reference (`new $$_C(…)`) lands on. svelte2tsx writes that
     /// reference right after the moved component name, so its source

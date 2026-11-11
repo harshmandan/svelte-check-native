@@ -293,8 +293,8 @@ function extract(text) {
         }
         found.push({ kind: 'component', at: m.index, label, text: unwrapValues(normalize(props)) });
     }
-    // `<svelte:self>` upstream: an untyped instance, `createComponentAny({…})`.
-    const anyComp = /__sveltets_2_createComponentAny\(\s*\{/g;
+    // `<svelte:self>`: an untyped instance, `createComponentAny({…})`.
+    const anyComp = /(?:__sveltets_2_createComponentAny|__svn_create_component_any)\(\s*\{/g;
     while ((m = anyComp.exec(text))) {
         const open = m.index + m[0].length - 1;
         const close = matchClose(text, open);

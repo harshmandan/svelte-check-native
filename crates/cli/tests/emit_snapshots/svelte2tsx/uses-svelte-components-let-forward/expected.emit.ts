@@ -6,8 +6,7 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         if ((true)) {
             {
-                const __svn_C_b = __svn_ensure_component(__svn_self_default);
-                const __svn_inst_b = new __svn_C_b({ target: __svn_any(), props: {} });
+                const __svn_inst_b = __svn_create_component_any({});
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, prop } = __svn_inst_b.$$slot_def.default; $$_$$;
                     {

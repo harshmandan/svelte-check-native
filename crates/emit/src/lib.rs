@@ -962,12 +962,11 @@ fn emit_document_with_render_name(
             all.push((ev.position, ev.name.as_str(), BubbleSource::Dom(ev.scope)));
         }
         for ev in &summary.bubbled_component_events {
-            // Skip synthetic roots — `typeof __svn_self_default` /
-            // `typeof (<expr>)` aren't well-formed `typeof`
-            // expressions for arbitrary user code.
+            // Skip `<svelte:component>` expression roots — `typeof
+            // (<expr>)` isn't a well-formed `typeof` for arbitrary user
+            // code.
             let root = ev.component_root.as_str();
-            if root == "__svn_self_default"
-                || root.starts_with('(')
+            if root.starts_with('(')
                 || !root
                     .chars()
                     .next()

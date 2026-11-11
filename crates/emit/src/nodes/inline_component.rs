@@ -228,7 +228,6 @@ pub(crate) fn emit_component_call(
 ) {
     let indent = "    ".repeat(depth);
     let inner = "    ".repeat(depth + 1);
-    let comp = &inst.component_root;
     // Per-call-site synthesized locals. Hoisted into a named local
     // when a post-construction emit needs it (`$inst.$on(...)`,
     // `bind:this`, slot-let consumer destructure).
@@ -253,14 +252,10 @@ pub(crate) fn emit_component_call(
     };
 
     let _ = writeln!(buf, "{indent}{{");
-    // R-Conv #20: splice the component name with append_with_source
-    // when it's a simple identifier (regular `<Component>` /
-    // `<svelte:self>` doesn't need it because the root is the synth
-    // `__svn_self_default`; `<svelte:component this={X}>` synth
-    // `(X)` shape carries its own range). TS2304 ("Cannot find
-    // name 'Component'") then reverse-maps to the user's
-    // `<Component>` source span instead of getting dropped as
-    // synth-scaffolding.
+    // The component value goes in with its source range, so TS2304
+    // ("Cannot find name 'Component'") maps back to the user's
+    // `<Component>` tag (or `this={…}` expression) instead of being
+    // dropped as synthesised code.
     //
     // Dotted names (`<Foo.Bar>`) also need source mapping. Without
     // it, tsgo's TS2304 ("Cannot find name 'Foo'") fires at the `Foo`
@@ -272,9 +267,13 @@ pub(crate) fn emit_component_call(
     // ideal (a diagnostic on `.Bar` lands on the whole span) but
     // matches the simple-identifier path's behavior and is enough to
     // surface TS2304 on the root identifier.
-    let _ = write!(buf, "{inner}const {local} = __svn_ensure_component(");
-    buf.append_with_source(comp.as_str(), inst.root_range);
-    buf.push_str(");\n");
+    // `<svelte:self>` has no component value to ensure: svelte2tsx
+    // constructs it untyped (`createComponentAny`), see `write_props_open`.
+    if let svn_analyze::ComponentCtor::Ensured { root, range } = &inst.ctor {
+        let _ = write!(buf, "{inner}const {local} = __svn_ensure_component(");
+        buf.append_with_source(root.as_str(), *range);
+        buf.push_str(");\n");
+    }
 
     // Implicit-children synthesis: when the user has non-snippet body
     // content, the props literal starts with `children: () =>
@@ -291,10 +290,8 @@ pub(crate) fn emit_component_call(
     if snippet_children.is_empty() && inst.props.is_empty() && !emit_implicit_children {
         let _ = write!(buf, "{inner}{ctor_lhs}");
         let call_start = buf.len() as u32;
-        write_new_ctor(buf, inst, &local);
-        buf.push_str("({ target: __svn_any(), ");
-        write_props_key(buf, inst);
-        buf.push_str(" {} })");
+        write_props_open(buf, inst, &local);
+        write_props_close(buf, inst);
         push_component_call_token_map(buf, call_start, inst.node_start);
         buf.push_str(";\n");
         emit_component_bind_widen_trailers(buf, inst, &inner);
@@ -308,10 +305,7 @@ pub(crate) fn emit_component_call(
     if snippet_children.is_empty() {
         let _ = write!(buf, "{inner}{ctor_lhs}");
         let call_start = buf.len() as u32;
-        write_new_ctor(buf, inst, &local);
-        buf.push_str("({ target: __svn_any(), ");
-        write_props_key(buf, inst);
-        buf.push_str(" {");
+        write_props_open(buf, inst, &local);
         let mut first = true;
         if emit_implicit_children {
             write_implicit_children_key(buf, inst);
@@ -325,7 +319,7 @@ pub(crate) fn emit_component_call(
             first = false;
             write_prop_shape(buf, source, inst, p);
         }
-        let _ = write!(buf, "}} }})");
+        write_props_close(buf, inst);
         push_component_call_token_map(buf, call_start, inst.node_start);
         buf.push_str(";\n");
         emit_component_bind_widen_trailers(buf, inst, &inner);
@@ -339,14 +333,24 @@ pub(crate) fn emit_component_call(
     // Multi-line form with snippets-as-arrow-props.
     let _ = write!(buf, "{inner}{ctor_lhs}");
     let call_start = buf.len() as u32;
-    write_new_ctor(buf, inst, &local);
-    let _ = writeln!(buf, "({{");
+    let self_any = matches!(inst.ctor, svn_analyze::ComponentCtor::SelfAny);
     let opts_inner = "    ".repeat(depth + 2);
-    let props_inner = "    ".repeat(depth + 3);
-    let _ = writeln!(buf, "{opts_inner}target: __svn_any(),");
-    buf.push_str(&opts_inner);
-    write_props_key(buf, inst);
-    buf.push_str(" {\n");
+    let props_inner = if self_any {
+        opts_inner.clone()
+    } else {
+        "    ".repeat(depth + 3)
+    };
+    if self_any {
+        write_create_component_any(buf, inst);
+        buf.push_str("({\n");
+    } else {
+        write_new_ctor(buf, inst, &local);
+        let _ = writeln!(buf, "({{");
+        let _ = writeln!(buf, "{opts_inner}target: __svn_any(),");
+        buf.push_str(&opts_inner);
+        write_props_key(buf, inst);
+        buf.push_str(" {\n");
+    }
     if emit_implicit_children {
         buf.push_str(&props_inner);
         write_implicit_children_key(buf, inst);
@@ -362,7 +366,9 @@ pub(crate) fn emit_component_call(
         write_snippet_arrow_prop(buf, source, s, depth + 3, insts, action_counter);
         let _ = writeln!(buf, ",");
     }
-    let _ = writeln!(buf, "{opts_inner}}},");
+    if !self_any {
+        let _ = writeln!(buf, "{opts_inner}}},");
+    }
     let _ = write!(buf, "{inner}}})");
     push_component_call_token_map(buf, call_start, inst.node_start);
     buf.push_str(";\n");
@@ -518,6 +524,39 @@ fn emit_component_bindings_post_check(
 fn write_new_ctor(buf: &mut EmitBuffer, inst: &svn_analyze::ComponentInstantiation, local: &str) {
     buf.push_str("new ");
     buf.append_with_source(local, inst.ctor_anchor);
+}
+
+/// svelte2tsx's `<svelte:self>` constructor, mapped where the `new`
+/// reference of a regular component maps.
+fn write_create_component_any(buf: &mut EmitBuffer, inst: &svn_analyze::ComponentInstantiation) {
+    buf.append_with_source("__svn_create_component_any", inst.ctor_anchor);
+}
+
+/// Open the construction up to the props object's `{`:
+/// `new $$_C({ target: __svn_any(), props: {` for a component value,
+/// `__svn_create_component_any({` for `<svelte:self>` (svelte2tsx's
+/// `__sveltets_2_createComponentAny({…})` takes the props directly).
+fn write_props_open(buf: &mut EmitBuffer, inst: &svn_analyze::ComponentInstantiation, local: &str) {
+    match inst.ctor {
+        svn_analyze::ComponentCtor::Ensured { .. } => {
+            write_new_ctor(buf, inst, local);
+            buf.push_str("({ target: __svn_any(), ");
+            write_props_key(buf, inst);
+            buf.push_str(" {");
+        }
+        svn_analyze::ComponentCtor::SelfAny => {
+            write_create_component_any(buf, inst);
+            buf.push_str("({");
+        }
+    }
+}
+
+/// Close what [`write_props_open`] opened.
+fn write_props_close(buf: &mut EmitBuffer, inst: &svn_analyze::ComponentInstantiation) {
+    match inst.ctor {
+        svn_analyze::ComponentCtor::Ensured { .. } => buf.push_str("} })"),
+        svn_analyze::ComponentCtor::SelfAny => buf.push_str("})"),
+    }
 }
 
 fn push_component_call_token_map(buf: &mut EmitBuffer, call_start: u32, node_start: u32) {

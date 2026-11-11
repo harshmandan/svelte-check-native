@@ -566,19 +566,16 @@ type __SvnCustomEvents<T> = {
 declare function __svn_any<T = any>(): T;
 
 /**
- * `<svelte:self>` synthetic — the file's own component default
- * referenced from inside its own template. We can't easily get
- * "the component's own props" inside its own render fn (circular
- * dep), so type as `any`-component: the `new __svn_C({…})` call
- * goes through `__svn_ensure_component(__svn_self_default)` which
- * returns an `any`-prop ctor. Excess-prop checks degenerate to
- * "any prop accepted" but the rest of the component (events,
- * bindings, children) still type-checks via the normal path.
- *
- * Mirrors upstream svelte2tsx's `__sveltets_2_createComponentAny`
- * for `<svelte:self>` (see InlineComponent.ts:99).
+ * `<svelte:self>`: an untyped instance. A component cannot name its own
+ * type inside its render function, so svelte2tsx constructs it with
+ * `__sveltets_2_createComponentAny({ props })` (InlineComponent.ts):
+ * any props, any events and slots. Upstream's declaration, verbatim;
+ * our emit uses the `__svn_` alias.
  */
-declare const __svn_self_default: import('svelte').Component<any, {}, any>;
+declare function __sveltets_2_createComponentAny(
+    props: Record<string, any>,
+): import('svelte').SvelteComponent<any, any, any>;
+declare const __svn_create_component_any: typeof __sveltets_2_createComponentAny;
 
 /**
  * JS-overlay definite-assign: `let b; b = __svn_any(b);` is the JS

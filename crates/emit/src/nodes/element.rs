@@ -172,11 +172,11 @@ pub(crate) fn emit_svelte_element_node(
     // `<svelte:self>` route through the same component-instantiation
     // emit path as a regular `<Component>` node. Pre-fix they fell
     // through to a bare `{` scope, dropping every prop / event /
-    // binding check. The analyze phase populates
-    // `summary.component_instantiations` with a synthetic root
-    // (the `this` expression text or `__svn_self_default`), and
-    // emit walks them through `emit_component_call` to produce
-    // `__svn_ensure_component(<root>); new $$_C({…})`.
+    // binding check. The analyze phase records them in
+    // `summary.component_instantiations` and emit walks them through
+    // `emit_component_call`: `__svn_ensure_component(<this expr>);
+    // new $$_C({…})` for `<svelte:component>`, svelte2tsx's untyped
+    // `__svn_create_component_any({…})` for `<svelte:self>`.
     if matches!(
         s.kind,
         SvelteElementKind::SelfRef | SvelteElementKind::Component

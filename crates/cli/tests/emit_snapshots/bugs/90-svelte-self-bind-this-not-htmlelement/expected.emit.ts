@@ -20,8 +20,7 @@ function $$render_e40e2c10() {
         });
         }
         {
-            const __svn_C_2b0 = __svn_ensure_component(__svn_self_default);
-            const __svn_inst_2b0 = new __svn_C_2b0({ target: __svn_any(), props: {} });
+            const __svn_inst_2b0 = __svn_create_component_any({});
             me = __svn_inst_2b0;
         }
     });

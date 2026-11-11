@@ -5,8 +5,7 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         if ((true)) {
             {
-                const __svn_C_b = __svn_ensure_component(__svn_self_default);
-                new __svn_C_b({ target: __svn_any(), props: {"prop1": (1)} });
+                __svn_create_component_any({"prop1": (1)});
             }
         }
         {

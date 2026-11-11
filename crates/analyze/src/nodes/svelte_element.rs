@@ -8,7 +8,7 @@ use svn_parser::{SvelteElement, SvelteElementKind};
 use crate::nodes::attribute::{WalkCtx, walk_attributes};
 use crate::nodes::event_handler::collect_bubbled_dom_events;
 use crate::nodes::inline_component::{InstantiationRoot, collect_instantiation_inner};
-use crate::walker::{AnalyzeVisitor, BubbledDomEventScope};
+use crate::walker::{AnalyzeVisitor, BubbledDomEventScope, ComponentCtor};
 
 pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
     let ctx = WalkCtx { source: v.source };
@@ -20,14 +20,9 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
     // `<svelte:component this={X}>` and `<svelte:self>` carry
     // props / events / bindings just like a regular `<Component>`
     // instantiation, so route them through the same machinery with
-    // a synthetic `component_root` that emit recognises:
-    //   - SelfRef        → `__svn_self_default`
-    //                       (resolves to the file's iso-component
-    //                       interface via `__svn_create_component_any`)
-    //   - Component      → `__svn_dyn_component[(<this expr>)]`
-    //                       (unparseable raw — emit pulls out the
-    //                       expression range and feeds it to
-    //                       `__svn_ensure_component(EXPR)`)
+    // the constructor svelte2tsx uses for each:
+    //   - SelfRef        → untyped `createComponentAny({ props })`
+    //   - Component      → `__svn_ensure_component(<this expr>)`
     // Pre-fix these passed un-checked through a bare scope.
     if matches!(
         s.kind,
@@ -78,8 +73,10 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
                 let start = e.expression_range.start + (raw.len() - raw.trim_start().len()) as u32;
                 let end = start + text.len() as u32;
                 Some(InstantiationRoot {
-                    text: SmolStr::from(text),
-                    range: Range::new(start, end),
+                    ctor: ComponentCtor::Ensured {
+                        root: SmolStr::from(text),
+                        range: Range::new(start, end),
+                    },
                     // The constructor reference follows the moved
                     // expression, where upstream's map resolves it to
                     // the character right after it.
@@ -161,13 +158,11 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
 }
 
 /// Root of a `<svelte:self>` (or a `<svelte:component>` without `this`):
-/// the file's own any-typed component, anchored on the tag name.
+/// an untyped instance, anchored on the tag name.
 fn self_root(node_start: u32) -> InstantiationRoot {
-    let text = SmolStr::from("__svn_self_default");
     let start = node_start + 1;
     InstantiationRoot {
-        range: Range::new(start, start + text.len() as u32),
+        ctor: ComponentCtor::SelfAny,
         ctor_anchor: Range::new(start, start + 1),
-        text,
     }
 }

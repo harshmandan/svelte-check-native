@@ -8,8 +8,8 @@ use svn_parser::{AttrValuePart, Attribute, Component, Node};
 use crate::nodes::attribute::{WalkCtx, walk_attributes};
 use crate::nodes::destructure::simple_identifier_in;
 use crate::walker::{
-    AnalyzeVisitor, BindDirective, BubbledComponentEvent, CommentThread, ComponentInstantiation,
-    OnEventDirective, PropShape, TemplateSummary, ThreadedComment,
+    AnalyzeVisitor, BindDirective, BubbledComponentEvent, CommentThread, ComponentCtor,
+    ComponentInstantiation, OnEventDirective, PropShape, TemplateSummary, ThreadedComment,
 };
 
 pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, c: &Component) {
@@ -68,8 +68,10 @@ pub(crate) fn collect_component_instantiation(
     let name_end = name_start + c.name.len() as u32;
     collect_instantiation_inner(
         InstantiationRoot {
-            text: c.name.clone(),
-            range: Range::new(name_start, name_end),
+            ctor: ComponentCtor::Ensured {
+                root: c.name.clone(),
+                range: Range::new(name_start, name_end),
+            },
             ctor_anchor: Range::new(name_end.saturating_sub(1), name_end),
         },
         &c.attributes,
@@ -80,12 +82,11 @@ pub(crate) fn collect_component_instantiation(
     );
 }
 
-/// What an instantiation constructs from: the root text emit passes to
-/// `__svn_ensure_component(...)`, and the source positions its
-/// diagnostics map to (see [`ComponentInstantiation::ctor_anchor`]).
+/// What an instantiation constructs from, and the source position a
+/// diagnostic on the constructor maps to (see
+/// [`ComponentInstantiation::ctor_anchor`]).
 pub(crate) struct InstantiationRoot {
-    pub(crate) text: SmolStr,
-    pub(crate) range: Range,
+    pub(crate) ctor: ComponentCtor,
     pub(crate) ctor_anchor: Range,
 }
 
@@ -93,11 +94,7 @@ pub(crate) struct InstantiationRoot {
 /// the parts directly. Reused by `<svelte:component this={X}>` and
 /// `<svelte:self>` paths which don't have a `Component` AST node but
 /// still want excess-prop / on-event / bind:this checking through
-/// the same machinery. The `component_root` string is what emit
-/// passes to `__svn_ensure_component(...)`; for synthetic kinds
-/// (svelte:self → `__svn_self_default`, svelte:component →
-/// `(EXPR)`), emit recognises the synthetic form and routes
-/// accordingly.
+/// the same machinery.
 pub(crate) fn collect_instantiation_inner(
     root: InstantiationRoot,
     attributes: &[Attribute],
@@ -108,11 +105,7 @@ pub(crate) fn collect_instantiation_inner(
 ) {
     let range_start = node_range.start;
     let range_end = node_range.end;
-    let InstantiationRoot {
-        text: component_root,
-        range: root_range,
-        ctor_anchor,
-    } = root;
+    let InstantiationRoot { ctor, ctor_anchor } = root;
     let mut props: Vec<PropShape> = Vec::with_capacity(attributes.len());
     let mut on_events: Vec<OnEventDirective> = Vec::new();
     let mut bind_this_target: Option<Range> = None;
@@ -133,7 +126,10 @@ pub(crate) fn collect_instantiation_inner(
         _ => true,
     });
     let implicit_children_anchor = if has_implicit_children {
-        let name_move = (component_root.as_str() != "__svn_self_default").then_some(root_range);
+        let name_move = match &ctor {
+            ComponentCtor::Ensured { range, .. } => Some(*range),
+            ComponentCtor::SelfAny => None,
+        };
         children.nodes.first().map(|first| {
             implicit_children_anchor(
                 StartTag {
@@ -175,7 +171,7 @@ pub(crate) fn collect_instantiation_inner(
         collect_attribute(
             attr,
             source,
-            &component_root,
+            &ctor,
             summary,
             AttributeSinks {
                 props: &mut props,
@@ -202,8 +198,7 @@ pub(crate) fn collect_instantiation_inner(
     summary
         .component_instantiations
         .push(ComponentInstantiation {
-            component_root,
-            root_range,
+            ctor,
             ctor_anchor,
             props,
             has_implicit_children,
@@ -568,7 +563,7 @@ fn starts_line(source: &str, pos: u32) -> bool {
 fn collect_attribute(
     attr: &Attribute,
     source: &str,
-    component_root: &SmolStr,
+    ctor: &ComponentCtor,
     summary: &mut TemplateSummary,
     sinks: AttributeSinks<'_>,
 ) {
@@ -733,9 +728,9 @@ fn collect_attribute(
                         // call still fires above so the bubbled name
                         // type-checks against self's events surface;
                         // we just don't register a bubble for it.
-                        if component_root.as_str() == "__svn_self_default" {
+                        let ComponentCtor::Ensured { root, .. } = ctor else {
                             return;
-                        }
+                        };
                         summary.has_bubbled_component_event = true;
                         // Reviewer follow-up #2: also record the
                         // (event_name, component_root) pair so the
@@ -747,7 +742,7 @@ fn collect_attribute(
                             .bubbled_component_events
                             .push(BubbledComponentEvent {
                                 event_name: d.name.clone(),
-                                component_root: component_root.clone(),
+                                component_root: root.clone(),
                                 position: d.range.start,
                             });
                     }

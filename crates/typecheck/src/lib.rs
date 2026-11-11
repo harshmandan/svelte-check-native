@@ -670,8 +670,8 @@ impl CheckSession {
         // from `files` in commit a6a77bce; reverted here while keeping
         // the rest of the overlay-parity refactor). Ours diverges
         // from upstream's structure here for correctness — same
-        // class of intentional-divergence as `kit_types_mirror`,
-        // `__svn_self_default`, and the `.svn` infix.
+        // class of intentional-divergence as `kit_types_mirror`
+        // and the `.svn` infix.
         let is_js_overlay = matches!(input.kind, InputKind::Svelte | InputKind::SvelteAuxiliary)
             && !input.is_ts_overlay;
         let in_scope = !matches!(input.kind, InputKind::SvelteAuxiliary);

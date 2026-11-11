@@ -82,6 +82,7 @@ pub use template_scope::extract_at_const_bindings;
 pub use void_refs::VoidRefRegistry;
 pub use walker::{
     BindDirective, BindThisTarget, BubbledComponentEvent, BubbledDomEvent, BubbledDomEventScope,
-    CommentThread, ComponentInstantiation, OnEventDirective, PropShape, ResolvedSlotExpr, SlotAttr,
-    SlotAttrExpr, SlotDef, TemplateSummary, ThreadedComment, walk_template,
+    CommentThread, ComponentCtor, ComponentInstantiation, OnEventDirective, PropShape,
+    ResolvedSlotExpr, SlotAttr, SlotAttrExpr, SlotDef, TemplateSummary, ThreadedComment,
+    walk_template,
 };

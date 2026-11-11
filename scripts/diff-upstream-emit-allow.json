@@ -3,13 +3,6 @@
   "entries": [
     {
       "status": "intended",
-      "sample": "*",
-      "kind": "component",
-      "label": "H.selfdefault vs H.createcomponentany",
-      "reason": "<svelte:self>: upstream writes an untyped `__sveltets_2_createComponentAny({…})`; we construct it through `__svn_ensure_component(__svn_self_default)`, where `__svn_self_default` is `Component<any, any, any>`. Props are `any` either way."
-    },
-    {
-      "status": "intended",
       "sample": "svelte2tsx/rewrite-imports",
       "kind": "element",
       "ours": "import(\"../../bar\")",

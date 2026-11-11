@@ -960,25 +960,8 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             return None;
         }
 
-        while let Some(b) = self.scanner.peek_byte() {
-            if b >= 0x80 {
-                // Non-ASCII may continue a (component) name, but a
-                // Unicode space terminates it like an ASCII one —
-                // upstream reads names up to the next `\s` char.
-                if is_svelte_whitespace_at(
-                    self.scanner.source().as_bytes(),
-                    self.scanner.pos() as usize,
-                ) {
-                    break;
-                }
-                self.scanner.advance_char();
-            } else if b.is_ascii_alphanumeric() || matches!(b, b':' | b'-' | b'_' | b'.') {
-                self.scanner.advance_byte();
-            } else {
-                break;
-            }
-        }
-        let name_end = self.scanner.pos();
+        let name_end = tag_name_end(self.scanner.source(), name_start, self.fragment_end);
+        self.scanner.set_pos(name_end);
         let name: SmolStr = self.scanner.source()[name_start as usize..name_end as usize].into();
 
         // Parse attributes into real AST nodes.
@@ -1422,15 +1405,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         if !(first.is_ascii_alphabetic() || first >= 0x80) {
             return None;
         }
-        let mut i = start as usize;
-        while let Some(&b) = bytes.get(i) {
-            if b.is_ascii_alphanumeric() || b >= 0x80 || matches!(b, b':' | b'-' | b'_' | b'.') {
-                i += 1;
-            } else {
-                break;
-            }
-        }
-        src.get(start as usize..i)
+        src.get(start as usize..tag_name_end(src, start, self.fragment_end) as usize)
     }
 
     /// Whether the opening tag at the scanner implicitly closes the
@@ -1477,24 +1452,32 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         false
     }
 
+    /// Whether the closing tag at the scanner (`</…`) names `tag`.
     fn peek_closing_tag_matches(&self, tag: &str) -> bool {
-        // self.scanner is at `</`. Check if what follows is `tag` then a
-        // non-ident char.
         let after_slash = self.scanner.pos() + 2;
-        let bytes = self.scanner.source().as_bytes();
-        let tag_bytes = tag.as_bytes();
-        let end = after_slash as usize + tag_bytes.len();
-        if end > bytes.len() {
-            return false;
-        }
-        if &bytes[after_slash as usize..end] != tag_bytes {
-            return false;
-        }
-        match bytes.get(end).copied() {
-            None => true,
-            Some(b) => !b.is_ascii_alphanumeric() && !matches!(b, b'-' | b'_' | b'.' | b':'),
-        }
+        let src = self.scanner.source();
+        src.get(after_slash as usize..tag_name_end(src, after_slash, self.fragment_end) as usize)
+            == Some(tag)
     }
+}
+
+/// Where the tag name starting at byte `start` ends. The Svelte parser
+/// (`read_tag_name`) reads a name up to the next whitespace, `/` or `>`
+/// — any other character, `$` and `{` included, is part of it, and an
+/// invalid name is reported afterwards rather than cut short. Opening
+/// and closing tags read their names the same way. Never reads past
+/// `limit`.
+fn tag_name_end(src: &str, start: u32, limit: u32) -> u32 {
+    let bytes = src.as_bytes();
+    let limit = (limit as usize).min(bytes.len());
+    let mut i = start as usize;
+    while i < limit {
+        if matches!(bytes[i], b'/' | b'>') || is_svelte_whitespace_at(bytes, i) {
+            break;
+        }
+        i += src[i..].chars().next().map_or(1, char::len_utf8);
+    }
+    i.min(limit) as u32
 }
 
 #[cfg(test)]

@@ -1252,6 +1252,29 @@ mod tests {
     }
 
     #[test]
+    fn await_header_comment_before_then_splits() {
+        // The promise expression ends before the comment, as acorn reads
+        // it; the comment is not part of what precedes the keyword.
+        for (src, expr) in [
+            ("p /*c*/ then v}", "p /*c*/"),
+            ("p/* a */ /* b */ catch e}", "p/* a */ /* b */"),
+        ] {
+            let mut scanner = Scanner::new(src);
+            let mut errors = Vec::new();
+            let (range, short) =
+                parse_await_header(&mut scanner, &mut errors).expect("header parses");
+            assert_eq!(range.slice(src), expr);
+            assert!(
+                matches!(
+                    short,
+                    AwaitShortForm::Then(Some(_)) | AwaitShortForm::Catch(Some(_))
+                ),
+                "got {short:?}"
+            );
+        }
+    }
+
+    #[test]
     fn await_header_second_then_candidate_splits() {
         // The first ` then ` sits after `?` (can't end an expression);
         // the second one, after an identifier, is the real separator.

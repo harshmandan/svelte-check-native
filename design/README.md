@@ -20,6 +20,7 @@ fetch from git history if you need them.
 
 | Dir | What it validates | Shipped via |
 |---|---|---|
+| `svelte_self_any/` | `<svelte:self>` as svelte2tsx's untyped `createComponentAny({ props })`, aliased `__svn_create_component_any` | svelte:self parity with svelte2tsx |
 | `missing_svelte_stub/` | Stub declaration for a missing `.svelte` import: a comment-only script, so tsgo reports TS2306 and leaves the import unresolved (no wildcard), reached via `rootDirs` (relative) or exact `paths` (aliased / bare) | TSGO-ENHANCEMENT missing-import stubs |
 | `kit_hooks_params/` | Hooks / param-matcher annotation shape — `Parameters<T>[0]` in, `ReturnType<T>` out, from `@sveltejs/kit/hooks` on SvelteKit 3 | hooks + params kit_inject branch |
 | `gap_e_snippet_typing/` | Charter exception — ours more correct than upstream on snippet-receiver typing. WORKING AS EXPECTED. | n/a (charter) |

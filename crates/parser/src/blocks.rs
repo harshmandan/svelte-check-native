@@ -1458,6 +1458,46 @@ mod tests {
     }
 
     #[test]
+    fn each_header_annotation_keeps_its_commas_and_parentheses() {
+        // The compiler reads the annotation as acorn-typescript reads
+        // `_ as <type>`: the type's own commas and parentheses are part
+        // of it.
+        let cases = [
+            (
+                "entries as entry: Map<string, number>}",
+                "entry: Map<string, number>",
+                None,
+                None,
+            ),
+            (
+                "handlers as handler: (a: string) => void, i}",
+                "handler: (a: string) => void",
+                Some("i"),
+                None,
+            ),
+            (
+                "rows as { a }: { a: string, b?: number }, i (a)}",
+                "{ a }: { a: string, b?: number }",
+                Some("i"),
+                Some("a"),
+            ),
+        ];
+        for (src, context, index, key) in cases {
+            let mut scanner = Scanner::new(src);
+            let mut errors = Vec::new();
+            let (_, clause) = parse_each_header(&mut scanner, &mut errors).expect("header parses");
+            let clause = clause.expect("as-clause present");
+            assert_eq!(
+                clause.context_range.map(|r| r.slice(src)),
+                Some(context),
+                "{src}"
+            );
+            assert_eq!(clause.index_range.map(|r| r.slice(src)), index, "{src}");
+            assert_eq!(clause.key_range.map(|r| r.slice(src)), key, "{src}");
+        }
+    }
+
+    #[test]
     fn each_header_sequence_form_binds_index_without_context() {
         // `{#each expr, i}` — index-only form (no `as`). Upstream reads
         // the header as a SequenceExpression, keeps the first expression

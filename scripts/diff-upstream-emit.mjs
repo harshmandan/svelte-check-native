@@ -13,6 +13,17 @@
 //   element   `svelteHTML.createElement("tag", {…})` — tag + attribute object
 //   component `new C({ target, props: {…} })` — the props object
 //   iso       the generic `$$IsomorphicComponent` interface body
+//   each      the `for (… of …)` header of `{#each}`
+//   if        the condition of `{#if}` / `{:else if}`
+//   await     the awaited expression of `{#await}`
+//   snippet   a snippet's name and parameters (compared as a set)
+//   render    the argument of `{@render}`
+//
+// Not compared: the render function's result and the non-generic default
+// export. We fold svelte2tsx's factory wrappers (`with_any_event`,
+// `partial`) into the render result instead of applying them around it,
+// so the two only agree at the level of the resulting types, which a
+// text comparison cannot see.
 //
 // Each construct is normalised before comparing: comments and whitespace
 // outside strings removed, trailing commas dropped, helper names mapped
@@ -212,7 +223,12 @@ function normalize(text) {
     while (i < text.length) {
         const c = text[i];
         if (c === '/' && (text[i + 1] === '/' || text[i + 1] === '*')) {
-            i = skipNonCode(text, i);
+            const end = skipNonCode(text, i);
+            // A JSDoc cast `/** @type {T} */ (x)` types `x` as `T`; keep
+            // the type as a marker so the cast can be compared below.
+            const cast = /^\/\*\*\s*@type\s*\{([\s\S]*)\}\s*\*\/$/.exec(text.slice(i, end));
+            if (cast) s += `@type{${normalize(cast[1])}}`;
+            i = end;
             continue;
         }
         const skip = skipNonCode(text, i);
@@ -391,7 +407,16 @@ function compareSample(corpus, name) {
     const a = extract(fs.readFileSync(ours, 'utf8'));
     const b = extract(fs.readFileSync(theirs, 'utf8'));
     const out = [];
-    for (const kind of ['element', 'component', 'iso', 'each', 'if', 'await', 'snippet', 'render']) {
+    for (const kind of [
+        'element',
+        'component',
+        'iso',
+        'each',
+        'if',
+        'await',
+        'snippet',
+        'render',
+    ]) {
         let xs = a.filter((c) => c.kind === kind);
         let ys = b.filter((c) => c.kind === kind);
         // Snippets are declarations; we hoist some to a different place
@@ -512,4 +537,4 @@ for (const m of missing) {
 for (const e of stale) {
     console.error(`STALE allowlist entry (matches nothing): ${JSON.stringify(e.reason ?? e)}`);
 }
-process.exit(divergences.length || stale.length || missing.length ? 1 : 0);
+process.exitCode = divergences.length || stale.length || missing.length ? 1 : 0;

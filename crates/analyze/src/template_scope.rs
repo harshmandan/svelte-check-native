@@ -1157,6 +1157,68 @@ struct LetDirectiveScope {
 /// where `trim_offset` is the byte distance between `slice.start`
 /// and `trimmed.start` (handles leading whitespace inside the
 /// pattern slice).
+/// Where svelte2tsx's `getEnd` (`htmlxtojsx_v2/utils/node-utils.ts`)
+/// ends an `{#each}` pattern: at the start of its type annotation, so
+/// `item: string` is written as `item` (a `for…of` binding cannot carry
+/// an annotation). Without an annotation, or if the pattern does not
+/// parse, the range's own end.
+pub fn each_pattern_end(source: &str, range: Range) -> u32 {
+    let Some(slice) = source.get(range.start as usize..range.end as usize) else {
+        return range.end;
+    };
+    let lead = (slice.len() - slice.trim_start().len()) as u32;
+    let alloc = oxc_allocator::Allocator::default();
+    let wrapped = format!("({}) => 0", slice.trim());
+    let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+    use oxc_ast::ast::{Expression, Statement};
+    let annotation_start = match parsed.program.body.first() {
+        Some(Statement::ExpressionStatement(es)) if !parsed.panicked => match &es.expression {
+            Expression::ArrowFunctionExpression(arrow) if arrow.params.items.len() == 1 => arrow
+                .params
+                .items
+                .first()
+                .and_then(|p| p.type_annotation.as_ref())
+                .map(|t| t.span.start),
+            _ => None,
+        },
+        _ => None,
+    };
+    // Wrapper offset N maps to `range.start + lead + N - 1` (the `(`).
+    annotation_start.map_or(range.end, |n| range.start + lead + n - 1)
+}
+
+/// Where svelte2tsx's `getEnd` ends an `{#each}` iterable: an expression
+/// wrapped in `!`, `as T` or `satisfies T` ends at the expression it
+/// wraps (one level), so `maybe!` compares equal to an item named
+/// `maybe`. Otherwise, or if it does not parse, the range's own end.
+pub fn each_expression_end(source: &str, range: Range) -> u32 {
+    let Some(slice) = source.get(range.start as usize..range.end as usize) else {
+        return range.end;
+    };
+    let lead = (slice.len() - slice.trim_start().len()) as u32;
+    let alloc = oxc_allocator::Allocator::default();
+    let wrapped = format!("({})", slice.trim());
+    let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+    use oxc_ast::ast::{Expression, Statement};
+    let Some(Statement::ExpressionStatement(es)) = parsed.program.body.first() else {
+        return range.end;
+    };
+    if parsed.panicked {
+        return range.end;
+    }
+    let mut expr = &es.expression;
+    if let Expression::ParenthesizedExpression(p) = expr {
+        expr = &p.expression;
+    }
+    let inner_end = match expr {
+        Expression::TSAsExpression(e) => Some(e.expression.span().end),
+        Expression::TSSatisfiesExpression(e) => Some(e.expression.span().end),
+        Expression::TSNonNullExpression(e) => Some(e.expression.span().end),
+        _ => None,
+    };
+    inner_end.map_or(range.end, |n| range.start + lead + n - 1)
+}
+
 fn collect_pattern_bindings_from_slice(source: &str, range: Range) -> PatternBindings {
     let start = range.start as usize;
     let end = range.end as usize;

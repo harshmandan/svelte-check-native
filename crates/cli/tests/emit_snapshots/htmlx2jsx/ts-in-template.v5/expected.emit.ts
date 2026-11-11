@@ -35,7 +35,7 @@ function $$render_e40e2c10() {
         if ((foo as true)) {
         } else if ((bar as false)) {
         }
-        for (let item: string of __svn_each_items(items as [''])) {
+        for (let item of __svn_each_items(items as [''])) {
             let i = 1;
             (item);
             item as string;

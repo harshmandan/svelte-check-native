@@ -96,8 +96,12 @@ const RENDER_FUNCTION_PREFIX: &str = "$$render_";
 /// `offset` in a `.svelte` source, when `offset` lies inside one.
 ///
 /// Upstream remaps an empty missing-prop range onto the tag name of the
-/// start tag it falls in (`getNodeIfIsInStartTag`). The name is the run
-/// of tag-name characters after the `<` that opens the tag.
+/// start tag it falls in (`getNodeIfIsInStartTag`). That lookup runs on
+/// the HTML tokenizer's tree (vscode-html-languageservice), not on the
+/// Svelte AST, so the name is the tokenizer's: the run of
+/// `[_:\w][_:\w-.\d]*` after the `<` that opens the tag. A `$` ends it
+/// there although the Svelte parser keeps it in the name (`<Child$x>`
+/// highlights `Child`).
 pub(crate) fn start_tag_name_around(source: &str, offset: u32) -> Option<(u32, u32)> {
     let bytes = source.as_bytes();
     if bytes.is_empty() {
@@ -111,9 +115,15 @@ pub(crate) fn start_tag_name_around(source: &str, offset: u32) -> Option<(u32, u
         return None;
     }
     let name_start = open + 1;
+    if bytes
+        .get(name_start)
+        .is_some_and(|b| matches!(b, b'.' | b'-'))
+    {
+        return None;
+    }
     let name_len = bytes[name_start..]
         .iter()
-        .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b':' | b'-' | b'_' | b'$'))
+        .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b':' | b'-' | b'_'))
         .count();
     (name_len > 0).then_some((name_start as u32, (name_start + name_len) as u32))
 }

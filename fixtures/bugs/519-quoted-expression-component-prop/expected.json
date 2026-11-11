@@ -1,0 +1,6 @@
+{
+    "errors": [
+        { "file": "Page.svelte", "line": 9, "column": 9, "code": 2322 }
+    ],
+    "_note": "A quoted attribute value that is exactly one expression (`count=\"{total}\"`, either quote) passes the expression itself to a component, not a string: svelte2tsx emits a single-mustache value bare, as it does for `count={total}`. Only the `string` passed to the `number` prop errors. Wrapping the value in a template literal typed every such prop as `string`, so the two `{total}` props errored too."
+}

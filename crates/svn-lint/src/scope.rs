@@ -453,7 +453,14 @@ pub fn build_with_template(
             script.open_tag_range.start,
             runes,
         );
-        tree_builder.build_script(script, program, module_root, runes, &leading);
+        let prior = crate::ignore::prior_script_ignores(
+            fragment,
+            doc.source,
+            script.content_range.start,
+            &other_script(&doc.instance_script, instance_program),
+            runes,
+        );
+        tree_builder.build_script(script, program, module_root, runes, &leading, prior);
     }
 
     let instance_root = tree_builder.new_scope(Some(module_root));
@@ -466,7 +473,21 @@ pub fn build_with_template(
             script.open_tag_range.start,
             runes,
         );
-        tree_builder.build_script_as_instance(script, program, instance_root, runes, &leading);
+        let prior = crate::ignore::prior_script_ignores(
+            fragment,
+            doc.source,
+            script.content_range.start,
+            &other_script(&doc.module_script, module_program),
+            runes,
+        );
+        tree_builder.build_script_as_instance(
+            script,
+            program,
+            instance_root,
+            runes,
+            &leading,
+            prior,
+        );
     }
 
     if let Some(frag) = fragment {
@@ -490,6 +511,18 @@ pub fn build_with_template(
     let mut tree = tree_builder.finish(module_root, instance_root);
     tree.module_script_range = doc.module_script.as_ref().map(|s| s.content_range);
     tree
+}
+
+/// The other script section's body as `(content start, program)`, for
+/// [`crate::ignore::prior_script_ignores`].
+fn other_script<'p, 'a>(
+    script: &Option<ScriptSection<'_>>,
+    program: Option<&'p Program<'a>>,
+) -> Vec<(u32, &'p Program<'a>)> {
+    match (script, program) {
+        (Some(script), Some(program)) => vec![(script.content_range.start, program)],
+        _ => Vec::new(),
+    }
 }
 
 struct TreeBuilder {
@@ -1294,8 +1327,17 @@ impl TreeBuilder {
         root_scope: ScopeId,
         runes: bool,
         leading_ignores: &[SmolStr],
+        prior_ignores: Vec<SmolStr>,
     ) {
-        self.build_script_inner(script, program, root_scope, false, runes, leading_ignores);
+        self.build_script_inner(
+            script,
+            program,
+            root_scope,
+            false,
+            runes,
+            leading_ignores,
+            prior_ignores,
+        );
     }
 }
 
@@ -1569,12 +1611,22 @@ impl TreeBuilder {
         root_scope: ScopeId,
         runes: bool,
         leading_ignores: &[SmolStr],
+        prior_ignores: Vec<SmolStr>,
     ) {
-        self.build_script_inner(script, program, root_scope, true, runes, leading_ignores);
+        self.build_script_inner(
+            script,
+            program,
+            root_scope,
+            true,
+            runes,
+            leading_ignores,
+            prior_ignores,
+        );
     }
 
     /// `program` is the pre-parsed body of `script` — parsed once by
     /// `walk_parsed` and shared with the script-AST rules.
+    #[allow(clippy::too_many_arguments)]
     fn build_script_inner(
         &mut self,
         script: &ScriptSection<'_>,
@@ -1583,6 +1635,7 @@ impl TreeBuilder {
         is_instance: bool,
         runes: bool,
         leading_ignores: &[SmolStr],
+        prior_ignores: Vec<SmolStr>,
     ) {
         let base = script.content_range.start;
         let preprocess_ts = self.preprocess_ts;
@@ -1593,7 +1646,8 @@ impl TreeBuilder {
         // the file's real runes flag — upstream's extract_svelte_ignore
         // is strict in runes mode and lax (legacy dashed names accepted)
         // otherwise.
-        let script_comments = crate::ignore::ScriptComments::build(program, script.content, runes);
+        let script_comments =
+            crate::ignore::ScriptComments::build(program, script.content, runes, prior_ignores);
         let mut walker = ScriptWalker {
             tree: self,
             base_offset: base,

@@ -51,7 +51,7 @@ fn comment_in_a_mustache_before_the_script() {
 fn comment_in_an_attribute_expression() {
     silenced(&format!("<div title={{{IGNORE} b}}></div>"));
     silenced(&format!("<div title=\"{{{IGNORE} b}}\"></div>"));
-    silenced(&format!("<input bind:value={{{IGNORE} b}}>"));
+    silenced(&format!("<input bind:value={{{IGNORE} count}}>"));
     silenced(&format!("<div style:color={{{IGNORE} 'red'}}></div>"));
     silenced(&format!("<div {{...{IGNORE} {{}}}}></div>"));
 }

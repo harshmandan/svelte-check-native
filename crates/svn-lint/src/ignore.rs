@@ -10,7 +10,9 @@ use oxc_ast_visit::Visit;
 use oxc_span::{GetSpan, Span};
 use smol_str::SmolStr;
 use svn_core::Range;
-use svn_parser::ast::{Comment, Node};
+use svn_parser::ast::{
+    AttrValue, AttrValuePart, Attribute, Comment, DirectiveValue, Fragment, Node,
+};
 
 use crate::codes::{COMPILER_ERROR_CODES, Code};
 use crate::context::LintContext;
@@ -310,27 +312,27 @@ impl ScriptComments {
     /// Attach the comments of `program` (parsed from `content`) the way
     /// acorn's comment handler does and keep the `svelte-ignore` codes
     /// of every leading comment.
-    pub(crate) fn build(program: &Program<'_>, content: &str, runes: bool) -> Self {
+    ///
+    /// `prior` holds the codes of the comments the compiler read before
+    /// this script (see [`prior_script_ignores`]); they lead the
+    /// script's first node.
+    pub(crate) fn build(
+        program: &Program<'_>,
+        content: &str,
+        runes: bool,
+        prior: Vec<SmolStr>,
+    ) -> Self {
         let codes: Vec<Vec<SmolStr>> = program
             .comments
             .iter()
             .map(|c| {
                 content
                     .get(c.span.start as usize..c.span.end as usize)
-                    .and_then(crate::scope_util::strip_comment_delimiters)
-                    .and_then(|body| {
-                        let rest = body.trim_start().strip_prefix("svelte-ignore")?;
-                        match rest.chars().next() {
-                            Some(ch) if ch.is_whitespace() => {
-                                Some(parse_ignore_codes(&rest[ch.len_utf8()..], runes))
-                            }
-                            _ => None,
-                        }
-                    })
+                    .map(|text| comment_ignore_codes(text, runes))
                     .unwrap_or_default()
             })
             .collect();
-        if codes.iter().all(Vec::is_empty) {
+        if prior.is_empty() && codes.iter().all(Vec::is_empty) {
             return Self::empty();
         }
         let mut queue: Vec<(u32, u32, usize)> = program
@@ -346,16 +348,19 @@ impl ScriptComments {
             frames: Vec::new(),
             skipped: Vec::new(),
             leading: Vec::new(),
+            first_node: None,
         };
         attacher.visit_program(program);
-        let leading = attacher
-            .leading
-            .into_iter()
-            .filter_map(|(start, i)| {
-                let c = codes.get(i).filter(|c| !c.is_empty())?;
-                Some((start, c.clone()))
-            })
-            .collect();
+        let mut leading: Vec<(u32, Vec<SmolStr>)> = Vec::new();
+        if let Some(first) = attacher.first_node
+            && !prior.is_empty()
+        {
+            leading.push((first, prior));
+        }
+        leading.extend(attacher.leading.into_iter().filter_map(|(start, i)| {
+            let c = codes.get(i).filter(|c| !c.is_empty())?;
+            Some((start, c.clone()))
+        }));
         Self { leading }
     }
 
@@ -380,6 +385,239 @@ impl ScriptComments {
     }
 }
 
+/// The `svelte-ignore` codes a JavaScript comment's text (delimiters
+/// included) carries; empty for any other comment.
+fn comment_ignore_codes(text: &str, runes: bool) -> Vec<SmolStr> {
+    crate::scope_util::strip_comment_delimiters(text)
+        .and_then(|body| {
+            let rest = body.trim_start().strip_prefix("svelte-ignore")?;
+            match rest.chars().next() {
+                Some(ch) if ch.is_whitespace() => {
+                    Some(parse_ignore_codes(&rest[ch.len_utf8()..], runes))
+                }
+                _ => None,
+            }
+        })
+        .unwrap_or_default()
+}
+
+/// The `svelte-ignore` codes of every JavaScript comment the compiler
+/// has read when it reaches a script whose body starts at `before`.
+///
+/// The compiler's parser keeps one list of the JavaScript comments it
+/// meets — in template expressions, in start tags and in script bodies
+/// — and parses each `<script>` with the whole list
+/// (`phases/1-parse/read/script.js`), so every comment read earlier is
+/// attached as a leading comment of the script's first node. HTML
+/// comments, text and `<style>` are not JavaScript and add nothing.
+/// `scripts` are the other script bodies as `(content start, program)`.
+pub(crate) fn prior_script_ignores(
+    fragment: Option<&Fragment>,
+    source: &str,
+    before: u32,
+    scripts: &[(u32, &Program<'_>)],
+    runes: bool,
+) -> Vec<SmolStr> {
+    // Cheap gate: no ignore comment can precede the script.
+    if !source
+        .get(..before as usize)
+        .is_some_and(|head| head.contains("svelte-ignore"))
+    {
+        return Vec::new();
+    }
+    let mut comments: Vec<Range> = Vec::new();
+    for &(content_start, program) in scripts {
+        if content_start < before {
+            comments.extend(
+                program
+                    .comments
+                    .iter()
+                    .map(|c| Range::new(content_start + c.span.start, content_start + c.span.end)),
+            );
+        }
+    }
+    if let Some(fragment) = fragment {
+        collect_fragment_comments(fragment, source, before, &mut comments);
+    }
+    let mut codes: Vec<SmolStr> = Vec::new();
+    for range in comments {
+        for code in comment_ignore_codes(range.slice(source), runes) {
+            if !codes.contains(&code) {
+                codes.push(code);
+            }
+        }
+    }
+    codes
+}
+
+/// The JavaScript comments in the template expressions and start tags
+/// of the nodes in `fragment` that start before `before`.
+fn collect_fragment_comments(fragment: &Fragment, source: &str, before: u32, out: &mut Vec<Range>) {
+    for node in &fragment.nodes {
+        if node.range().start >= before {
+            break;
+        }
+        let mut expr = |range: Range| out.extend(js_comments_in(source, range));
+        match node {
+            Node::Text(_) | Node::Comment(_) => {}
+            Node::Interpolation(i) => expr(i.expression_range),
+            Node::Element(e) => {
+                attribute_comments(&e.attributes, source, out);
+                collect_fragment_comments(&e.children, source, before, out);
+            }
+            Node::Component(c) => {
+                attribute_comments(&c.attributes, source, out);
+                collect_fragment_comments(&c.children, source, before, out);
+            }
+            Node::SvelteElement(e) => {
+                attribute_comments(&e.attributes, source, out);
+                collect_fragment_comments(&e.children, source, before, out);
+            }
+            Node::IfBlock(b) => {
+                expr(b.condition_range);
+                collect_fragment_comments(&b.consequent, source, before, out);
+                for arm in &b.elseif_arms {
+                    out.extend(js_comments_in(source, arm.condition_range));
+                    collect_fragment_comments(&arm.body, source, before, out);
+                }
+                if let Some(alt) = &b.alternate {
+                    collect_fragment_comments(alt, source, before, out);
+                }
+            }
+            Node::EachBlock(b) => {
+                expr(b.expression_range);
+                if let Some(clause) = &b.as_clause {
+                    for range in [clause.context_range, clause.index_range, clause.key_range]
+                        .into_iter()
+                        .flatten()
+                    {
+                        out.extend(js_comments_in(source, range));
+                    }
+                }
+                collect_fragment_comments(&b.body, source, before, out);
+                if let Some(alt) = &b.alternate {
+                    collect_fragment_comments(alt, source, before, out);
+                }
+            }
+            Node::AwaitBlock(b) => {
+                expr(b.expression_range);
+                if let Some(pending) = &b.pending {
+                    collect_fragment_comments(pending, source, before, out);
+                }
+                if let Some(then) = &b.then_branch {
+                    if let Some(range) = then.context_range {
+                        out.extend(js_comments_in(source, range));
+                    }
+                    collect_fragment_comments(&then.body, source, before, out);
+                }
+                if let Some(catch) = &b.catch_branch {
+                    if let Some(range) = catch.context_range {
+                        out.extend(js_comments_in(source, range));
+                    }
+                    collect_fragment_comments(&catch.body, source, before, out);
+                }
+            }
+            Node::KeyBlock(b) => {
+                expr(b.expression_range);
+                collect_fragment_comments(&b.body, source, before, out);
+            }
+            Node::SnippetBlock(b) => {
+                if let Some(generics) = b.generics_range {
+                    expr(generics);
+                }
+                expr(b.parameters_range);
+                collect_fragment_comments(&b.body, source, before, out);
+            }
+        }
+    }
+}
+
+fn attribute_comments(attributes: &[Attribute], source: &str, out: &mut Vec<Range>) {
+    let parts = |value: &AttrValue, out: &mut Vec<Range>| {
+        for part in &value.parts {
+            if let AttrValuePart::Expression {
+                expression_range, ..
+            } = part
+            {
+                out.extend(js_comments_in(source, *expression_range));
+            }
+        }
+    };
+    for attr in attributes {
+        match attr {
+            Attribute::Plain(p) => {
+                if let Some(value) = &p.value {
+                    parts(value, out);
+                }
+            }
+            Attribute::Expression(e) => out.extend(js_comments_in(source, e.expression_range)),
+            Attribute::Shorthand(_) => {}
+            Attribute::Spread(s) => out.extend(js_comments_in(source, s.expression_range)),
+            Attribute::Attach(a) => out.extend(js_comments_in(source, a.expression_range)),
+            Attribute::Directive(d) => match &d.value {
+                Some(DirectiveValue::Expression {
+                    expression_range, ..
+                }) => out.extend(js_comments_in(source, *expression_range)),
+                Some(DirectiveValue::BindPair {
+                    getter_range,
+                    setter_range,
+                    ..
+                }) => out.extend(js_comments_in(
+                    source,
+                    Range::new(getter_range.start, setter_range.end),
+                )),
+                Some(DirectiveValue::Quoted(value)) => parts(value, out),
+                None => {}
+            },
+            Attribute::Comment(c) => out.push(c.range),
+        }
+    }
+}
+
+/// The comments in the JavaScript at `range` — an expression, a
+/// declaration's body, a binding pattern or a parameter list — as oxc
+/// reads them. Each shape is tried in a wrapper that makes it a
+/// program; the first that parses cleanly has lexed the whole text.
+fn js_comments_in(source: &str, range: Range) -> Vec<Range> {
+    let Some(text) = source.get(range.start as usize..range.end as usize) else {
+        return Vec::new();
+    };
+    if !text.contains("/*") && !text.contains("//") {
+        return Vec::new();
+    }
+    const WRAPPERS: &[(&str, &str)] = &[
+        ("(", "\n)"),
+        ("let ", "\n;"),
+        ("let ", "\n= 0;"),
+        ("(", "\n) => 0"),
+        ("<", "\n>() => 0"),
+    ];
+    let source_type = oxc_span::SourceType::default()
+        .with_module(true)
+        .with_typescript(true);
+    for (prefix, suffix) in WRAPPERS {
+        let wrapped = format!("{prefix}{text}{suffix}");
+        let alloc = oxc_allocator::Allocator::default();
+        let parsed = oxc_parser::Parser::new(&alloc, &wrapped, source_type).parse();
+        if parsed.diagnostics.is_empty() && !parsed.fatal_error {
+            let shift = prefix.len() as u32;
+            return parsed
+                .program
+                .comments
+                .iter()
+                .filter(|c| c.span.start >= shift)
+                .map(|c| {
+                    Range::new(
+                        range.start + c.span.start - shift,
+                        range.start + c.span.end - shift,
+                    )
+                })
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
 /// Replays acorn.js's `add_comments` over an oxc tree. The estree acorn
 /// builds differs from oxc's in a few nodes, which are passed over:
 /// parentheses (scripts are parsed without `preserveParens`), array
@@ -394,6 +632,8 @@ struct CommentAttacher<'s> {
     skipped: Vec<bool>,
     /// `(node start, comment index)` of every leading comment.
     leading: Vec<(u32, usize)>,
+    /// Start of the first node inside the program.
+    first_node: Option<u32>,
 }
 
 struct Frame {
@@ -457,6 +697,9 @@ impl<'a> Visit<'a> for CommentAttacher<'_> {
             return;
         }
         let span = kind.span();
+        if self.first_node.is_none() && !matches!(kind, AstKind::Program(_)) {
+            self.first_node = Some(span.start);
+        }
         while let Some(&(start, _, index)) = self.queue.front()
             && start < span.start
         {

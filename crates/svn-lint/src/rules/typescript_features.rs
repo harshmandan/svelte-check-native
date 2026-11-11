@@ -481,6 +481,7 @@ impl TemplateFinder<'_> {
                 }
                 Attribute::Expression(e) => self.check(e.expression_range, false),
                 Attribute::Spread(s) => self.check(s.expression_range, false),
+                Attribute::Attach(a) => self.check(a.expression_range, false),
                 Attribute::Directive(d) => match &d.value {
                     Some(DirectiveValue::Expression {
                         expression_range, ..

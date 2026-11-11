@@ -2,15 +2,10 @@
 //!
 //! Mirrors upstream svelte2tsx's
 //! `language-tools/packages/svelte2tsx/src/htmlxtojsx_v2/nodes/Spread.ts`.
-//!
-//! `{@attach EXPR}` (Svelte 5.29+) shares the parser's spread shape
-//! (`Attribute::Spread { is_attach: true, … }`) but takes a different
-//! emit path — see [`crate::nodes::attach_tag`].
 
 use std::fmt::Write;
 
 use crate::emit_buffer::EmitBuffer;
-use crate::nodes::attach_tag::emit_attach;
 
 /// Quick check — true when the spread has a non-empty trimmed
 /// expression that's worth emitting. Used by the element dispatcher
@@ -23,7 +18,7 @@ pub(crate) fn can_emit(source: &str, s: &svn_parser::SpreadAttr) -> bool {
         .unwrap_or(false)
 }
 
-/// Emit one spread / attach attribute entry into the open
+/// Emit one spread attribute entry into the open
 /// `createElement` props literal. Caller must have already checked
 /// [`can_emit`] and flushed any pending leading newline.
 pub(crate) fn emit_spread(
@@ -44,11 +39,7 @@ pub(crate) fn emit_spread(
     let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
     let start = s.expression_range.start + leading_ws;
     let end = start + trimmed.len() as u32;
-    if s.is_attach {
-        emit_attach(buf, trimmed, svn_core::Range::new(start, end), &inner);
-    } else {
-        let _ = write!(buf, "{inner}...");
-        buf.append_with_source(trimmed, svn_core::Range::new(start, end));
-        let _ = writeln!(buf, ",");
-    }
+    let _ = write!(buf, "{inner}...");
+    buf.append_with_source(trimmed, svn_core::Range::new(start, end));
+    let _ = writeln!(buf, ",");
 }

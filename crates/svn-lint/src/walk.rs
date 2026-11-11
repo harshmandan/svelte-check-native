@@ -1153,6 +1153,7 @@ fn attribute_text(attributes: &[Attribute], ctx: &mut LintContext<'_>) {
             Attribute::Expression(_)
             | Attribute::Shorthand(_)
             | Attribute::Spread(_)
+            | Attribute::Attach(_)
             | Attribute::Comment(_) => None,
         };
         for part in parts.unwrap_or_default() {

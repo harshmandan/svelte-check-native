@@ -30,8 +30,8 @@ use smol_str::SmolStr;
 use svn_core::Range;
 
 use crate::ast::{
-    AttrComment, AttrValue, AttrValuePart, Attribute, Directive, DirectiveKind, DirectiveValue,
-    ExpressionAttr, PlainAttr, ShorthandAttr, SpreadAttr,
+    AttachTag, AttrComment, AttrValue, AttrValuePart, Attribute, Directive, DirectiveKind,
+    DirectiveValue, ExpressionAttr, PlainAttr, ShorthandAttr, SpreadAttr,
 };
 use crate::error::ParseError;
 use crate::mustache::find_mustache_end;
@@ -159,18 +159,13 @@ fn parse_brace_attribute(
         return Some(Attribute::Spread(SpreadAttr {
             expression_range: Range::new(expr_start, end),
             range: Range::new(start, end + 1),
-            is_attach: false,
         }));
     }
 
     if cursor.peek_byte() == Some(b'@') {
         // `{@attach fn(...)}` (Svelte 5.29+) — the `@attach` tag in
         // attribute position. The body is an expression that returns an
-        // attachment. We don't model attachments at the type level; we
-        // expose the body as a spread-like expression so the template-ref
-        // pass can walk it for identifier references (otherwise things
-        // like `{@attach floating({offset, shift, flip})}` lose the
-        // import refs).
+        // attachment.
         cursor.advance_byte(); // past `@`
         // Skip the tag keyword.
         while let Some(b) = cursor.peek_byte() {
@@ -192,10 +187,9 @@ fn parse_brace_attribute(
             }
         };
         scanner.set_pos(end + 1);
-        return Some(Attribute::Spread(SpreadAttr {
+        return Some(Attribute::Attach(AttachTag {
             expression_range: Range::new(expr_start, end),
             range: Range::new(start, end + 1),
-            is_attach: true,
         }));
     }
 
@@ -957,6 +951,17 @@ mod tests {
             panic!("expected Spread");
         };
         assert_eq!(a.expression_range.slice("{...attrs}"), "attrs");
+    }
+
+    #[test]
+    fn attach_tag_is_its_own_attribute() {
+        let src = "{@attach tooltip(text)}";
+        let attrs = parse_ok(src);
+        let Attribute::Attach(a) = &attrs[0] else {
+            panic!("expected Attach, got {:?}", attrs[0]);
+        };
+        assert_eq!(a.expression_range.slice(src), "tooltip(text)");
+        assert_eq!(a.range.slice(src), src);
     }
 
     #[test]

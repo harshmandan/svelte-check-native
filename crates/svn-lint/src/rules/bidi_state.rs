@@ -342,6 +342,7 @@ impl TemplateTester<'_> {
                 }
                 Attribute::Expression(e) => self.expression(e.expression_range),
                 Attribute::Spread(s) => self.expression(s.expression_range),
+                Attribute::Attach(a) => self.expression(a.expression_range),
                 Attribute::Directive(d) => match &d.value {
                     Some(DirectiveValue::Expression {
                         expression_range, ..

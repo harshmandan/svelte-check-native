@@ -264,7 +264,7 @@ impl Finder<'_> {
                     DirectiveKind::Style => Some((2, d.name.as_str())),
                     _ => None,
                 },
-                Attribute::Spread(_) | Attribute::Comment(_) => None,
+                Attribute::Spread(_) | Attribute::Attach(_) | Attribute::Comment(_) => None,
             };
             if let Some(key) = key {
                 if unique.contains(&key) {
@@ -791,7 +791,7 @@ fn read_options(fragment: &Fragment, source: &str) -> Option<ParseFinding> {
             Attribute::Expression(e) => e.name.as_str(),
             Attribute::Shorthand(s) => s.name.as_str(),
             Attribute::Comment(_) => continue,
-            Attribute::Directive(_) | Attribute::Spread(_) => {
+            Attribute::Directive(_) | Attribute::Spread(_) | Attribute::Attach(_) => {
                 return finding(
                     Code::svelte_options_invalid_attribute,
                     messages::svelte_options_invalid_attribute(),

@@ -93,14 +93,14 @@ fn collect_expression_attr(
 }
 
 /// The name an attribute is written with (a directive's name follows
-/// its `prefix:`); `None` for spreads and comments.
+/// its `prefix:`); `None` for spreads, attachments and comments.
 fn attribute_name(attr: &Attribute) -> Option<&str> {
     match attr {
         Attribute::Plain(p) => Some(p.name.as_str()),
         Attribute::Expression(e) => Some(e.name.as_str()),
         Attribute::Shorthand(s) => Some(s.name.as_str()),
         Attribute::Directive(d) => Some(d.name.as_str()),
-        Attribute::Spread(_) | Attribute::Comment(_) => None,
+        Attribute::Spread(_) | Attribute::Attach(_) | Attribute::Comment(_) => None,
     }
 }
 

@@ -60,10 +60,8 @@ pub(crate) fn check_component_attributes(attributes: &[Attribute], ctx: &mut Lin
         validate_component_slot_attribute(attr, ctx);
         // An attachment's expression is never an unparenthesized
         // comma sequence, whatever the mode.
-        if let Attribute::Spread(s) = attr
-            && s.is_attach
-        {
-            sequence_expression_error(s.expression_range, ctx);
+        if let Attribute::Attach(a) = attr {
+            sequence_expression_error(a.expression_range, ctx);
         }
     }
 }

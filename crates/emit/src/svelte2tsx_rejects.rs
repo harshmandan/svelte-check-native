@@ -119,7 +119,7 @@ fn first_named<'a>(attributes: &'a [Attribute], name: &str) -> Option<&'a Attrib
         Attribute::Expression(x) => x.name == name,
         Attribute::Shorthand(x) => x.name == name,
         Attribute::Directive(d) => d.name == name,
-        Attribute::Spread(_) | Attribute::Comment(_) => false,
+        Attribute::Spread(_) | Attribute::Attach(_) | Attribute::Comment(_) => false,
     })
 }
 

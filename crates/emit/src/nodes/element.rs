@@ -637,6 +637,18 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
                 }
                 emit_spread(buf, source, s, depth);
             }
+            svn_parser::Attribute::Attach(a) => {
+                let Some(expr) = crate::nodes::attach_tag::expression_range(source, a) else {
+                    continue;
+                };
+                if !any {
+                    buf.push_str("\n");
+                    any = true;
+                }
+                buf.push_str(&"    ".repeat(depth + 1));
+                crate::nodes::attach_tag::emit_attach_entry(buf, source, expr);
+                buf.push_str(",\n");
+            }
             // Directives mostly handled outside createElement (bind/use
             // passes + emit_dom_directive_checks). Exception:
             // `on:event={handler}` is emitted INLINE as an `"on:NAME":
@@ -1167,7 +1179,7 @@ fn emit_slot_check(buf: &mut EmitBuffer, source: &str, e: &svn_parser::Element, 
         Attribute::Expression(x) => x.name.as_str() == "name",
         Attribute::Shorthand(x) => x.name.as_str() == "name",
         Attribute::Directive(d) => d.name.as_str() == "name",
-        Attribute::Spread(_) | Attribute::Comment(_) => false,
+        Attribute::Spread(_) | Attribute::Attach(_) | Attribute::Comment(_) => false,
     });
     let name_chunk: Option<svn_core::Range> = match name_attr {
         None => None,
@@ -1296,6 +1308,18 @@ fn emit_slot_check(buf: &mut EmitBuffer, source: &str, e: &svn_parser::Element, 
                     .unwrap_or("");
                 buf.append_with_source(expr, sp.expression_range);
                 buf.push_str(")");
+            }
+            // svelte2tsx adds an attachment to the slot element's
+            // attributes like any other (`handleAttachTag`).
+            Attribute::Attach(a) => {
+                let Some(expr) = crate::nodes::attach_tag::expression_range(source, a) else {
+                    continue;
+                };
+                if !first {
+                    buf.push_str(", ");
+                }
+                first = false;
+                crate::nodes::attach_tag::emit_attach_entry(buf, source, expr);
             }
             Attribute::Comment(_) => {}
             Attribute::Directive(_) => {

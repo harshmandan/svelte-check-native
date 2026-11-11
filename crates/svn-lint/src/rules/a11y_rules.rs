@@ -116,6 +116,7 @@ fn check_element(
                 }
             }
             Attribute::Spread(_) => has_spread = true,
+            Attribute::Attach(_) => {}
             Attribute::Comment(_) => {}
             Attribute::Directive(d) => {
                 if d.kind == DirectiveKind::On {

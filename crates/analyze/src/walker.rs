@@ -518,6 +518,13 @@ pub enum PropShape {
         expr_range: Range,
         attr_range: Range,
     },
+    /// `{@attach expr}` — emit as `[Symbol("@attach")]: expr` in the
+    /// props literal (svelte2tsx `handleAttachTag`), so the component's
+    /// symbol-keyed props type the attachment's parameter.
+    Attach {
+        expr_range: Range,
+        attr_range: Range,
+    },
     /// Svelte 5 `bind:NAME={getter, setter}` get/set form. Emit
     /// `name: (getter)()` — calling the getter to obtain the bound
     /// value, whose type is what the target Props declaration
@@ -569,12 +576,14 @@ impl PropShape {
             | PropShape::Shorthand { attr_range, .. }
             | PropShape::BoolShorthand { attr_range, .. }
             | PropShape::Spread { attr_range, .. }
+            | PropShape::Attach { attr_range, .. }
             | PropShape::GetSetBinding { attr_range, .. }
             | PropShape::TemplateLiteral { attr_range, .. } => *attr_range,
         }
     }
 
-    /// Prop name for the named variants; `None` for `Spread`.
+    /// Prop name for the named variants; `None` for `Spread` and
+    /// `Attach`.
     pub fn name(&self) -> Option<&SmolStr> {
         match self {
             PropShape::Literal { name, .. }
@@ -583,7 +592,7 @@ impl PropShape {
             | PropShape::BoolShorthand { name, .. }
             | PropShape::GetSetBinding { name, .. }
             | PropShape::TemplateLiteral { name, .. } => Some(name),
-            PropShape::Spread { .. } => None,
+            PropShape::Spread { .. } | PropShape::Attach { .. } => None,
         }
     }
 }

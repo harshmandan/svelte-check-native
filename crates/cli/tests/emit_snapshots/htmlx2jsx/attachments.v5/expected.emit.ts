@@ -13,11 +13,11 @@ function $$render_e40e2c10() {
         }
         {
             const __svn_C_3c = __svn_ensure_component(Comp);
-            new __svn_C_3c({ target: __svn_any(), props: {...(x)} });
+            new __svn_C_3c({ target: __svn_any(), props: {[Symbol("@attach")]: x} });
         }
         {
             const __svn_C_56 = __svn_ensure_component(Comp);
-            new __svn_C_56({ target: __svn_any(), props: {...((node) => {})} });
+            new __svn_C_56({ target: __svn_any(), props: {[Symbol("@attach")]: (node) => {}} });
         }
     });
     return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

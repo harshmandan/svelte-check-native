@@ -247,6 +247,8 @@ pub enum Attribute {
     Shorthand(ShorthandAttr),
     /// `{...expr}` — object spread.
     Spread(SpreadAttr),
+    /// `{@attach expr}` — attachment.
+    Attach(AttachTag),
     /// `bind:foo`, `on:click`, `use:action`, `class:x`, `style:y`,
     /// `transition:name`, `in:name`, `out:name`, `animate:name`, `let:name`.
     Directive(Directive),
@@ -271,6 +273,7 @@ impl Attribute {
             Self::Expression(a) => a.range,
             Self::Shorthand(a) => a.range,
             Self::Spread(a) => a.range,
+            Self::Attach(a) => a.range,
             Self::Directive(a) => a.range,
             Self::Comment(a) => a.range,
         }
@@ -382,20 +385,23 @@ pub struct ShorthandAttr {
     pub range: Range,
 }
 
-/// `{...expr}` or `{@attach expr}`. The `is_attach` flag distinguishes
-/// the two: `{...expr}` spreads the object's properties onto the
-/// element, while `{@attach EXPR}` provides an `Attachment<T>` callback
-/// (Svelte 5.29+, `svelte/attachments`). Emit handles them differently
-/// — a real spread emits `...EXPR,` inside the element's prop literal,
-/// while an attach tag emits `[Symbol("@attach")]: EXPR,` so the
-/// arrow's parameter picks up the element's contextual type via the
-/// `[key: symbol]: Attachment<T>` index signature on `HTMLAttributes`.
+/// `{...expr}` — spreads the object's properties onto the element or
+/// component.
 #[derive(Debug, Clone)]
 pub struct SpreadAttr {
     pub expression_range: Range,
     pub range: Range,
-    /// True for `{@attach EXPR}`, false for `{...EXPR}`.
-    pub is_attach: bool,
+}
+
+/// `{@attach expr}` (Svelte 5.29+) — attaches an `Attachment<T>`
+/// callback to an element, or passes it to a component, which forwards
+/// it with its props. The compiler models it as its own `AttachTag`
+/// node, not a spread: it contributes no attributes, so checks that give
+/// up on an element carrying a spread do not give up on an attachment.
+#[derive(Debug, Clone)]
+pub struct AttachTag {
+    pub expression_range: Range,
+    pub range: Range,
 }
 
 /// `<prefix>:<name>[|<modifier>]*[={value}]`.

@@ -41,7 +41,7 @@ function $$render_e40e2c10() {
 /* another comment */
 "baz": "qux", 
 // attachment comment
-...(attachment), 
+[Symbol("@attach")]: attachment, 
 // binding comment
 "prop": (bound_prop), 
 // spread comment

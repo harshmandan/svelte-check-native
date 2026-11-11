@@ -211,7 +211,7 @@ pub(crate) fn fragment_contains_default_slot(
             Attribute::Expression(x) => x.name.as_str() == "name",
             Attribute::Shorthand(x) => x.name.as_str() == "name",
             Attribute::Directive(d) => d.name.as_str() == "name",
-            Attribute::Spread(_) | Attribute::Comment(_) => false,
+            Attribute::Spread(_) | Attribute::Attach(_) | Attribute::Comment(_) => false,
         });
         match name_attr {
             None => true,

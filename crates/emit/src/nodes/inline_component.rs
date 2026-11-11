@@ -805,6 +805,18 @@ fn write_prop_shape_value(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::P
             buf.append_with_source(expr, *expr_range);
             buf.push_str(")");
         }
+        svn_analyze::PropShape::Attach { expr_range, .. } => {
+            let tag = svn_parser::AttachTag {
+                expression_range: *expr_range,
+                range: attr_range,
+            };
+            match crate::nodes::attach_tag::expression_range(source, &tag) {
+                Some(expr) => crate::nodes::attach_tag::emit_attach_entry(buf, source, expr),
+                // `{@attach }` is a parse error the compiler reports; keep
+                // the props literal well-formed.
+                None => buf.push_str("[Symbol(\"@attach\")]: undefined"),
+            }
+        }
         svn_analyze::PropShape::GetSetBinding {
             name,
             getter_range,

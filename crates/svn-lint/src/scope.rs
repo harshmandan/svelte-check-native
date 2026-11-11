@@ -837,6 +837,9 @@ impl TreeBuilder {
             Attribute::Spread(s) => {
                 self.walk_expr_range(s.expression_range, ctx, RefFlags::default());
             }
+            Attribute::Attach(a) => {
+                self.walk_expr_range(a.expression_range, ctx, RefFlags::default());
+            }
             Attribute::Comment(_) => {}
             Attribute::Directive(d) => {
                 let flags = RefFlags {

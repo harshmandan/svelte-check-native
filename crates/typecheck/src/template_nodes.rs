@@ -136,7 +136,10 @@ fn attributes_have_name_at(attributes: &[Attribute], source: &str, offset: u32) 
                     }
                 },
             ),
-            Attribute::Directive(_) | Attribute::Spread(_) | Attribute::Comment(_) => {
+            Attribute::Directive(_)
+            | Attribute::Spread(_)
+            | Attribute::Attach(_)
+            | Attribute::Comment(_) => {
                 return false;
             }
         };

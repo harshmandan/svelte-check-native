@@ -325,6 +325,7 @@ impl TemplateSites<'_> {
                 }
                 Attribute::Expression(a) => self.expression(a.expression_range),
                 Attribute::Spread(a) => self.expression(a.expression_range),
+                Attribute::Attach(a) => self.expression(a.expression_range),
                 Attribute::Directive(d) => match &d.value {
                     Some(DirectiveValue::Expression {
                         expression_range, ..

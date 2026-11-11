@@ -1,32 +1,38 @@
-//! `{@attach EXPR}` attachment-directive emission (Svelte 5.29+).
+//! `{@attach EXPR}` attachment emission (Svelte 5.29+).
 //!
 //! Mirrors upstream svelte2tsx's
-//! `language-tools/packages/svelte2tsx/src/htmlxtojsx_v2/nodes/AttachTag.ts`.
+//! `language-tools/packages/svelte2tsx/src/htmlxtojsx_v2/nodes/AttachTag.ts`:
+//! every attachment becomes a computed-symbol property,
+//! `[Symbol("@attach")]: EXPR`, in the props literal of the element or
+//! component it sits on.
 //!
-//! Emit as a computed-symbol property (`[Symbol("@attach")]: EXPR`) so
-//! the arrow's parameter picks up the element's contextual type via
-//! the `[key: symbol]: Attachment<T> | …` index signature on
-//! `HTMLAttributes` in svelte/elements.d.ts.
-//!
-//! A `...EXPR` spread emit (the pre-2026-04-25 shape) would leave the
-//! arrow's param as implicit-any — tsgo then fires TS7006 on common
-//! patterns like `{@attach el => el.focus()}`. The computed-symbol
-//! shape is what flows the contextual type into the callback.
+//! The symbol key is what types the attachment. An element's
+//! `HTMLAttributes` carry `[key: symbol]: Attachment<T> | …`, and a
+//! component that forwards attachments declares a symbol index signature
+//! in its props, so the arrow's parameter gets the element type from the
+//! object it is written into. Written as a spread (`...EXPR`) the arrow
+//! has no contextual type and its parameter is implicitly `any`.
 
-use std::fmt::Write;
+use svn_core::Range;
+use svn_parser::AttachTag;
 
 use crate::emit_buffer::EmitBuffer;
 
-/// Emit one `{@attach EXPR}` entry into an open `createElement` props
-/// literal. `inner` is the per-entry indentation prefix (caller has
-/// already pre-computed it from the element's `depth`).
-pub(crate) fn emit_attach(
-    buf: &mut EmitBuffer,
-    expr_text: &str,
-    source_range: svn_core::Range,
-    inner: &str,
-) {
-    let _ = write!(buf, "{inner}[Symbol(\"@attach\")]: ");
-    buf.append_with_source(expr_text, source_range);
-    let _ = writeln!(buf, ",");
+/// The attachment expression without surrounding whitespace (the span of
+/// the expression node svelte2tsx copies), or `None` when it is empty.
+pub(crate) fn expression_range(source: &str, a: &AttachTag) -> Option<Range> {
+    let text = a.expression_range.slice(source);
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let start = a.expression_range.start + (text.len() - text.trim_start().len()) as u32;
+    Some(Range::new(start, start + trimmed.len() as u32))
+}
+
+/// Write `[Symbol("@attach")]: EXPR` (no separator) for an expression
+/// range from [`expression_range`].
+pub(crate) fn emit_attach_entry(buf: &mut EmitBuffer, source: &str, expr: Range) {
+    buf.push_str("[Symbol(\"@attach\")]: ");
+    buf.append_with_source(expr.slice(source), expr);
 }

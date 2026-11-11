@@ -214,10 +214,10 @@ fn visit_slot_element(el: &Element, ctx: &mut LintContext<'_>) {
             | Attribute::Spread(_)
             | Attribute::Comment(_) => {}
             Attribute::Directive(d) if d.kind == DirectiveKind::Let => {}
-            Attribute::Directive(d) => ctx.emit_error(
+            Attribute::Directive(_) | Attribute::Attach(_) => ctx.emit_error(
                 Code::slot_element_invalid_attribute,
                 messages::slot_element_invalid_attribute(),
-                d.range,
+                attr.range(),
             ),
         }
     }
@@ -1037,7 +1037,7 @@ pub(crate) fn validate_element_errors(
                 }
                 _ => {}
             },
-            Attribute::Spread(_) | Attribute::Comment(_) => {}
+            Attribute::Spread(_) | Attribute::Attach(_) | Attribute::Comment(_) => {}
         }
     }
 }

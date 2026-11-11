@@ -155,6 +155,7 @@ impl InvalidExpressionFinder<'_> {
                 }
                 Attribute::Expression(e) => self.check(e.expression_range),
                 Attribute::Spread(s) => self.check(s.expression_range),
+                Attribute::Attach(a) => self.check(a.expression_range),
                 Attribute::Directive(d) => match &d.value {
                     Some(DirectiveValue::Expression {
                         expression_range, ..

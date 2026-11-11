@@ -378,6 +378,9 @@ fn kept_attribute_ranges(attr: &Attribute, source: &str, out: &mut Vec<(u32, u32
             out.push(trimmed(Range::new(s.range.start + 1, s.range.end - 1)))
         }
         Attribute::Spread(s) => out.push((s.range.start + 1, s.range.end.saturating_sub(1))),
+        // `handleAttachTag` keeps only the expression; `@attach` becomes
+        // the synthesised `[Symbol("@attach")]` key.
+        Attribute::Attach(a) => out.push(trimmed(a.expression_range)),
         Attribute::Directive(d) => {
             let prefix = d.kind.prefix_len_with_colon();
             let name = name_range(d.range.start + prefix, d.name.as_str());
@@ -917,6 +920,15 @@ fn collect_attribute(
                 props.push(PropShape::Spread {
                     expr_range: s.expression_range,
                     attr_range: s.range,
+                });
+            }
+            // svelte2tsx `handleAttachTag`: on a component, a prop keyed
+            // by a fresh symbol, so the component's props type gives the
+            // attachment its contextual type.
+            Attribute::Attach(a) => {
+                props.push(PropShape::Attach {
+                    expr_range: a.expression_range,
+                    attr_range: a.range,
                 });
             }
         }

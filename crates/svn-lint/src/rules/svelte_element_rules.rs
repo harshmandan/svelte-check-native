@@ -26,7 +26,7 @@ pub fn visit(se: &SvelteElement, ctx: &mut LintContext<'_>, ancestors: &[crate::
             let name = se.kind.as_str();
             for attr in &se.attributes {
                 let illegal = match attr {
-                    Attribute::Spread(s) => !s.is_attach,
+                    Attribute::Spread(_) => true,
                     Attribute::Plain(_) | Attribute::Expression(_) | Attribute::Shorthand(_) => {
                         !is_event_attribute(attr)
                     }
@@ -72,11 +72,12 @@ pub fn visit(se: &SvelteElement, ctx: &mut LintContext<'_>, ancestors: &[crate::
                     }
                     Attribute::Directive(d) if d.kind == svn_parser::ast::DirectiveKind::Let => {}
                     Attribute::Comment(_) => {}
-                    Attribute::Directive(_) | Attribute::Spread(_) => ctx.emit_error(
-                        Code::svelte_fragment_invalid_attribute,
-                        messages::svelte_fragment_invalid_attribute(),
-                        attr.range(),
-                    ),
+                    Attribute::Directive(_) | Attribute::Spread(_) | Attribute::Attach(_) => ctx
+                        .emit_error(
+                            Code::svelte_fragment_invalid_attribute,
+                            messages::svelte_fragment_invalid_attribute(),
+                            attr.range(),
+                        ),
                 }
             }
         }

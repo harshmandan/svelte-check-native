@@ -276,10 +276,16 @@ fn write_attr(out: &mut String, attr: &Attribute) {
             );
         }
         Attribute::Spread(a) => {
-            let kind = if a.is_attach { "attach" } else { "spread" };
             let _ = write!(
                 out,
-                "{{\"kind\":\"{kind}\",\"start\":{},\"end\":{}}}",
+                "{{\"kind\":\"spread\",\"start\":{},\"end\":{}}}",
+                a.range.start, a.range.end
+            );
+        }
+        Attribute::Attach(a) => {
+            let _ = write!(
+                out,
+                "{{\"kind\":\"attach\",\"start\":{},\"end\":{}}}",
                 a.range.start, a.range.end
             );
         }

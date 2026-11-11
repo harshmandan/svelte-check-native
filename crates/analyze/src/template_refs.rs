@@ -188,6 +188,7 @@ fn walk_attributes(attrs: &[Attribute], sink: &mut dyn FnMut(TemplateSite<'_>)) 
             Attribute::Expression(e) => sink(TemplateSite::Expression(e.expression_range)),
             Attribute::Shorthand(_) => {}
             Attribute::Spread(s) => sink(TemplateSite::Expression(s.expression_range)),
+            Attribute::Attach(a) => sink(TemplateSite::Expression(a.expression_range)),
             Attribute::Directive(d) => walk_directive(d, sink),
             Attribute::Comment(_) => {}
         }

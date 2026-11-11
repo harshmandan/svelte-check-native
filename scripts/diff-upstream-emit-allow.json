@@ -18,14 +18,6 @@
     },
     {
       "status": "bug",
-      "sample": "*",
-      "kind": "component",
-      "ours": ":`${",
-      "reason": "A quoted attribute holding one expression (`attr=\"{x}\"`) on a component: upstream passes the expression itself (Attribute.ts emits a single MustacheTag value bare), we wrap it in a template literal, so the prop is typed `string` instead of the expression's type.",
-      "title": "quoted single expression on a component is typed string"
-    },
-    {
-      "status": "bug",
       "sample": "htmlx2jsx/binding-get-set.v5",
       "kind": "element",
       "upstream": "H.getsetbinding(null,set)",

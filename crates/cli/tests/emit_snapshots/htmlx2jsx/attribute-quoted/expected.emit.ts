@@ -5,11 +5,11 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         {
             const __svn_C_0 = __svn_ensure_component(SomeComponent);
-            new __svn_C_0({ target: __svn_any(), props: {"attr": `${shorthand}`} });
+            new __svn_C_0({ target: __svn_any(), props: {"attr": (shorthand)} });
         }
         {
             const __svn_C_25 = __svn_ensure_component(SomeComponent);
-            new __svn_C_25({ target: __svn_any(), props: {"attr": `${shorthand}`} });
+            new __svn_C_25({ target: __svn_any(), props: {"attr": (shorthand)} });
         }
     });
     return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

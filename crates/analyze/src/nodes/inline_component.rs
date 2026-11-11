@@ -613,6 +613,23 @@ fn collect_attribute(
                         return;
                     }
                 }
+                // A quoted value that is exactly one expression
+                // (`count="{n}"`) passes the expression itself, as
+                // `count={n}` does: svelte2tsx emits a single-mustache
+                // value bare (`Attribute.ts`), whatever the quotes.
+                if let [
+                    AttrValuePart::Expression {
+                        expression_range, ..
+                    },
+                ] = v.parts.as_slice()
+                {
+                    props.push(PropShape::Expression {
+                        name: p.name.clone(),
+                        expr_range: *expression_range,
+                        attr_range: p.range,
+                    });
+                    return;
+                }
                 // Multi-part interpolated attribute value
                 // (`class="a {b} c"`) — emit as a TS template
                 // literal `\`a ${b} c\`` so the embedded

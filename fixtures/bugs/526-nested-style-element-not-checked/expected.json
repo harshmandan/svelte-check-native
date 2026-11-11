@@ -1,0 +1,7 @@
+{
+    "errors": [
+        { "file": "Page.svelte", "line": 1, "column": 7, "code": 6133 },
+        { "file": "Page.svelte", "line": 2, "column": 7, "code": 6133 }
+    ],
+    "_note": "svelte2tsx takes every `<style>…</style>` in the file out of the template check, nested ones included (htmlxparser.ts finds them all with one regex and `handleStyleTag` removes them), while a nested `<script>` stays an element. So a `<style>` inside `<svelte:head>` or a `<div>` is not checked at all: its attributes are not typed and the names they read count as unused. We emitted it as `svelteHTML.createElement(\"style\", …)`, which typed `media={level}` (TS2322) and counted `level` and `label` as read."
+}

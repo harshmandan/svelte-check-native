@@ -171,11 +171,31 @@ pub fn event_handler_invalid_modifier_combination(modifier1: &str, modifier2: &s
     )
 }
 
+/// Expected an identifier
+pub fn expected_identifier() -> String {
+    format!("Expected an identifier\nhttps://svelte.dev/e/expected_identifier")
+}
+
+/// Expected identifier or destructure pattern
+pub fn expected_pattern() -> String {
+    format!("Expected identifier or destructure pattern\nhttps://svelte.dev/e/expected_pattern")
+}
+
 /// Expected 'html', 'render', 'attach', 'const', or 'debug'
 pub fn expected_tag() -> String {
     format!(
         "Expected 'html', 'render', 'attach', 'const', or 'debug'\nhttps://svelte.dev/e/expected_tag"
     )
+}
+
+/// Expected token %token%
+pub fn expected_token(token: &str) -> String {
+    format!("Expected token {token}\nhttps://svelte.dev/e/expected_token")
+}
+
+/// Expected whitespace
+pub fn expected_whitespace() -> String {
+    format!("Expected whitespace\nhttps://svelte.dev/e/expected_whitespace")
 }
 
 /// `use:`, `transition:` and `animate:` directives, attachments and bindings do not support await expressions

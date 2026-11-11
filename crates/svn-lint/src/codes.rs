@@ -109,7 +109,11 @@ pub enum Code {
     event_handler_invalid_component_modifier,
     event_handler_invalid_modifier,
     event_handler_invalid_modifier_combination,
+    expected_identifier,
+    expected_pattern,
     expected_tag,
+    expected_token,
+    expected_whitespace,
     experimental_async,
     export_let_unused,
     export_undefined,
@@ -363,7 +367,11 @@ impl Code {
             Self::event_handler_invalid_modifier_combination => {
                 "event_handler_invalid_modifier_combination"
             }
+            Self::expected_identifier => "expected_identifier",
+            Self::expected_pattern => "expected_pattern",
             Self::expected_tag => "expected_tag",
+            Self::expected_token => "expected_token",
+            Self::expected_whitespace => "expected_whitespace",
             Self::experimental_async => "experimental_async",
             Self::export_let_unused => "export_let_unused",
             Self::export_undefined => "export_undefined",
@@ -639,7 +647,11 @@ impl Code {
             "event_handler_invalid_modifier_combination" => {
                 Some(Self::event_handler_invalid_modifier_combination)
             }
+            "expected_identifier" => Some(Self::expected_identifier),
+            "expected_pattern" => Some(Self::expected_pattern),
             "expected_tag" => Some(Self::expected_tag),
+            "expected_token" => Some(Self::expected_token),
+            "expected_whitespace" => Some(Self::expected_whitespace),
             "experimental_async" => Some(Self::experimental_async),
             "export_let_unused" => Some(Self::export_let_unused),
             "export_undefined" => Some(Self::export_undefined),
@@ -783,7 +795,7 @@ impl Code {
 }
 
 /// All known codes, alphabetically sorted.
-pub const CODES: &[&str; 223] = &[
+pub const CODES: &[&str; 227] = &[
     "a11y_accesskey",
     "a11y_aria_activedescendant_has_tabindex",
     "a11y_aria_attributes",
@@ -883,7 +895,11 @@ pub const CODES: &[&str; 223] = &[
     "event_handler_invalid_component_modifier",
     "event_handler_invalid_modifier",
     "event_handler_invalid_modifier_combination",
+    "expected_identifier",
+    "expected_pattern",
     "expected_tag",
+    "expected_token",
+    "expected_whitespace",
     "experimental_async",
     "export_let_unused",
     "export_undefined",
@@ -1057,7 +1073,11 @@ pub const COMPILER_ERROR_CODES: &[&str] = &[
     "event_handler_invalid_component_modifier",
     "event_handler_invalid_modifier",
     "event_handler_invalid_modifier_combination",
+    "expected_identifier",
+    "expected_pattern",
     "expected_tag",
+    "expected_token",
+    "expected_whitespace",
     "experimental_async",
     "export_undefined",
     "global_reference_invalid",

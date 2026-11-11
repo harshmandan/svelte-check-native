@@ -24,6 +24,10 @@ use svn_parser::ast::{
 use crate::codes::Code;
 use crate::messages;
 
+mod tag_reader;
+
+use tag_reader::{TagError, TagReader};
+
 /// One parse error: code, rendered message and range.
 pub(crate) struct ParseFinding {
     pub code: Code,
@@ -77,6 +81,22 @@ impl Finder<'_> {
 
     fn point(at: u32) -> Range {
         Range::new(at, at)
+    }
+
+    fn reader(&self) -> TagReader<'_> {
+        TagReader::new(self.source, self.ts)
+    }
+
+    fn tag_error(&mut self, error: Option<TagError>) {
+        if let Some(e) = error {
+            self.report(e.at, e.code, e.message, Self::point(e.at));
+        }
+    }
+
+    /// The whitespace after the keyword of the block tag at `start`.
+    fn block_keyword(&mut self, start: u32, keyword: &str) {
+        let error = self.reader().keyword_whitespace(start, b'#', keyword);
+        self.tag_error(error);
     }
 
     fn fragment(&mut self, fragment: &Fragment, at_root: bool) {
@@ -145,8 +165,13 @@ impl Finder<'_> {
                 self.fragment(&se.children, false);
             }
             Node::IfBlock(b) => {
+                self.block_keyword(b.range.start, "if");
                 self.fragment(&b.consequent, false);
                 for arm in &b.elseif_arms {
+                    let error = self
+                        .reader()
+                        .whitespace_before_part(arm.condition_range.start);
+                    self.tag_error(error);
                     self.fragment(&arm.body, false);
                 }
                 if let Some(alt) = &b.alternate {
@@ -154,6 +179,8 @@ impl Finder<'_> {
                 }
             }
             Node::EachBlock(b) => {
+                let error = self.reader().each(b);
+                self.tag_error(error);
                 if let Some(clause) = &b.as_clause {
                     for r in [clause.context_range, clause.index_range]
                         .into_iter()
@@ -168,24 +195,33 @@ impl Finder<'_> {
                 }
             }
             Node::AwaitBlock(b) => {
+                self.block_keyword(b.range.start, "await");
                 if let Some(pending) = &b.pending {
                     self.fragment(pending, false);
                 }
                 if let Some(then) = &b.then_branch {
                     if let Some(r) = then.context_range {
                         self.reserved_identifier(r);
+                        let error = self.reader().branch_value(r);
+                        self.tag_error(error);
                     }
                     self.fragment(&then.body, false);
                 }
                 if let Some(catch) = &b.catch_branch {
                     if let Some(r) = catch.context_range {
                         self.reserved_identifier(r);
+                        let error = self.reader().branch_value(r);
+                        self.tag_error(error);
                     }
                     self.fragment(&catch.body, false);
                 }
             }
-            Node::KeyBlock(b) => self.fragment(&b.body, false),
+            Node::KeyBlock(b) => {
+                self.block_keyword(b.range.start, "key");
+                self.fragment(&b.body, false);
+            }
             Node::SnippetBlock(b) => {
+                self.block_keyword(b.range.start, "snippet");
                 // The snippet's name is read as an identifier.
                 let tag = &self.source[b.range.start as usize..];
                 if let Some(keyword) = tag.find("snippet") {
@@ -472,6 +508,8 @@ impl Finder<'_> {
             }
             InterpolationKind::AtDebug => self.debug_tag(i),
             InterpolationKind::AtRender => {
+                let error = self.reader().keyword_whitespace(start, b'@', "render");
+                self.tag_error(error);
                 let range = trimmed_range(i.expression_range, self.source);
                 let is_call =
                     parse_expression(range, self.source, |expr| match unparenthesized(expr) {
@@ -491,7 +529,15 @@ impl Finder<'_> {
                     );
                 }
             }
-            InterpolationKind::AtConst => self.const_tag(i),
+            InterpolationKind::AtConst => {
+                let error = self.reader().const_tag(i);
+                self.tag_error(error);
+                self.const_tag(i);
+            }
+            InterpolationKind::AtHtml => {
+                let error = self.reader().keyword_whitespace(start, b'@', "html");
+                self.tag_error(error);
+            }
             InterpolationKind::Expression => {
                 // An empty `{}` has no expression for acorn to read: it
                 // stops at the closing brace.
@@ -505,9 +551,7 @@ impl Finder<'_> {
                     );
                 }
             }
-            InterpolationKind::DeclConst
-            | InterpolationKind::DeclLet
-            | InterpolationKind::AtHtml => {}
+            InterpolationKind::DeclConst | InterpolationKind::DeclLet => {}
         }
     }
 

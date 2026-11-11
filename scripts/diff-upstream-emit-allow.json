@@ -14,7 +14,7 @@
       "kind": "element",
       "ours": "import(\"../../bar\")",
       "upstream": "import(\"../../../../bar\")",
-      "reason": "Relative specifiers: upstream rewrites them for the generated file's location; we leave them as written and resolve them through the overlay tsconfig's `rootDirs`, which maps the overlay directory onto the source tree."
+      "reason": "Same rewrite, different stage: like svelte2tsx's rewriteExternalImports, we rewrite a `../` specifier that leaves the workspace so it resolves from the overlay's directory, and leave every other relative specifier to the overlay tsconfig's `rootDirs`. We do it when the overlay is written (`rewrite_external_imports` in crates/typecheck/src/path_utils.rs), after the point where `--emit-ts` prints, so the snapshot shows the specifier as written."
     },
     {
       "status": "bug",

@@ -1,0 +1,6 @@
+{
+    "errors": [
+        { "file": "Page.svelte", "line": 9, "column": 35, "code": 2339 }
+    ],
+    "_note": "An attachment on a component is a prop keyed by a fresh symbol (svelte2tsx writes `[Symbol(\"@attach\")]: fn` into the component's props), so the component's symbol index signature gives the arrow's parameter its type: `element` is an HTMLDivElement here, and the only error is the missing property on it. Written as a spread (`...(fn)`) the arrow has no contextual type, so both parameters were implicitly `any` (TS7006) and the property error went unreported."
+}

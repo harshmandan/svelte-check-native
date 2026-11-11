@@ -521,8 +521,20 @@ pub(crate) fn parse_await_header(
 fn is_await_branch_split(header: &str, p: usize, kw_len: usize) -> bool {
     let bytes = header.as_bytes();
     let mut i = p;
-    while i > 0 && bytes[i - 1].is_ascii_whitespace() {
-        i -= 1;
+    // Block comments between the expression and the keyword are
+    // skipped along with the whitespace, as acorn skips them.
+    loop {
+        while i > 0 && bytes[i - 1].is_ascii_whitespace() {
+            i -= 1;
+        }
+        if i >= 2 && &bytes[i - 2..i] == b"*/" {
+            match header[..i - 2].rfind("/*") {
+                Some(open) => i = open,
+                None => break,
+            }
+        } else {
+            break;
+        }
     }
     if i == 0 {
         // Nothing before the keyword: `{#await then}` awaits a variable

@@ -59,7 +59,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SNAP = path.join(ROOT, 'crates/cli/tests/emit_snapshots');
 const ALLOW = path.join(ROOT, 'scripts/diff-upstream-emit-allow.json');
-const CORPORA = { svelte2tsx: 'ts', htmlx2jsx: 'js' };
+const CORPORA = { svelte2tsx: 'ts', htmlx2jsx: 'js', bugs: 'ts' };
 
 const args = process.argv.slice(2);
 const flag = (f) => args.includes(f);
@@ -253,7 +253,7 @@ function normalize(text) {
             // svelte2tsx ends a component's block with the bare tag name
             // (`… } Component}`), a reference for editor navigation with no
             // effect on types.
-            .replace(/\}[A-Za-z_$][\w$.]*\}/g, '}}')
+            .replace(/([})]);?[A-Za-z_$][\w$.]*\}/g, '$1}')
     );
 }
 
@@ -299,7 +299,30 @@ function unwrapValues(s) {
 
 // ------------------------------------------------------------ extracting
 
-function extract(text) {
+/** `text` with every comment blanked to spaces (same offsets). */
+function blankComments(text) {
+    let out = '';
+    let i = 0;
+    while (i < text.length) {
+        const c = text[i];
+        const skip = skipNonCode(text, i);
+        if (skip >= 0) {
+            const chunk = text.slice(i, skip);
+            out += c === '/' ? chunk.replace(/[^\n]/g, ' ') : chunk;
+            i = skip;
+            continue;
+        }
+        out += c;
+        i++;
+    }
+    return out;
+}
+
+function extract(original) {
+    // Match on code only (a comment can mention `createElement(` too);
+    // spans read from the original, comments included, since a JSDoc
+    // cast in a value is part of it.
+    const text = blankComments(original);
     const found = [];
     let m;
     const el = /svelteHTML\.createElement\(/g;
@@ -309,11 +332,11 @@ function extract(text) {
         // const __svn_el = createElement("div", {}); … })()`); upstream
         // reads the element's own local (`x = $$_div0`). The element type
         // comes from the tag alone, so these are not elements to compare.
-        const before = text.slice(Math.max(0, m.index - 60), m.index);
+        const before = original.slice(Math.max(0, m.index - 60), m.index);
         if (/=\s*$/.test(before) && !/const\s+\$\$_[\w$]+\s*=\s*$/.test(before)) continue;
         const open = m.index + m[0].length - 1;
         const close = matchClose(text, open);
-        const [tag, attrs = '', ...rest] = splitTop(text.slice(open + 1, close));
+        const [tag, attrs = '', ...rest] = splitTop(original.slice(open + 1, close));
         found.push({
             kind: 'element',
             at: m.index,
@@ -325,16 +348,16 @@ function extract(text) {
     while ((m = comp.exec(text))) {
         const open = m.index + m[0].length - 1;
         const close = matchClose(text, open);
-        const props = objectKey(text.slice(open, close + 1), 'props');
+        const props = objectKey(original.slice(open, close + 1), 'props');
         if (props === undefined) continue;
         // The component expression handed to ensureComponent for this local.
         const local = m[1].replace(/[$]/g, '\\$');
         const decl = new RegExp(
             `const\\s+${local}\\s*=\\s*(?:__sveltets_2_ensureComponent|__svn_ensure_component)\\(`
-        ).exec(text.slice(0, m.index).split('\n').slice(-6).join('\n'));
+        ).exec(original.slice(0, m.index).split('\n').slice(-6).join('\n'));
         let label = '';
         if (decl) {
-            const before = text.slice(0, m.index).split('\n').slice(-6).join('\n');
+            const before = original.slice(0, m.index).split('\n').slice(-6).join('\n');
             const o = decl.index + decl[0].length - 1;
             label = normalize(before.slice(o + 1, matchClose(before, o)));
         }
@@ -349,7 +372,7 @@ function extract(text) {
             kind: 'component',
             at: m.index,
             label: 'H.createcomponentany',
-            text: unwrapValues(normalize(text.slice(open, close + 1))),
+            text: unwrapValues(normalize(original.slice(open, close + 1))),
         });
     }
     // Template control flow and snippets. Each records the text that
@@ -366,7 +389,7 @@ function extract(text) {
                 kind,
                 at: mm.index,
                 label: label(mm),
-                text: stripOuterParens(normalize(text.slice(open + 1, close))),
+                text: stripOuterParens(normalize(original.slice(open + 1, close))),
             });
         }
     };
@@ -383,7 +406,11 @@ function extract(text) {
     while ((m = iso.exec(text))) {
         const open = m.index + m[0].length - 1;
         const close = matchClose(text, open);
-        const body = text.slice(open + 1, close);
+        const body = original.slice(open + 1, close);
+        // svelte2tsx writes the interface inline only for a generic
+        // component (`new <T>(…)`); a non-generic one goes through the
+        // shim's factory, so ours has nothing to compare against.
+        if (!/^\s*new\s*</.test(body)) continue;
         // One construct per member, keyed by its leading token.
         for (const line of body.split('\n').map((l) => l.trim()).filter(Boolean)) {
             const key = line.startsWith('new')

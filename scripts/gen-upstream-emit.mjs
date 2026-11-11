@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // gen-upstream-emit.mjs — write upstream's emit for every emit-snapshot
-// sample that comes from language-tools, as `upstream.emit.ts` next to
-// our `expected.emit.ts`.
+// sample (language-tools' svelte2tsx / htmlx2jsx samples and our own
+// fixtures/bugs), as `upstream.emit.ts` next to our `expected.emit.ts`.
 //
 // The reference is what `svelte-check --tsgo` itself generates: svelte2tsx
 // (pinned in scripts/upstream-emit/package.json to the language-tools
@@ -65,6 +65,20 @@ function isTsSvelte(text) {
     return false;
 }
 
+/**
+ * The Svelte version svelte-check passes for a workspace: the nearest
+ * installed `svelte` package (some fixtures pin a Svelte 4 stub), else
+ * the pinned one.
+ */
+function svelteVersionFor(workspace) {
+    for (let dir = workspace; dir.startsWith(ROOT); dir = path.dirname(dir)) {
+        const pkg = path.join(dir, 'node_modules', 'svelte', 'package.json');
+        if (fs.existsSync(pkg)) return JSON.parse(fs.readFileSync(pkg, 'utf8')).version;
+        if (dir === ROOT) break;
+    }
+    return VERSION;
+}
+
 /** The `.svelte` files our snapshot covers, in the order it lists them. */
 function snapshotFiles(snapshot) {
     return [...snapshot.matchAll(/^\/\/ === (.+) ===$/gm)].map((m) => m[1]);
@@ -72,12 +86,20 @@ function snapshotFiles(snapshot) {
 
 let written = 0;
 let errors = 0;
-for (const corpus of ['svelte2tsx', 'htmlx2jsx']) {
+// Where each corpus keeps its inputs: upstream's samples, and our own
+// bug fixtures.
+const inputDir = {
+    svelte2tsx: (name) => path.join(SAMPLES, 'svelte2tsx', 'samples', name),
+    htmlx2jsx: (name) => path.join(SAMPLES, 'htmlx2jsx', 'samples', name),
+    bugs: (name) => path.join(ROOT, 'fixtures', 'bugs', name),
+};
+for (const corpus of Object.keys(inputDir)) {
     const snapDir = path.join(SNAP, corpus);
     for (const name of fs.readdirSync(snapDir).sort()) {
         const ours = path.join(snapDir, name, 'expected.emit.ts');
         if (!fs.existsSync(ours)) continue;
-        const workspace = path.join(SAMPLES, corpus, 'samples', name);
+        const workspace = inputDir[corpus](name);
+        if (!fs.existsSync(workspace)) continue;
         const parts = [];
         const failures = [];
         for (const rel of snapshotFiles(fs.readFileSync(ours, 'utf8'))) {
@@ -93,7 +115,7 @@ for (const corpus of ['svelte2tsx', 'htmlx2jsx']) {
             try {
                 const { code } = svelte2tsx(text, {
                     parse,
-                    version: VERSION,
+                    version: svelteVersionFor(workspace),
                     filename: sourcePath,
                     isTsFile,
                     mode: 'ts',

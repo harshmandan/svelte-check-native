@@ -1,0 +1,197 @@
+{
+    "errors": [
+        {
+            "file": "Page.svelte",
+            "line": 12,
+            "column": 15,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 13,
+            "column": 11,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 14,
+            "column": 17,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 15,
+            "column": 13,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 16,
+            "column": 16,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 17,
+            "column": 12,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 18,
+            "column": 17,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 19,
+            "column": 13,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 20,
+            "column": 18,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 21,
+            "column": 14,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 22,
+            "column": 15,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 23,
+            "column": 11,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 24,
+            "column": 14,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 25,
+            "column": 10,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 26,
+            "column": 21,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 27,
+            "column": 17,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 28,
+            "column": 19,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 29,
+            "column": 15,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 30,
+            "column": 9,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 31,
+            "column": 5,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 32,
+            "column": 9,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 33,
+            "column": 5,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 34,
+            "column": 9,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 35,
+            "column": 5,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 36,
+            "column": 9,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 37,
+            "column": 5,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 38,
+            "column": 17,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 39,
+            "column": 13,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 40,
+            "column": 32,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 41,
+            "column": 28,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 42,
+            "column": 16,
+            "code": 2322
+        },
+        {
+            "file": "Page.svelte",
+            "line": 43,
+            "column": 35,
+            "code": 2322
+        }
+    ],
+    "_note": "A type error on a `\"bind:NAME\"` attribute key (`bind:open={n}` with a number, `bind:clientWidth={null, set}` with a string setter) lands where svelte-check's source map puts the key's opening quote: at the end of the last source text the previous attribute keeps \u2014 a bare name's end, an unquoted value's end, a quoted value's last character before the closing quote, an expression's end \u2014 skipping `class:`, `style:`, `use:`, `bind:this` and `<svelte:element>`'s `this`, which are not attributes of the element; when only those come before, at the start of the first attribute; with nothing before, at the binding's `=`. A plain expression binding and a get/set pair follow the same rule. The anchor used to be the previous attribute's last character for one and the character after it for the other, wherever its source text ended."
+}

@@ -688,20 +688,21 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
                 // attribute type doesn't declare fires TS2353 there, a
                 // value it doesn't accept TS2322, and the expression is
                 // read.
-                if d.kind == svn_parser::DirectiveKind::Bind
-                    && (crate::nodes::binding::is_attribute_binding(d)
-                        || (d.name.as_str() == "this"
-                            && tag_literal
-                            && tag_name.starts_with("svelte:")
-                            && tag_name != "svelte:body"))
+                if is_bind_attribute(d, tag_literal, tag_name)
                     && let Some(parts) = dom_bind_attribute_parts(
                         source,
                         d,
-                        attributes
-                            .iter()
-                            .take_while(|a| !std::ptr::eq(*a, attr))
-                            .last()
-                            .map(|prev| prev.range().end),
+                        bind_key_anchor(
+                            source,
+                            attributes,
+                            attributes
+                                .iter()
+                                .take_while(|a| !std::ptr::eq(*a, attr))
+                                .count(),
+                            svelte_element,
+                            tag_literal,
+                            tag_name,
+                        ),
                     )
                 {
                     if !any {
@@ -742,6 +743,127 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
     }
 }
 
+/// Is `d` a `bind:` directive written into the element's attribute
+/// literal? See the call site in [`emit_dom_element_open_with_snippet_props`].
+fn is_bind_attribute(d: &svn_parser::Directive, tag_literal: bool, tag_name: &str) -> bool {
+    d.kind == svn_parser::DirectiveKind::Bind
+        && (crate::nodes::binding::is_attribute_binding(d)
+            || (d.name.as_str() == "this"
+                && tag_literal
+                && tag_name.starts_with("svelte:")
+                && tag_name != "svelte:body"))
+}
+
+/// The source byte a diagnostic on the `"bind:NAME"` key of the
+/// attribute at `index` maps to, when an attribute precedes it; `None`
+/// when it is the first (the key then maps to its own `=`).
+///
+/// svelte2tsx writes the key's opening quote as inserted text, and its
+/// `transform` (`htmlxtojsx_v2/utils/node-utils.ts`) writes inserted
+/// text over the character right after the source range moved before
+/// it. That range is the last one the previous attribute written into
+/// the literal keeps — so the key maps to where that range ends: a bare
+/// name's end, an unquoted value's end, a quoted value's last character
+/// before the closing quote, an expression's end. Directives that are
+/// not attributes of the element (`class:`, `style:`, `use:`,
+/// `bind:this`, transitions, `<svelte:element>`'s `this`) are skipped;
+/// when only they precede the key, it maps to the first attribute's
+/// start, where the blanked run before the key begins.
+fn bind_key_anchor(
+    source: &str,
+    attributes: &[svn_parser::Attribute],
+    index: usize,
+    svelte_element: bool,
+    tag_literal: bool,
+    tag_name: &str,
+) -> Option<u32> {
+    let before = attributes.get(..index)?;
+    let first = before.first()?;
+    let trimmed_end = |r: svn_core::Range| {
+        let text = r.slice(source);
+        r.start + text.trim_end().len() as u32
+    };
+    let kept_end =
+        |a: &svn_parser::Attribute| -> Option<u32> {
+            use svn_parser::{AttrValuePart, Attribute, DirectiveKind, DirectiveValue};
+            match a {
+                Attribute::Plain(p) => {
+                    if should_skip(p.name.as_str(), p.value.as_ref(), svelte_element) {
+                        return None;
+                    }
+                    let Some(v) = &p.value else {
+                        return Some(p.range.end);
+                    };
+                    Some(match v.parts.as_slice() {
+                        [] => p.range.end,
+                        [
+                            AttrValuePart::Expression {
+                                expression_range, ..
+                            },
+                        ] => trimmed_end(*expression_range),
+                        [.., AttrValuePart::Text { range }] => range.end,
+                        [.., AttrValuePart::Expression { range, .. }] => range.end,
+                    })
+                }
+                Attribute::Expression(e) => (!should_skip(e.name.as_str(), None, svelte_element))
+                    .then(|| trimmed_end(e.expression_range)),
+                Attribute::Shorthand(s) => (!should_skip(s.name.as_str(), None, svelte_element))
+                    .then(|| {
+                        let inner = source
+                            .get(s.range.start as usize + 1..s.range.end as usize)
+                            .unwrap_or("");
+                        let leading_ws = (inner.len() - inner.trim_start().len()) as u32;
+                        s.range.start + 1 + leading_ws + s.name.len() as u32
+                    }),
+                Attribute::Spread(sp) => crate::nodes::spread::can_emit(source, sp)
+                    .then(|| trimmed_end(sp.expression_range)),
+                Attribute::Attach(at) => {
+                    crate::nodes::attach_tag::expression_range(source, at).map(|r| r.end)
+                }
+                Attribute::Comment(c) => Some(c.range.end),
+                Attribute::Directive(d) => {
+                    let is_attribute = match d.kind {
+                        DirectiveKind::On => true,
+                        DirectiveKind::Let => {
+                            !crate::nodes::let_directive::lets_destructured_by_parent(attributes)
+                        }
+                        DirectiveKind::Bind => is_bind_attribute(d, tag_literal, tag_name),
+                        _ => false,
+                    };
+                    if !is_attribute {
+                        return None;
+                    }
+                    Some(match &d.value {
+                        Some(DirectiveValue::Expression {
+                            expression_range, ..
+                        }) => trimmed_end(*expression_range),
+                        Some(DirectiveValue::BindPair { setter_range, .. }) => {
+                            trimmed_end(*setter_range)
+                        }
+                        Some(DirectiveValue::Quoted(v)) => match v.parts.as_slice() {
+                            [
+                                AttrValuePart::Expression {
+                                    expression_range, ..
+                                },
+                            ] => trimmed_end(*expression_range),
+                            [.., AttrValuePart::Text { range }] => range.end,
+                            [.., AttrValuePart::Expression { range, .. }] => range.end,
+                            [] => d.range.end,
+                        },
+                        _ => d.range.end,
+                    })
+                }
+            }
+        };
+    Some(
+        before
+            .iter()
+            .rev()
+            .find_map(kept_end)
+            .unwrap_or(first.range().start),
+    )
+}
+
 /// The value side of a `"bind:NAME": …` attribute entry.
 enum BindValue<'a> {
     /// `bind:NAME={expr}` / `bind:NAME` — the expression as written.
@@ -778,12 +900,12 @@ struct DomBindAttribute<'a> {
 /// upstream's does — an artefact of its source map, which puts the
 /// inserted opening quote at the end of the preceding original text:
 /// the tag's first attribute reports at its `=`, any later attribute
-/// at the last character of the attribute before it (`prev_end`), and
-/// the shorthand form at its start.
+/// at `prev_anchor` (see [`bind_key_anchor`]), and the shorthand form
+/// at its start.
 fn dom_bind_attribute_parts<'a>(
     source: &'a str,
     d: &svn_parser::Directive,
-    prev_end: Option<u32>,
+    prev_anchor: Option<u32>,
 ) -> Option<DomBindAttribute<'a>> {
     let name = d.name.as_str();
     let expression_range = match &d.value {
@@ -822,11 +944,7 @@ fn dom_bind_attribute_parts<'a>(
             let eq = head.rfind('=')?;
             return Some(DomBindAttribute {
                 key_text: &head[..eq],
-                // A get/set key maps where the previous attribute ended.
-                key_anchor: match prev_end {
-                    Some(end) => end,
-                    None => d.range.start + eq as u32,
-                },
+                key_anchor: prev_anchor.unwrap_or(d.range.start + eq as u32),
                 value: BindValue::GetSet {
                     getter: source.get(getter_range.start as usize..getter_range.end as usize)?,
                     getter_range: *getter_range,
@@ -847,10 +965,7 @@ fn dom_bind_attribute_parts<'a>(
     let eq = head.rfind('=')?;
     Some(DomBindAttribute {
         key_text: &head[..eq],
-        key_anchor: match prev_end {
-            Some(end) => end.saturating_sub(1),
-            None => d.range.start + eq as u32,
-        },
+        key_anchor: prev_anchor.unwrap_or(d.range.start + eq as u32),
         value: BindValue::Expr {
             text,
             range: svn_core::Range::new(start, start + text.len() as u32),

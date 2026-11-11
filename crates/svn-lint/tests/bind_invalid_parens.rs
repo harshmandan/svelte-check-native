@@ -21,7 +21,8 @@ fn codes(source: &str) -> Vec<&'static str> {
     lint(source).iter().map(|w| w.code.as_str()).collect()
 }
 
-const SCRIPT: &str = "<script>let v = $state(''); const get = () => v; const set = (x) => (v = x);</script>\n";
+const SCRIPT: &str =
+    "<script>let v = $state(''); const get = () => v; const set = (x) => (v = x);</script>\n";
 
 #[test]
 fn parenthesis_in_a_leading_comment_is_allowed() {
@@ -45,4 +46,12 @@ fn surrounding_parenthesis_is_rejected() {
 fn parenthesis_after_a_leading_comment_is_rejected() {
     let src = format!("{SCRIPT}<input bind:value={{/* c */ (get, set)}} />");
     assert_eq!(codes(&src), ["bind_invalid_parens"]);
+}
+
+#[test]
+fn comment_in_front_of_the_parenthesis_does_not_exempt_it() {
+    for value in ["{/* c */(get, set)}", "{/* a */ ( /* b */ get, set)}"] {
+        let src = format!("{SCRIPT}<input bind:value={value} />");
+        assert_eq!(codes(&src), ["bind_invalid_parens"], "{value}");
+    }
 }

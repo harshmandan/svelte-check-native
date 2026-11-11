@@ -1376,7 +1376,7 @@ fn bind_sequence_checks(
             d.range,
         );
     }
-    if parenthesis_before(source, start) {
+    if parenthesis_before(source, range.start, start) {
         ctx.emit_error(
             Code::bind_invalid_parens,
             messages::bind_invalid_parens(d.name.as_str()),
@@ -1393,30 +1393,54 @@ fn bind_sequence_checks(
     true
 }
 
-/// Whether a `(` outside a comment sits between the `{` opening the
-/// directive value and `start`.
-fn parenthesis_before(source: &str, start: u32) -> bool {
-    let Some(open) = source[..start as usize].rfind('{') else {
-        return false;
-    };
-    let between = &source[open + 1..start as usize];
-    let bytes = between.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i..].starts_with(b"/*") {
-            i = between[i + 2..]
-                .find("*/")
-                .map_or(bytes.len(), |e| i + 2 + e + 2);
-            continue;
+/// The compiler's `bind_invalid_parens` walk (`BindDirective.js`): from
+/// the start of the getter/setter sequence back to the nearest `{`, any
+/// `(` is an error unless it lies within the span of the comments
+/// leading the sequence — from the first one's start through the last
+/// one's end, both inclusive. The walk stops at the first `{` it meets,
+/// even one inside a comment.
+///
+/// The leading comments are those acorn attaches to the sequence. It
+/// parses with `preserveParens`, so a comment in front of a `(` belongs
+/// to that parenthesised expression (stripped again afterwards) and
+/// only the comments after the innermost `(` lead the sequence. They
+/// are read from the directive value (`value_start`) up to the
+/// sequence, where nothing but whitespace, `(` and comments can stand.
+fn parenthesis_before(source: &str, value_start: u32, start: u32) -> bool {
+    let bytes = source.as_bytes();
+    let (value_start, start) = (value_start as usize, start as usize);
+    let mut leading: Option<(usize, usize)> = None;
+    let mut i = value_start;
+    while i < start {
+        let end = if bytes[i..start].starts_with(b"/*") {
+            source[i + 2..start].find("*/").map(|e| i + 2 + e + 2)
+        } else if bytes[i..start].starts_with(b"//") {
+            Some(source[i..start].find('\n').map_or(start, |e| i + e))
+        } else {
+            None
+        };
+        match end {
+            Some(end) => {
+                leading = Some((leading.map_or(i, |(first, _)| first), end));
+                i = end;
+            }
+            None => {
+                if bytes[i] == b'(' {
+                    leading = None;
+                }
+                i += 1;
+            }
         }
-        if bytes[i..].starts_with(b"//") {
-            i = between[i..].find('\n').map_or(bytes.len(), |e| i + e);
-            continue;
+    }
+    let exempt = |at: usize| leading.is_some_and(|(first, last)| first <= at && at <= last);
+    let mut i = start;
+    while i > 0 {
+        i -= 1;
+        match bytes[i] {
+            b'{' => return false,
+            b'(' if !exempt(i) => return true,
+            _ => {}
         }
-        if bytes[i] == b'(' {
-            return true;
-        }
-        i += 1;
     }
     false
 }

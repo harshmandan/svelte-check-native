@@ -121,6 +121,9 @@ pub struct Interpolation {
     pub expression_range: Range,
     /// Range of the full `{…}` including braces.
     pub range: Range,
+    /// The error the compiler throws reading the tag; the component is
+    /// rejected.
+    pub open_error: Option<crate::tag_read::TagReadError>,
 }
 
 /// What flavour of `{…}` tag an [`Interpolation`] is. Set by the
@@ -576,6 +579,9 @@ pub struct IfBlock {
     pub elseif_arms: Vec<ElseIfArm>,
     /// `{:else}` body, if present.
     pub alternate: Option<Fragment>,
+    /// The error the compiler throws reading the `{#if …}` tag; the
+    /// component is rejected.
+    pub open_error: Option<crate::tag_read::TagReadError>,
     pub range: Range,
 }
 
@@ -583,6 +589,8 @@ pub struct IfBlock {
 pub struct ElseIfArm {
     pub condition_range: Range,
     pub body: Fragment,
+    /// The error the compiler throws reading the `{:else if …}` tag.
+    pub open_error: Option<crate::tag_read::TagReadError>,
 }
 
 /// `{#each expr as item, index (key)}...{:else}...{/each}`.
@@ -664,6 +672,9 @@ pub struct CatchBranch {
 pub struct KeyBlock {
     pub expression_range: Range,
     pub body: Fragment,
+    /// The error the compiler throws reading the `{#key …}` tag; the
+    /// component is rejected.
+    pub open_error: Option<crate::tag_read::TagReadError>,
     pub range: Range,
 }
 

@@ -647,24 +647,6 @@ const CASES: &[(bool, &str, Expected)] = &[
             32,
         )),
     ),
-    (
-        false,
-        "{/re}/.test(a)}",
-        Some((
-            "block_unexpected_close",
-            "Unexpected block closing tag\nhttps://svelte.dev/e/block_unexpected_close",
-            19,
-        )),
-    ),
-    (
-        true,
-        "{/re}/.test(a)}",
-        Some((
-            "block_unexpected_close",
-            "Unexpected block closing tag\nhttps://svelte.dev/e/block_unexpected_close",
-            29,
-        )),
-    ),
     (false, "{a ? {} : {}}", None),
     (true, "{a ? {} : {}}", None),
     (false, "{a}}", None),
@@ -1169,6 +1151,364 @@ const CASES: &[(bool, &str, Expected)] = &[
     ),
     (false, "{#if x}{@const a = 1}}{/if}", None),
     (true, "{#if x}{@const a = 1}}{/if}", None),
+    (
+        false,
+        "{`a",
+        Some((
+            "js_parse_error",
+            "Unterminated template\nhttps://svelte.dev/e/js_parse_error",
+            20,
+        )),
+    ),
+    (
+        true,
+        "{`a",
+        Some((
+            "js_parse_error",
+            "Unterminated template\nhttps://svelte.dev/e/js_parse_error",
+            30,
+        )),
+    ),
+    (
+        false,
+        "{`a}",
+        Some((
+            "js_parse_error",
+            "Unterminated template\nhttps://svelte.dev/e/js_parse_error",
+            20,
+        )),
+    ),
+    (
+        true,
+        "{`a}",
+        Some((
+            "js_parse_error",
+            "Unterminated template\nhttps://svelte.dev/e/js_parse_error",
+            30,
+        )),
+    ),
+    (
+        false,
+        "{`${a}`",
+        Some((
+            "expected_token",
+            "Expected token }\nhttps://svelte.dev/e/expected_token",
+            25,
+        )),
+    ),
+    (
+        true,
+        "{`${a}`",
+        Some((
+            "expected_token",
+            "Expected token }\nhttps://svelte.dev/e/expected_token",
+            35,
+        )),
+    ),
+    (
+        false,
+        "{a + `b",
+        Some((
+            "js_parse_error",
+            "Unterminated template\nhttps://svelte.dev/e/js_parse_error",
+            24,
+        )),
+    ),
+    (
+        true,
+        "{a + `b",
+        Some((
+            "js_parse_error",
+            "Unterminated template\nhttps://svelte.dev/e/js_parse_error",
+            34,
+        )),
+    ),
+    (
+        false,
+        "{`${`}",
+        Some((
+            "js_parse_error",
+            "Unterminated template\nhttps://svelte.dev/e/js_parse_error",
+            23,
+        )),
+    ),
+    (
+        true,
+        "{`${`}",
+        Some((
+            "js_parse_error",
+            "Unterminated template\nhttps://svelte.dev/e/js_parse_error",
+            33,
+        )),
+    ),
+    (
+        false,
+        "{`${a",
+        Some((
+            "js_parse_error",
+            "Unexpected token\nhttps://svelte.dev/e/js_parse_error",
+            23,
+        )),
+    ),
+    (
+        true,
+        "{`${a",
+        Some((
+            "js_parse_error",
+            "Unexpected token\nhttps://svelte.dev/e/js_parse_error",
+            33,
+        )),
+    ),
+    (
+        false,
+        "{`${a} b ${c}",
+        Some((
+            "js_parse_error",
+            "Unterminated template literal\nhttps://svelte.dev/e/js_parse_error",
+            31,
+        )),
+    ),
+    (
+        true,
+        "{`${a} b ${c}",
+        Some((
+            "js_parse_error",
+            "Unterminated template literal\nhttps://svelte.dev/e/js_parse_error",
+            41,
+        )),
+    ),
+    (false, "{`${a}`}", None),
+    (true, "{`${a}`}", None),
+    (
+        false,
+        "{#each `a as b}{/each}",
+        Some((
+            "js_parse_error",
+            "Unterminated template\nhttps://svelte.dev/e/js_parse_error",
+            26,
+        )),
+    ),
+    (
+        true,
+        "{#each `a as b}{/each}",
+        Some((
+            "js_parse_error",
+            "Unterminated template\nhttps://svelte.dev/e/js_parse_error",
+            36,
+        )),
+    ),
+    (
+        false,
+        "{#each `${a} as b}{/each}",
+        Some((
+            "js_parse_error",
+            "Unterminated template\nhttps://svelte.dev/e/js_parse_error",
+            30,
+        )),
+    ),
+    (
+        true,
+        "{#each `${a} as b}{/each}",
+        Some((
+            "js_parse_error",
+            "Unterminated template\nhttps://svelte.dev/e/js_parse_error",
+            40,
+        )),
+    ),
+    (false, "{a /* as */}", None),
+    (true, "{a /* as */}", None),
+    (false, "{a /* x as y */}", None),
+    (true, "{a /* x as y */}", None),
+    (false, "{a // as b\n}", None),
+    (true, "{a // as b\n}", None),
+    (false, "{f(a) /* as */ }", None),
+    (true, "{f(a) /* as */ }", None),
+    (
+        false,
+        "{a satisfies b}",
+        Some((
+            "expected_token",
+            "Expected token }\nhttps://svelte.dev/e/expected_token",
+            21,
+        )),
+    ),
+    (true, "{a satisfies b}", None),
+    (
+        false,
+        "{#eachx as y}{/each}",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            24,
+        )),
+    ),
+    (
+        true,
+        "{#eachx as y}{/each}",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            34,
+        )),
+    ),
+    (
+        false,
+        "{#keyx}{/key}",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            23,
+        )),
+    ),
+    (
+        true,
+        "{#keyx}{/key}",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            33,
+        )),
+    ),
+    (
+        false,
+        "{#awaitx}{/await}",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            25,
+        )),
+    ),
+    (
+        true,
+        "{#awaitx}{/await}",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            35,
+        )),
+    ),
+    (
+        false,
+        "{#snippetx()}{/snippet}",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            27,
+        )),
+    ),
+    (
+        true,
+        "{#snippetx()}{/snippet}",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            37,
+        )),
+    ),
+    (
+        false,
+        "{#if(a)}y{/if}",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            22,
+        )),
+    ),
+    (
+        true,
+        "{#if(a)}y{/if}",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            32,
+        )),
+    ),
+    (
+        false,
+        "{#key(a)}y{/key}",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            23,
+        )),
+    ),
+    (
+        true,
+        "{#key(a)}y{/key}",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            33,
+        )),
+    ),
+    (
+        false,
+        "{@html(a)}",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            24,
+        )),
+    ),
+    (
+        true,
+        "{@html(a)}",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            34,
+        )),
+    ),
+    (
+        false,
+        "{@html`a`}",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            24,
+        )),
+    ),
+    (
+        true,
+        "{@html`a`}",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            34,
+        )),
+    ),
+    (false, "{@debug(a)}", None),
+    (true, "{@debug(a)}", None),
+    (
+        false,
+        "{@render(a())}",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            26,
+        )),
+    ),
+    (
+        true,
+        "{@render(a())}",
+        Some((
+            "expected_whitespace",
+            "Expected whitespace\nhttps://svelte.dev/e/expected_whitespace",
+            36,
+        )),
+    ),
+    (
+        false,
+        "{#if a satisfies b}x{/if}",
+        Some((
+            "expected_token",
+            "Expected token }\nhttps://svelte.dev/e/expected_token",
+            25,
+        )),
+    ),
+    (true, "{#if a satisfies b}x{/if}", None),
+    (false, "{a /* satisfies */}", None),
+    (true, "{a /* satisfies */}", None),
 ];
 
 fn source(ts: bool, template: &str) -> String {

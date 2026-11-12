@@ -26,7 +26,7 @@ use crate::messages;
 
 mod tag_reader;
 
-use tag_reader::{TagError, TagReader};
+use tag_reader::TagError;
 
 /// One parse error: code, rendered message and range.
 pub(crate) struct ParseFinding {
@@ -84,8 +84,15 @@ impl Finder<'_> {
         Range::new(at, at)
     }
 
-    fn reader(&self) -> TagReader<'_> {
-        TagReader::new(self.source, self.ts)
+    /// The part of a tag's `range` that acorn reads as its expression:
+    /// the compiler checks that expression before it expects the `}`.
+    fn read_expression(&self, range: Range) -> Range {
+        match svn_parser::acorn::read_expression(range.slice(self.source), self.ts) {
+            svn_parser::acorn::Read::Expression { end, .. } => {
+                Range::new(range.start, range.start + end)
+            }
+            svn_parser::acorn::Read::Error { .. } => range,
+        }
     }
 
     fn tag_error(&mut self, error: Option<TagError>) {
@@ -97,12 +104,6 @@ impl Finder<'_> {
     /// The error the parser met reading a tag the way the compiler does.
     fn read_error(&mut self, error: Option<&svn_parser::tag_read::TagReadError>) {
         self.tag_error(error.cloned().map(TagError::from));
-    }
-
-    /// The whitespace after the keyword of the block tag at `start`.
-    fn block_keyword(&mut self, start: u32, keyword: &str) {
-        let error = self.reader().keyword_whitespace(start, b'#', keyword);
-        self.tag_error(error);
     }
 
     fn fragment(&mut self, fragment: &Fragment, at_root: bool) {
@@ -171,13 +172,10 @@ impl Finder<'_> {
                 self.fragment(&se.children, false);
             }
             Node::IfBlock(b) => {
-                self.block_keyword(b.range.start, "if");
+                self.read_error(b.open_error.as_ref());
                 self.fragment(&b.consequent, false);
                 for arm in &b.elseif_arms {
-                    let error = self
-                        .reader()
-                        .whitespace_before_part(arm.condition_range.start);
-                    self.tag_error(error);
+                    self.read_error(arm.open_error.as_ref());
                     self.fragment(&arm.body, false);
                 }
                 if let Some(alt) = &b.alternate {
@@ -206,7 +204,7 @@ impl Finder<'_> {
                 }
             }
             Node::KeyBlock(b) => {
-                self.block_keyword(b.range.start, "key");
+                self.read_error(b.open_error.as_ref());
                 self.fragment(&b.body, false);
             }
             Node::SnippetBlock(b) => {
@@ -433,6 +431,7 @@ impl Finder<'_> {
 
     fn tag(&mut self, i: &Interpolation) {
         let start = i.range.start;
+        self.read_error(i.open_error.as_ref());
         match i.kind {
             InterpolationKind::AtTag => {
                 // `special()` reads `html`, `debug`, `const` and
@@ -449,9 +448,7 @@ impl Finder<'_> {
             }
             InterpolationKind::AtDebug => self.debug_tag(i),
             InterpolationKind::AtRender => {
-                let error = self.reader().keyword_whitespace(start, b'@', "render");
-                self.tag_error(error);
-                let range = trimmed_range(i.expression_range, self.source);
+                let range = trimmed_range(self.read_expression(i.expression_range), self.source);
                 let is_call =
                     parse_expression(range, self.source, |expr| match unparenthesized(expr) {
                         Expression::CallExpression(_) => true,
@@ -470,34 +467,16 @@ impl Finder<'_> {
                     );
                 }
             }
-            InterpolationKind::AtConst => {
-                let error = self.reader().const_tag(i);
-                self.tag_error(error);
-                self.const_tag(i);
-            }
-            InterpolationKind::AtHtml => {
-                let error = self.reader().keyword_whitespace(start, b'@', "html");
-                self.tag_error(error);
-            }
-            InterpolationKind::Expression => {
-                // An empty `{}` has no expression for acorn to read: it
-                // stops at the closing brace.
-                if i.expression_range.slice(self.source).trim().is_empty() {
-                    let at = i.expression_range.end;
-                    self.report(
-                        at,
-                        Code::js_parse_error,
-                        "Unexpected token\nhttps://svelte.dev/e/js_parse_error".to_string(),
-                        Self::point(at),
-                    );
-                }
-            }
-            InterpolationKind::DeclConst | InterpolationKind::DeclLet => {}
+            InterpolationKind::AtConst => self.const_tag(i),
+            InterpolationKind::AtHtml
+            | InterpolationKind::Expression
+            | InterpolationKind::DeclConst
+            | InterpolationKind::DeclLet => {}
         }
     }
 
     fn debug_tag(&mut self, i: &Interpolation) {
-        let range = i.expression_range;
+        let range = self.read_expression(i.expression_range);
         if range.slice(self.source).trim().is_empty() {
             return;
         }

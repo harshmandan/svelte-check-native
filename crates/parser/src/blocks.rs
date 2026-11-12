@@ -15,7 +15,6 @@
 
 use svn_core::Range;
 
-use crate::ast::{ElseIfArm, Fragment, IfBlock, KeyBlock};
 use crate::error::ParseError;
 use crate::mustache::{MustacheSigil, classify_mustache_sigil, find_mustache_end};
 use crate::scanner::{Scanner, is_svelte_whitespace_before};
@@ -29,8 +28,12 @@ pub(crate) enum BlockTerminator {
     Close { tag: String },
     /// `{:else}` — no trailing condition.
     Else,
-    /// `{:else if condition}` — trailing expression range captured.
-    ElseIf { condition_range: Range },
+    /// `{:else if condition}` — trailing expression range captured, and
+    /// the error the compiler throws reading the tag.
+    ElseIf {
+        condition_range: Range,
+        error: Option<TagReadError>,
+    },
     /// `{:then [binding]}` — optional binding context range, and the
     /// error the compiler throws reading the tag.
     Then {
@@ -102,29 +105,17 @@ pub(crate) fn peek_and_consume_terminator(
             if scanner.peek_byte() == Some(b'}') {
                 scanner.advance_byte();
                 Some(BlockTerminator::Else)
-            } else if scanner.starts_with("if")
-                // Require a word boundary after `if` so `{:else iffy}`
-                // isn't read as `{:else if}` with condition `fy`. The
-                // keyword ends only when the next char can't continue an
-                // identifier (whitespace, `{`, `(`, etc.).
-                && !scanner
-                    .peek_byte_at(2)
-                    .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'$')
-            {
+            } else if scanner.starts_with("if") {
+                // The compiler takes `if` by prefix and then requires
+                // whitespace: `{:else iffy}` is an `{:else if}` missing
+                // it.
                 scanner.advance(2);
-                scanner.skip_svelte_whitespace();
-                let cond_start = scanner.pos();
-                let end = find_matching_close_brace(scanner)?;
-                if end <= cond_start {
-                    errors.push(ParseError::MalformedOpenTag {
-                        range: Range::new(cond_start, end.max(cond_start)),
-                    });
-                    scanner.set_pos(start);
-                    return None;
-                }
-                let condition_range = Range::new(cond_start, end);
-                scanner.set_pos(end + 1);
-                Some(BlockTerminator::ElseIf { condition_range })
+                let limit = scanner.source().len() as u32;
+                let header = read_expression_header(scanner, ts, limit);
+                Some(BlockTerminator::ElseIf {
+                    condition_range: header.range,
+                    error: header.error,
+                })
             } else {
                 errors.push(ParseError::MalformedOpenTag {
                     range: Range::new(start, scanner.pos()),
@@ -175,13 +166,6 @@ pub(crate) fn peek_and_consume_terminator(
     }
 }
 
-/// Find the matching `}` from the current scanner position (which must be
-/// on the expression start, i.e. just after `{...` prefix). Does not
-/// advance the scanner.
-fn find_matching_close_brace(scanner: &Scanner<'_>) -> Option<u32> {
-    find_mustache_end(scanner.source(), scanner.pos())
-}
-
 fn skip_ws_start(src: &str, start: u32, end: u32) -> u32 {
     (crate::scanner::skip_svelte_whitespace_at(src.as_bytes(), start as usize) as u32).min(end)
 }
@@ -201,32 +185,56 @@ fn skip_ws_end(src: &str, start: u32, mut end: u32) -> u32 {
 
 // ===== Header parsing ====================================================
 
-/// Header for an `{#if expression}` block. Scanner must be positioned right
-/// after `{#if` when called. On return, scanner is just past the closing `}`
-/// of the header.
-pub(crate) fn parse_if_header(
-    scanner: &mut Scanner<'_>,
-    errors: &mut Vec<ParseError>,
-) -> Option<Range> {
-    scanner.skip_svelte_whitespace();
-    let start = scanner.pos();
-    let end = find_matching_close_brace(scanner)?;
-    if end <= start {
-        errors.push(ParseError::MalformedOpenTag {
-            range: Range::new(start, end.max(start)),
-        });
-        return None;
-    }
-    scanner.set_pos(end + 1);
-    Some(Range::new(start, end))
+/// The header of a tag that holds one expression after its keyword.
+pub(crate) struct ExpressionHeader {
+    /// From the expression's start to the `}` that closes the tag.
+    pub range: Range,
+    /// The error the compiler throws reading the tag.
+    pub error: Option<TagReadError>,
 }
 
-/// `{#key expression}` header.
-pub(crate) fn parse_key_header(
+/// Reads the rest of an `{#if`, `{:else if` or `{#key` tag the way the
+/// compiler does: whitespace, the expression acorn reads, and the `}` it
+/// then expects. The scanner must sit right after the keyword; on return
+/// it is just past the tag. `fragment_end` bounds the reading when no
+/// `}` closes the tag.
+pub(crate) fn read_expression_header(
     scanner: &mut Scanner<'_>,
-    errors: &mut Vec<ParseError>,
-) -> Option<Range> {
-    parse_if_header(scanner, errors)
+    ts: bool,
+    fragment_end: u32,
+) -> ExpressionHeader {
+    let keyword_end = scanner.pos();
+    let source = scanner.source();
+    // acorn stops at an unpaired `}`, so no read goes past the one a
+    // brace count finds.
+    let counted_close = find_mustache_end(source, keyword_end);
+    let limit = counted_close.unwrap_or(fragment_end);
+    let reader = TagReader::new(source, ts);
+    let start = reader.skip_whitespace(keyword_end);
+    match reader.read_keyword_expression(keyword_end, limit) {
+        Ok(end) => {
+            scanner.set_pos(end);
+            ExpressionHeader {
+                range: Range::new(start, end - 1),
+                error: None,
+            }
+        }
+        Err(error) => {
+            // The compiler throws, and the component is rejected. The
+            // block stays, carrying the error: its tag ends at the
+            // counted `}`, or where the error is.
+            let end = counted_close.unwrap_or(error.at.max(keyword_end));
+            scanner.set_pos(if counted_close.is_some() {
+                end + 1
+            } else {
+                end
+            });
+            ExpressionHeader {
+                range: Range::new(start.min(end), end),
+                error: Some(error),
+            }
+        }
+    }
 }
 
 // ===== Lexical helpers ===================================================
@@ -237,57 +245,28 @@ pub(crate) fn trimmed_range(src: &str, start: u32, end: u32) -> Option<Range> {
     if s < e { Some(Range::new(s, e)) } else { None }
 }
 
-// ===== Assembly helpers (for the template parser) ======================
-
-/// Assemble an IfBlock from its consequent + else-if arms + alternate.
-pub(crate) fn build_if_block(
-    condition_range: Range,
-    consequent: Fragment,
-    elseif_arms: Vec<ElseIfArm>,
-    alternate: Option<Fragment>,
-    block_start: u32,
-    block_end: u32,
-) -> IfBlock {
-    IfBlock {
-        condition_range,
-        consequent,
-        elseif_arms,
-        alternate,
-        range: Range::new(block_start, block_end),
-    }
-}
-
-/// Assemble a KeyBlock.
-pub(crate) fn build_key_block(
-    expression_range: Range,
-    body: Fragment,
-    block_start: u32,
-    block_end: u32,
-) -> KeyBlock {
-    KeyBlock {
-        expression_range,
-        body,
-        range: Range::new(block_start, block_end),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tag_read::TagReadErrorKind;
 
     #[test]
-    fn else_if_requires_word_boundary() {
-        // `{:else iffy}` must NOT be read as `{:else if}` with condition
-        // `fy` — `iffy` is not the `if` keyword.
+    fn else_if_keyword_is_read_by_prefix() {
+        // The compiler eats `if` wherever the text starts with it and
+        // then requires whitespace, so `{:else iffy}` is an `{:else if}`
+        // that fails there.
         let src = "{:else iffy}";
         let mut scanner = Scanner::new(src);
         let mut errors = Vec::new();
         let term = peek_and_consume_terminator(&mut scanner, &mut errors, false);
-        assert!(
-            !matches!(term, Some(BlockTerminator::ElseIf { .. })),
-            "got {term:?}"
-        );
-        assert!(!errors.is_empty(), "expected a malformed-open-tag error");
+        let Some(BlockTerminator::ElseIf {
+            error: Some(error), ..
+        }) = term
+        else {
+            panic!("got {term:?}");
+        };
+        assert_eq!(error.at, 9);
+        assert_eq!(error.kind, TagReadErrorKind::ExpectedWhitespace);
     }
 
     #[test]
@@ -344,24 +323,32 @@ mod tests {
         let mut scanner = Scanner::new(src);
         let mut errors = Vec::new();
         let term = peek_and_consume_terminator(&mut scanner, &mut errors, false);
-        let Some(BlockTerminator::ElseIf { condition_range }) = term else {
+        let Some(BlockTerminator::ElseIf {
+            condition_range, ..
+        }) = term
+        else {
             panic!("expected ElseIf, got {term:?}");
         };
         assert_eq!(condition_range.slice(src), "ready");
     }
 
     #[test]
-    fn else_if_empty_condition_is_malformed() {
-        // `{:else if}` has no condition — must not produce an ElseIf.
+    fn else_if_without_condition_carries_the_compilers_error() {
+        // The compiler requires whitespace after `if` before it reads
+        // the condition.
         let src = "{:else if}";
         let mut scanner = Scanner::new(src);
         let mut errors = Vec::new();
         let term = peek_and_consume_terminator(&mut scanner, &mut errors, false);
-        assert!(
-            !matches!(term, Some(BlockTerminator::ElseIf { .. })),
-            "got {term:?}"
-        );
-        assert!(!errors.is_empty(), "expected a malformed-open-tag error");
+        let Some(BlockTerminator::ElseIf {
+            error: Some(error), ..
+        }) = term
+        else {
+            panic!("got {term:?}");
+        };
+        assert_eq!(error.at, 9);
+        assert_eq!(error.kind, TagReadErrorKind::ExpectedWhitespace);
+        assert_eq!(scanner.pos(), src.len() as u32);
     }
 
     #[test]

@@ -20,20 +20,20 @@ use svn_core::Range;
 
 use crate::ast::{
     AwaitBlock, CatchBranch, Comment, Component, EachAsClause, EachBlock, Element, ElseIfArm,
-    Fragment, ImplicitClose, Interpolation, InterpolationKind, Node, SnippetBlock, SvelteElement,
-    SvelteElementKind, Text, ThenBranch, is_component_tag, is_void_element,
+    Fragment, IfBlock, ImplicitClose, Interpolation, InterpolationKind, KeyBlock, Node,
+    SnippetBlock, SvelteElement, SvelteElementKind, Text, ThenBranch, is_component_tag,
+    is_void_element,
 };
 use crate::attributes::parse_attributes;
 use crate::blocks::{
-    BlockTerminator, build_if_block, build_key_block, parse_if_header, parse_key_header,
-    peek_and_consume_terminator, trimmed_range,
+    BlockTerminator, peek_and_consume_terminator, read_expression_header, trimmed_range,
 };
 use crate::error::ParseError;
 use crate::html5::closing_tag_omitted;
 use crate::mustache::{MustacheSigil, classify_mustache_sigil, find_mustache_end};
 use crate::scanner::{Scanner, is_svelte_whitespace_at};
 use crate::sections::{SectionCollector, section_tag_at};
-use crate::tag_read::{AwaitBranch, TagReader, compiler_reads_typescript};
+use crate::tag_read::{AwaitBranch, TagReadError, TagReader, compiler_reads_typescript};
 
 /// Parse one template fragment out of the source string.
 ///
@@ -341,53 +341,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             // template-ref pass intersects with script bindings, so a `@const`
             // local that doesn't shadow a script local just gets dropped.
             if let Some((MustacheSigil::AtTag, sigil_idx)) = sigil {
-                let start = self.scanner.pos();
-                match self.find_mustache_end_in_fragment(self.scanner.pos() + 1) {
-                    Some(end) => {
-                        let body_start = sigil_idx + 1; // past `@`
-                        let src = self.scanner.source();
-                        let bytes = src.as_bytes();
-                        // The compiler's `special()` tries each keyword in
-                        // this order and takes the first one the text
-                        // starts with, then reads the tag's own syntax
-                        // right after it: `{@debugx}` debugs `x`, and
-                        // `{@constx a}` is a `{@const}` missing its
-                        // whitespace. Text matching no keyword is an
-                        // unknown tag; its word is skipped.
-                        let keyword_start = body_start as usize;
-                        let rest = &src[keyword_start..end as usize];
-                        let word_len = rest.bytes().take_while(u8::is_ascii_alphabetic).count();
-                        let (kind, keyword_len) = [
-                            ("html", InterpolationKind::AtHtml),
-                            ("debug", InterpolationKind::AtDebug),
-                            ("const", InterpolationKind::AtConst),
-                            ("render", InterpolationKind::AtRender),
-                        ]
-                        .into_iter()
-                        .find(|(keyword, _)| rest.starts_with(keyword))
-                        .map_or((InterpolationKind::AtTag, word_len), |(keyword, kind)| {
-                            (kind, keyword.len())
-                        });
-                        let mut p = keyword_start + keyword_len;
-                        // Skip whitespace after the keyword.
-                        while p < end as usize && bytes[p].is_ascii_whitespace() {
-                            p += 1;
-                        }
-                        let expr_range = Range::new(p as u32, end);
-                        self.scanner.set_pos(end + 1);
-                        nodes.push(Node::Interpolation(Interpolation {
-                            kind,
-                            expression_range: expr_range,
-                            range: Range::new(start, end + 1),
-                        }));
-                    }
-                    None => {
-                        self.errors.push(ParseError::UnterminatedMustache {
-                            range: Range::new(start, self.fragment_end),
-                        });
-                        self.scanner.set_pos(self.fragment_end);
-                    }
-                }
+                nodes.push(self.parse_at_tag(sigil_idx));
                 continue;
             }
 
@@ -425,6 +379,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                             kind,
                             expression_range: expr_range,
                             range: Range::new(start, end + 1),
+                            open_error: None,
                         }));
                     }
                     None => {
@@ -525,11 +480,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             }
 
             if self.scanner.peek_byte() == Some(b'{') {
-                if let Some(node) = self.parse_interpolation() {
-                    nodes.push(node);
-                } else {
-                    self.scanner.advance_byte();
-                }
+                nodes.push(self.parse_interpolation());
                 continue;
             }
 
@@ -550,16 +501,21 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         );
         self.scanner.set_pos(sigil_idx + 1);
 
+        // The compiler's `open()` tries each keyword in this order and
+        // takes the first one the text starts with, then reads the tag's
+        // own syntax right after it: `{#ifx}` is an `{#if}` missing its
+        // whitespace. Text matching no keyword is an unknown block; its
+        // word is skipped.
         let name_start = self.scanner.pos();
-        while let Some(b) = self.scanner.peek_byte() {
-            if b.is_ascii_alphabetic() {
-                self.scanner.advance_byte();
-            } else {
-                break;
-            }
-        }
-        let name_end = self.scanner.pos();
-        let name = &self.scanner.source()[name_start as usize..name_end as usize];
+        let rest = &self.scanner.source()[name_start as usize..self.fragment_end as usize];
+        let name = ["if", "each", "await", "key", "snippet"]
+            .into_iter()
+            .find(|keyword| rest.starts_with(keyword))
+            .unwrap_or_else(|| {
+                let word_len = rest.bytes().take_while(u8::is_ascii_alphabetic).count();
+                &rest[..word_len]
+            });
+        self.scanner.set_pos(name_start + name.len() as u32);
 
         // Known blocks bracket their bodies with a Block frame: the
         // implicit-close ancestor walk must not cross a block boundary
@@ -602,11 +558,13 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
     }
 
     fn parse_if_block(&mut self, block_start: u32) -> Option<Node> {
-        let condition_range = parse_if_header(&mut self.scanner, &mut self.errors)?;
+        let header = read_expression_header(&mut self.scanner, self.ts, self.fragment_end);
+        let condition_range = header.range;
+        let body_start = self.scanner.pos();
         let (consequent_nodes, term) = self.parse_fragment_until(None);
         let consequent = Fragment {
             nodes: consequent_nodes,
-            range: Range::new(condition_range.end + 1, self.scanner.pos()),
+            range: Range::new(body_start, self.scanner.pos()),
         };
 
         let mut elseif_arms: Vec<ElseIfArm> = Vec::new();
@@ -616,7 +574,10 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         loop {
             match next {
                 Some(BlockTerminator::Close { tag }) if tag == "if" => break,
-                Some(BlockTerminator::ElseIf { condition_range }) => {
+                Some(BlockTerminator::ElseIf {
+                    condition_range,
+                    error,
+                }) => {
                     let body_start = self.scanner.pos();
                     let (body_nodes, t) = self.parse_fragment_until(None);
                     elseif_arms.push(ElseIfArm {
@@ -625,6 +586,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                             nodes: body_nodes,
                             range: Range::new(body_start, self.scanner.pos()),
                         },
+                        open_error: error,
                     });
                     next = t;
                 }
@@ -647,14 +609,14 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             }
         }
 
-        Some(Node::IfBlock(Box::new(build_if_block(
+        Some(Node::IfBlock(Box::new(IfBlock {
             condition_range,
             consequent,
             elseif_arms,
             alternate,
-            block_start,
-            self.scanner.pos(),
-        ))))
+            open_error: header.error,
+            range: Range::new(block_start, self.scanner.pos()),
+        })))
     }
 
     fn parse_each_block(&mut self, block_start: u32) -> Option<Node> {
@@ -858,11 +820,12 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
     }
 
     fn parse_key_block(&mut self, block_start: u32) -> Option<Node> {
-        let expr_range = parse_key_header(&mut self.scanner, &mut self.errors)?;
+        let header = read_expression_header(&mut self.scanner, self.ts, self.fragment_end);
+        let body_start = self.scanner.pos();
         let (body_nodes, term) = self.parse_fragment_until(None);
         let body = Fragment {
             nodes: body_nodes,
-            range: Range::new(expr_range.end + 1, self.scanner.pos()),
+            range: Range::new(body_start, self.scanner.pos()),
         };
         match term {
             Some(BlockTerminator::Close { tag }) if tag == "key" => {}
@@ -873,12 +836,12 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                 });
             }
         }
-        Some(Node::KeyBlock(Box::new(build_key_block(
-            expr_range,
+        Some(Node::KeyBlock(Box::new(KeyBlock {
+            expression_range: header.range,
             body,
-            block_start,
-            self.scanner.pos(),
-        ))))
+            open_error: header.error,
+            range: Range::new(block_start, self.scanner.pos()),
+        })))
     }
 
     fn parse_snippet_block(&mut self, block_start: u32) -> Option<Node> {
@@ -990,30 +953,104 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         })
     }
 
-    fn parse_interpolation(&mut self) -> Option<Node> {
+    /// A `{@html}` / `{@debug}` / `{@const}` / `{@render}` tag; `sigil_idx`
+    /// is the offset of its `@`. The scanner sits on the tag's `{`.
+    fn parse_at_tag(&mut self, sigil_idx: u32) -> Node {
         let start = self.scanner.pos();
-        debug_assert_eq!(self.scanner.peek_byte(), Some(b'{'));
-        self.scanner.advance_byte();
-        let expr_start = self.scanner.pos();
-
-        match self.find_mustache_end_in_fragment(expr_start) {
-            Some(end) => {
-                let expr_range = Range::new(expr_start, end);
-                self.scanner.set_pos(end + 1);
-                Some(Node::Interpolation(Interpolation {
-                    kind: InterpolationKind::Expression,
-                    expression_range: expr_range,
-                    range: Range::new(start, self.scanner.pos()),
-                }))
+        let source = self.scanner.source();
+        let counted_close = self.find_mustache_end_in_fragment(start + 1);
+        let limit = counted_close.unwrap_or(self.fragment_end);
+        // The compiler's `special()` tries each keyword in this order and
+        // takes the first one the text starts with, then reads the tag's
+        // own syntax right after it: `{@debugx}` debugs `x`, and
+        // `{@constx a}` is a `{@const}` missing its whitespace. Text
+        // matching no keyword is an unknown tag; its word is skipped.
+        let keyword_start = sigil_idx + 1;
+        let rest = source
+            .get(keyword_start as usize..limit as usize)
+            .unwrap_or("");
+        let word_len = rest.bytes().take_while(u8::is_ascii_alphabetic).count();
+        let (kind, keyword_len) = [
+            ("html", InterpolationKind::AtHtml),
+            ("debug", InterpolationKind::AtDebug),
+            ("const", InterpolationKind::AtConst),
+            ("render", InterpolationKind::AtRender),
+        ]
+        .into_iter()
+        .find(|(keyword, _)| rest.starts_with(keyword))
+        .map_or((InterpolationKind::AtTag, word_len), |(keyword, kind)| {
+            (kind, keyword.len())
+        });
+        let keyword_end = keyword_start + keyword_len as u32;
+        let reader = TagReader::new(source, self.ts);
+        let read = match kind {
+            InterpolationKind::AtHtml | InterpolationKind::AtRender => {
+                reader.read_keyword_expression(keyword_end, limit)
             }
-            None => {
+            InterpolationKind::AtDebug => reader.read_debug_tag(keyword_end, limit),
+            InterpolationKind::AtConst => reader.read_const_tag(keyword_end, limit),
+            // The compiler rejects an unknown tag at its name; the tag
+            // ends at the counted `}`.
+            _ => match counted_close {
+                Some(close) => Ok(close + 1),
+                None => reader.read_expression_tag(keyword_end, limit),
+            },
+        };
+        let body_start = reader.skip_whitespace(keyword_end).min(limit);
+        self.finish_tag(kind, start, body_start, counted_close, read)
+    }
+
+    /// The node of a `{…}` tag starting at `start`, whose expression
+    /// starts at `body_start`, after the compiler's reading of it ended
+    /// at `read` (just past its `}`).
+    fn finish_tag(
+        &mut self,
+        kind: InterpolationKind,
+        start: u32,
+        body_start: u32,
+        counted_close: Option<u32>,
+        read: Result<u32, TagReadError>,
+    ) -> Node {
+        let (close, end, open_error) = match (read, counted_close) {
+            (Ok(end), _) => (end - 1, end, None),
+            // The compiler throws, and the component is rejected. The
+            // tag stays, carrying the error, and ends at the counted `}`.
+            (Err(error), Some(close)) => (close, close + 1, Some(error)),
+            // No `}` closes it: the rest of the fragment is the tag.
+            (Err(error), None) => {
                 self.errors.push(ParseError::UnterminatedMustache {
                     range: Range::new(start, self.fragment_end),
                 });
-                self.scanner.set_pos(self.fragment_end);
-                None
+                (self.fragment_end, self.fragment_end, Some(error))
             }
-        }
+        };
+        self.scanner.set_pos(end);
+        Node::Interpolation(Interpolation {
+            kind,
+            expression_range: Range::new(body_start.min(close), close),
+            range: Range::new(start, end),
+            open_error,
+        })
+    }
+
+    /// An `{expression}` tag. The scanner sits on its `{`.
+    fn parse_interpolation(&mut self) -> Node {
+        let start = self.scanner.pos();
+        debug_assert_eq!(self.scanner.peek_byte(), Some(b'{'));
+        let expr_start = start + 1;
+        // acorn stops at an unpaired `}`, so no read goes past the one a
+        // brace count finds.
+        let counted_close = self.find_mustache_end_in_fragment(expr_start);
+        let limit = counted_close.unwrap_or(self.fragment_end);
+        let reader = TagReader::new(self.scanner.source(), self.ts);
+        let read = reader.read_expression_tag(expr_start, limit);
+        self.finish_tag(
+            InterpolationKind::Expression,
+            start,
+            expr_start,
+            counted_close,
+            read,
+        )
     }
 
     fn parse_element_or_component(&mut self) -> Option<Node> {
@@ -1333,11 +1370,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                     let (sigil, _) =
                         classify_mustache_sigil(self.scanner.source().as_bytes(), pos as usize);
                     if matches!(sigil, MustacheSigil::Other) {
-                        if let Some(node) = self.parse_interpolation() {
-                            nodes.push(node);
-                        } else {
-                            self.scanner.advance_byte();
-                        }
+                        nodes.push(self.parse_interpolation());
                     } else {
                         // `{#...}` / `{@...}` / `{:...}` / `{/...}` are
                         // invalid inside a textarea — record and skip the

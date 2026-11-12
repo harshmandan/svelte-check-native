@@ -102,9 +102,23 @@ pub fn read_expression(text: &str, ts: bool) -> Read {
     // Errors of acorn's tokenizer, thrown where the token starts.
     match message {
         "Unterminated string" if text[label as usize..].starts_with('`') => {
-            return Read::Error {
-                at: label + 1,
-                message: "Unterminated template",
+            let (at, message) = unterminated_template(text, label, ts);
+            return Read::Error { at, message };
+        }
+        // oxc reports a template chunk that follows a `${…}` from the
+        // `}` before it.
+        "Unterminated string" if text[label as usize..].starts_with('}') => {
+            let chunk = label + 1;
+            return if chunk == len {
+                Read::Error {
+                    at: len,
+                    message: "Unterminated template literal",
+                }
+            } else {
+                Read::Error {
+                    at: chunk,
+                    message: "Unterminated template",
+                }
             };
         }
         "Unterminated string" => {
@@ -163,19 +177,65 @@ fn tokenizer_error(text: &str, ts: bool) -> Option<(u32, &'static str)> {
     })
 }
 
-/// The first `as` keyword in `text` from `from` that follows a complete
-/// expression starting there.
+/// Where acorn throws for the template literal that opens at `tick` in
+/// `text` and does not close before the text ends, and its message.
+///
+/// acorn reads a template one chunk at a time. A chunk that the text
+/// ends inside is `Unterminated template`, at the chunk's start. When
+/// the text ends right after a `${…}`, there is no chunk to start, and
+/// the parser throws `Unterminated template literal` at the end. An
+/// error inside a `${…}` that does not close is that expression's own.
+fn unterminated_template(text: &str, tick: u32, ts: bool) -> (u32, &'static str) {
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut chunk = tick as usize + 1;
+    let mut i = chunk;
+    while i < len {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'$' if bytes.get(i + 1) == Some(&b'{') => match match_bracket(text, i as u32 + 1) {
+                Ok(end) => {
+                    i = end as usize;
+                    chunk = i;
+                }
+                Err(_) => {
+                    let inner = i + 2;
+                    return match read_expression(&text[inner..], ts) {
+                        Read::Error { at, message } => (inner as u32 + at, message),
+                        // acorn then expects the `}` and meets the end.
+                        Read::Expression { .. } => (len as u32, "Unexpected token"),
+                    };
+                }
+            },
+            _ => i += 1,
+        }
+    }
+    if chunk == len && chunk > tick as usize + 1 {
+        (len as u32, "Unterminated template literal")
+    } else {
+        (chunk as u32, "Unterminated template")
+    }
+}
+
+/// The first `as` or `satisfies` keyword in `text` from `from` that is
+/// the next token after a complete expression starting there.
 fn cast_keyword(text: &str, from: u32, ts: bool) -> Option<u32> {
     let rest = text.get(from as usize..)?;
-    rest.match_indices("as").find_map(|(p, _)| {
+    let is_word = |c: Option<char>| c.is_some_and(oxc_syntax::identifier::is_identifier_part);
+    let mut found: Vec<(usize, usize)> = ["as", "satisfies"]
+        .into_iter()
+        .flat_map(|keyword| rest.match_indices(keyword).map(|(p, k)| (p, k.len())))
+        .collect();
+    found.sort_unstable();
+    found.into_iter().find_map(|(p, keyword_len)| {
         let before = rest[..p].chars().next_back();
-        let after = rest[p + 2..].chars().next();
-        let is_word = |c: Option<char>| c.is_some_and(oxc_syntax::identifier::is_identifier_part);
+        let after = rest[p + keyword_len..].chars().next();
         if p == 0 || is_word(before) || is_word(after) {
             return None;
         }
-        complete_expression_end(&rest[..p], ts)?;
-        Some(from + p as u32)
+        let end = complete_expression_end(&rest[..p], ts)?;
+        // A keyword inside a comment after the expression is no token.
+        (next_token_start(rest, end) == p as u32).then_some(from + p as u32)
     })
 }
 

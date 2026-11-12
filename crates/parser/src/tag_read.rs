@@ -544,7 +544,13 @@ impl<'s> TagReader<'s> {
     /// The `}` the compiler requires at `at`, after whitespace: just past
     /// it.
     fn closing_brace(&self, at: u32) -> Result<u32, TagReadError> {
-        let at = self.skip_whitespace(at);
+        let mut next = self.skip_whitespace(at);
+        if next as usize >= self.source.len() {
+            // The compiler reads a template whose end is trimmed, so
+            // there is no whitespace to skip at the end of it.
+            next = (self.source.trim_end().len() as u32).max(at);
+        }
+        let at = next;
         if self.byte(at) != Some(b'}') {
             return Err(TagReadError::new(at, TagReadErrorKind::ExpectedToken("}")));
         }

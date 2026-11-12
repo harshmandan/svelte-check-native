@@ -1509,6 +1509,134 @@ const CASES: &[(bool, &str, Expected)] = &[
     (true, "{#if a satisfies b}x{/if}", None),
     (false, "{a /* satisfies */}", None),
     (true, "{a /* satisfies */}", None),
+    (
+        false,
+        "<p>{bad</p>\n",
+        Some((
+            "js_parse_error",
+            "Unterminated regular expression\nhttps://svelte.dev/e/js_parse_error",
+            27,
+        )),
+    ),
+    (
+        true,
+        "<p>{bad</p>\n",
+        Some((
+            "js_parse_error",
+            "Unterminated regular expression\nhttps://svelte.dev/e/js_parse_error",
+            37,
+        )),
+    ),
+    (
+        false,
+        "<p>{bad</p>",
+        Some((
+            "js_parse_error",
+            "Unterminated regular expression\nhttps://svelte.dev/e/js_parse_error",
+            27,
+        )),
+    ),
+    (
+        true,
+        "<p>{bad</p>",
+        Some((
+            "js_parse_error",
+            "Unterminated regular expression\nhttps://svelte.dev/e/js_parse_error",
+            37,
+        )),
+    ),
+    (
+        false,
+        "{a /b",
+        Some((
+            "expected_token",
+            "Expected token }\nhttps://svelte.dev/e/expected_token",
+            23,
+        )),
+    ),
+    (
+        true,
+        "{a /b",
+        Some((
+            "expected_token",
+            "Expected token }\nhttps://svelte.dev/e/expected_token",
+            33,
+        )),
+    ),
+    (
+        false,
+        "{a /b\n",
+        Some((
+            "expected_token",
+            "Expected token }\nhttps://svelte.dev/e/expected_token",
+            23,
+        )),
+    ),
+    (
+        true,
+        "{a /b\n",
+        Some((
+            "expected_token",
+            "Expected token }\nhttps://svelte.dev/e/expected_token",
+            33,
+        )),
+    ),
+    (
+        false,
+        "{a < /b/",
+        Some((
+            "expected_token",
+            "Expected token }\nhttps://svelte.dev/e/expected_token",
+            26,
+        )),
+    ),
+    (
+        true,
+        "{a < /b/",
+        Some((
+            "expected_token",
+            "Expected token }\nhttps://svelte.dev/e/expected_token",
+            36,
+        )),
+    ),
+    (
+        false,
+        "{a + /b}",
+        Some((
+            "js_parse_error",
+            "Unterminated regular expression\nhttps://svelte.dev/e/js_parse_error",
+            24,
+        )),
+    ),
+    (
+        true,
+        "{a + /b}",
+        Some((
+            "js_parse_error",
+            "Unterminated regular expression\nhttps://svelte.dev/e/js_parse_error",
+            34,
+        )),
+    ),
+    (
+        false,
+        "<p>{bad</p>\n<p>{ok}</p>",
+        Some((
+            "js_parse_error",
+            "Unterminated regular expression\nhttps://svelte.dev/e/js_parse_error",
+            27,
+        )),
+    ),
+    (
+        true,
+        "<p>{bad</p>\n<p>{ok}</p>",
+        Some((
+            "js_parse_error",
+            "Unterminated regular expression\nhttps://svelte.dev/e/js_parse_error",
+            37,
+        )),
+    ),
+    (false, "{a /b}\nc/ d}", None),
+    (true, "{a /b}\nc/ d}", None),
 ];
 
 fn source(ts: bool, template: &str) -> String {

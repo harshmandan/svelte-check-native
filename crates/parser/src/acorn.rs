@@ -133,6 +133,13 @@ pub fn read_expression(text: &str, ts: bool) -> Read {
                 message: "Unterminated comment",
             };
         }
+        // Thrown after the `/` that opens it.
+        "Unterminated regular expression" => {
+            return Read::Error {
+                at: label + 1,
+                message: "Unterminated regular expression",
+            };
+        }
         _ => {}
     }
     let at = match message {
@@ -170,6 +177,7 @@ fn tokenizer_error(text: &str, ts: bool) -> Option<(u32, &'static str)> {
         let message = match d.message.as_ref() {
             "Unterminated string" => "Unterminated string",
             "Unterminated multiline comment" => "Unterminated multiline comment",
+            "Unterminated regular expression" => "Unterminated regular expression",
             _ => return None,
         };
         let at = d.labels.first()?.span().start.checked_sub(1)?;

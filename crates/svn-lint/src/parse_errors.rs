@@ -991,11 +991,13 @@ fn custom_element(attr: &Attribute, source: &str) -> Option<ParseFinding> {
             props_ok,
             shadow_ok,
         } => {
+            // The compiler reports this one against the property pair
+            // rather than a node, so it carries no position, and
+            // svelte-check places an error without one at the start of
+            // the file.
             if let Some(tag) = tag
-                && let Some(f) = validate_tag(tag.as_deref(), range)
+                && let Some(f) = validate_tag(tag.as_deref(), Range::new(0, 0))
             {
-                // The compiler reports this one against the property
-                // pair rather than a node, so it carries no position.
                 return Some(f);
             }
             if props_ok == Some(false) {

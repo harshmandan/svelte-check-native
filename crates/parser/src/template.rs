@@ -168,6 +168,10 @@ struct TemplateParser<'src, 'col> {
     /// pops further elements without warning. Cleared once a closing tag
     /// pops the stack below that depth.
     last_auto_closed: Option<(SmolStr, usize)>,
+    /// The name of the open tag that closed [`Self::last_auto_closed`]:
+    /// the reason the compiler gives when a closing tag for that element
+    /// turns up later.
+    last_auto_closed_by: SmolStr,
     /// Source offset of an open tag that has just closed the element it
     /// appeared in. The compiler tests only the innermost open element
     /// against a new tag, so once that element is closed the tag opens
@@ -199,6 +203,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             open_elements: Vec::new(),
             pending_auto_close: None,
             last_auto_closed: None,
+            last_auto_closed_by: SmolStr::default(),
             auto_close_trigger: None,
             sections: None,
             ts: compiler_reads_typescript(source),
@@ -418,8 +423,20 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                         return (nodes, None);
                     }
                 }
-                self.errors.push(ParseError::MalformedOpenTag {
-                    range: Range::new(self.scanner.pos(), self.scanner.pos() + 2),
+                // No open element takes this closing tag. The compiler
+                // throws: at an element a later open tag had already
+                // closed, it says so.
+                let at = self.scanner.pos();
+                let name = self.peek_closing_tag_name().unwrap_or_default();
+                let autoclosed_by = self
+                    .last_auto_closed
+                    .as_ref()
+                    .is_some_and(|(tag, _)| tag.as_str() == name)
+                    .then(|| self.last_auto_closed_by.to_string());
+                self.errors.push(ParseError::InvalidClosingTag {
+                    name: name.to_string(),
+                    autoclosed_by,
+                    range: Range::new(at, at),
                 });
                 self.scanner.advance(2);
                 continue;
@@ -469,6 +486,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                         SmolStr::from(stop),
                         self.open_elements.len().saturating_sub(1),
                     ));
+                    self.last_auto_closed_by = SmolStr::from(next);
                     self.auto_close_trigger = Some(self.scanner.pos());
                     return (nodes, None);
                 }

@@ -104,3 +104,47 @@ fn accessors_warning_spans_the_attribute() {
     assert_eq!((w.start_line, w.start_column), (1, 16));
     assert_eq!((w.end_line, w.end_column), (1, 25));
 }
+
+/// A tag name given as `customElement={{ tag }}` is validated against
+/// the property pair, which is no node: the compiler's error carries no
+/// position, and svelte-check places such an error at the start of the
+/// file. Given as text, it is reported on the attribute. Positions are
+/// what svelte 5.57.2's `parse()` throws.
+#[test]
+fn custom_element_tag_error_in_an_object_has_no_position() {
+    let cases: &[(&str, &str, (u32, u32))] = &[
+        (
+            "<p>x</p>\n<svelte:options customElement={{ tag: \"Bad\" }} />",
+            "svelte_options_invalid_tagname",
+            (0, 0),
+        ),
+        (
+            "<p>x</p>\n<svelte:options customElement={{ tag: 1 }} />",
+            "svelte_options_invalid_tagname",
+            (0, 0),
+        ),
+        (
+            "<p>x</p>\n<svelte:options customElement={{ tag: \"font-face\" }} />",
+            "svelte_options_reserved_tagname",
+            (0, 0),
+        ),
+        (
+            "<p>x</p>\n<svelte:options customElement=\"Bad\" />",
+            "svelte_options_invalid_tagname",
+            (25, 44),
+        ),
+        (
+            "<p>x</p>\n<svelte:options customElement=\"font-face\" />",
+            "svelte_options_reserved_tagname",
+            (25, 50),
+        ),
+    ];
+    for &(src, code, range) in cases {
+        let warnings = lint(src, true);
+        let got = warnings
+            .iter()
+            .find(|w| w.is_error)
+            .map(|w| (w.code.as_str(), (w.range.start, w.range.end)));
+        assert_eq!(got, Some((code, range)), "{src}");
+    }
+}

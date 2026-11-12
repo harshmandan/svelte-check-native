@@ -93,6 +93,17 @@ pub enum ParseError {
     #[error("mismatched closing tag, expected </{expected}>")]
     MismatchedClosingTag { expected: String, range: Range },
 
+    /// A closing tag that matches no open element (the compiler's
+    /// `element_invalid_closing_tag`). `autoclosed_by` names the tag that
+    /// had already closed that element implicitly
+    /// (`element_invalid_closing_tag_autoclosed`): `<p><div></div></p>`.
+    #[error("{}", invalid_closing_tag_message(name, autoclosed_by.as_deref()))]
+    InvalidClosingTag {
+        name: String,
+        autoclosed_by: Option<String>,
+        range: Range,
+    },
+
     #[error("Unexpected block closing tag")]
     UnexpectedBlockClose { range: Range },
 
@@ -106,6 +117,19 @@ pub enum ParseError {
 
     #[error("block-level mustache ({{#}}/{{:}}/{{/}}/{{@}}) not yet supported in this build")]
     UnsupportedBlock { range: Range },
+}
+
+/// The compiler's message for a closing tag that matches no open
+/// element.
+fn invalid_closing_tag_message(name: &str, autoclosed_by: Option<&str>) -> String {
+    match autoclosed_by {
+        Some(reason) => format!(
+            "`</{name}>` attempted to close element that was already automatically closed by `<{reason}>` (cannot nest `<{reason}>` inside `<{name}>`)\nhttps://svelte.dev/e/element_invalid_closing_tag_autoclosed"
+        ),
+        None => format!(
+            "`</{name}>` attempted to close an element that was not open\nhttps://svelte.dev/e/element_invalid_closing_tag"
+        ),
+    }
 }
 
 impl ParseError {
@@ -122,6 +146,7 @@ impl ParseError {
             Self::UnexpectedEof { range } => *range,
             Self::UnterminatedElement { range, .. } => *range,
             Self::MismatchedClosingTag { range, .. } => *range,
+            Self::InvalidClosingTag { range, .. } => *range,
             Self::UnexpectedBlockClose { range } => *range,
             Self::InvalidBlockContinuation { range } => *range,
             Self::UnknownSvelteElement { range, .. } => *range,
@@ -167,6 +192,11 @@ impl ParseError {
             Self::UnexpectedEof { .. } => "unexpected-eof",
             Self::UnterminatedElement { .. } => "unterminated-element",
             Self::MismatchedClosingTag { .. } => "mismatched-closing-tag",
+            Self::InvalidClosingTag {
+                autoclosed_by: None,
+                ..
+            } => "element_invalid_closing_tag",
+            Self::InvalidClosingTag { .. } => "element_invalid_closing_tag_autoclosed",
             Self::UnexpectedBlockClose { .. } => "block-unexpected-close",
             Self::InvalidBlockContinuation { .. } => "block-invalid-continuation-placement",
             Self::UnknownSvelteElement { .. } => "unknown-svelte-element",

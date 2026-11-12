@@ -285,8 +285,15 @@ fn translate(
     let char_at = |at: u32| text.get(at as usize..).and_then(|r| r.chars().next());
     let ts = mode.ts;
 
+    if let Some(candidate) = acorn_wording(diagnostic, all, text, mode) {
+        return Some(candidate);
+    }
+
     // Messages oxc and acorn share.
     const SAME: &[&str] = &[
+        "Classes can't have an element named '#constructor'",
+        "Constructor can't be an async method",
+        "Classes can't have a field named 'constructor'",
         "Constructor can't be a generator",
         "Constructor can't have get/set modifier",
         "Bad escape sequence in untagged template literal",
@@ -364,6 +371,13 @@ fn translate(
             if in_async_arrow_params(program, s) {
                 return unexpected(next_token_start(text, identifier_end(text, s)));
             }
+            // As a name being declared, inside an async function.
+            if in_async_function(program, s) {
+                return Some(Candidate::at(
+                    s,
+                    "Cannot use 'await' as identifier inside an async function",
+                ));
+            }
             return Some(Candidate::at(
                 s,
                 "Cannot use keyword 'await' outside an async function",
@@ -381,6 +395,25 @@ fn translate(
         }
         "Declaration cannot appear in a single-statement context" => return unexpected(s),
         "Cannot assign to this expression" => {
+            // A getter or setter in an object pattern, at its name.
+            let before = &text[..s as usize];
+            let name = before
+                .char_indices()
+                .rev()
+                .take_while(|&(_, c)| oxc_syntax::identifier::is_identifier_part(c))
+                .last()
+                .map(|(i, _)| i);
+            if let Some(name) = name
+                && (before[..name].trim_end().ends_with(" get")
+                    || before[..name].trim_end().ends_with(" set")
+                    || before[..name].trim_end().ends_with("{get")
+                    || before[..name].trim_end().ends_with("{set"))
+            {
+                return Some(Candidate::at(
+                    name as u32,
+                    "Object pattern can't contain getter or setter",
+                ));
+            }
             let target = text.get(s as usize..e as usize).unwrap_or_default();
             let message = if target.contains("?.") {
                 "Optional chaining cannot appear in left-hand side"
@@ -475,14 +508,12 @@ fn translate(
     }
     if message.starts_with("Expected a semicolon or an implicit semicolon")
         && text[s as usize..].trim_start().starts_with("=>")
-        && let Some(comma) = comma_after_rest_in_arrow_parameters(&text[..s as usize], ts)
+        && let Some(candidate) = arrow_parameters_error(text, s, ts)
     {
-        // oxc read the parameters as a parenthesized expression, where
-        // a spread may come first, and stopped at the arrow.
-        return Some(Candidate::at(
-            comma,
-            "Comma is not permitted after the rest element",
-        ));
+        // oxc read the parameters as a parenthesized expression and
+        // stopped at the arrow; acorn turns that expression into
+        // parameters and rejects what cannot be one.
+        return Some(candidate);
     }
     if message.starts_with("Expected a semicolon or an implicit semicolon") {
         // A strict-mode reserved word read as an identifier fails
@@ -504,6 +535,19 @@ fn translate(
             ));
         }
         return unexpected(next_token_start(text, s));
+    }
+    if message.starts_with("Expected `(` but found `=`") {
+        // A class field named `constructor`, which oxc reads as the
+        // constructor method.
+        let before = text[..s as usize].trim_end();
+        if let Some(start) = before.strip_suffix("constructor").map(str::len)
+            && before[..start].trim_end().ends_with(['{', ';', '}'])
+        {
+            return Some(Candidate::at(
+                start as u32,
+                "Classes can't have a field named 'constructor'",
+            ));
+        }
     }
     if message.starts_with("Expected `in` but found") {
         // A private name not followed by `in`. Outside every class acorn
@@ -696,49 +740,37 @@ fn comma_after_rest(text: &str, rest: u32) -> Option<u32> {
     (text.as_bytes().get(comma as usize) == Some(&b',')).then_some(comma)
 }
 
-/// The first comma after a rest element in arrow-function parameters
-/// that oxc read as the parenthesized expression `parameters`.
-fn comma_after_rest_in_arrow_parameters(parameters: &str, ts: bool) -> Option<u32> {
-    struct Finder<'s> {
-        text: &'s str,
-        found: Option<u32>,
-    }
-    impl Finder<'_> {
-        fn spread(&mut self, span: oxc_span::Span, last: bool) {
-            if last {
-                return;
-            }
-            let comma = next_token_start(self.text, span.end);
-            if self.found.is_none_or(|found| comma < found) {
-                self.found = Some(comma);
-            }
-        }
-    }
-    impl<'a> Visit<'a> for Finder<'_> {
-        fn visit_object_expression(&mut self, it: &oxc_ast::ast::ObjectExpression<'a>) {
-            let count = it.properties.len();
-            for (i, property) in it.properties.iter().enumerate() {
-                if let oxc_ast::ast::ObjectPropertyKind::SpreadProperty(spread) = property {
-                    self.spread(spread.span, i + 1 == count);
-                }
-            }
-            walk::walk_object_expression(self, it);
-        }
+/// acorn's error for arrow-function parameters that oxc read as a
+/// parenthesized expression ending at `arrow` in `text`.
+///
+/// acorn reads them as an expression too, then converts each one to a
+/// binding (`toAssignable`, then `checkParams`): a spread must come
+/// last, a default uses `=`, and the target is a name or a pattern, not
+/// a member, a literal or something in parentheses of its own.
+fn arrow_parameters_error(text: &str, arrow: u32, ts: bool) -> Option<Candidate> {
+    use oxc_ast::ast::{ArrayExpressionElement, ObjectPropertyKind};
 
-        fn visit_array_expression(&mut self, it: &oxc_ast::ast::ArrayExpression<'a>) {
-            let count = it.elements.len();
-            for (i, element) in it.elements.iter().enumerate() {
-                if let oxc_ast::ast::ArrayExpressionElement::SpreadElement(spread) = element {
-                    self.spread(spread.span, i + 1 == count);
+    // The parameters are the last parenthesized group before the arrow.
+    let before = text[..arrow as usize].trim_end();
+    let open = {
+        let mut depth = 0usize;
+        let mut found = None;
+        for (i, c) in before.char_indices().rev() {
+            match c {
+                ')' => depth += 1,
+                '(' => {
+                    depth = depth.checked_sub(1)?;
+                    if depth == 0 {
+                        found = Some(i);
+                        break;
+                    }
                 }
+                _ => {}
             }
-            walk::walk_array_expression(self, it);
         }
-
-        // A function inside a default value has parameters of its own.
-        fn visit_arrow_function_expression(&mut self, _: &ArrowFunctionExpression<'a>) {}
-        fn visit_function(&mut self, _: &oxc_ast::ast::Function<'a>, _: ScopeFlags) {}
-    }
+        found?
+    };
+    let parameters = &before[open..];
     let allocator = oxc_allocator::Allocator::default();
     let source_type = oxc_span::SourceType::default()
         .with_module(true)
@@ -746,12 +778,426 @@ fn comma_after_rest_in_arrow_parameters(parameters: &str, ts: bool) -> Option<u3
     let expression = oxc_parser::Parser::new(&allocator, parameters, source_type)
         .parse_expression()
         .ok()?;
-    let mut finder = Finder {
-        text: parameters,
-        found: None,
+    let Expression::ParenthesizedExpression(group) = &expression else {
+        return None;
     };
-    finder.visit_expression(&expression);
-    finder.found
+
+    struct Check<'s> {
+        text: &'s str,
+        /// acorn-typescript reads the component.
+        ts: bool,
+        first: Option<(u32, &'static str)>,
+    }
+    impl Check<'_> {
+        fn error(&mut self, at: u32, message: &'static str) {
+            if self.first.is_none_or(|(first, _)| at < first) {
+                self.first = Some((at, message));
+            }
+        }
+
+        fn spread(&mut self, span: oxc_span::Span, argument: &Expression<'_>, last: bool) {
+            if !last {
+                let comma = next_token_start(self.text, span.end);
+                self.error(comma, "Comma is not permitted after the rest element");
+            }
+            if matches!(argument, Expression::AssignmentExpression(_)) {
+                self.error(
+                    argument.span().start,
+                    "Rest elements cannot have a default value",
+                );
+            }
+            self.target(argument);
+        }
+
+        fn target(&mut self, expression: &Expression<'_>) {
+            match expression {
+                Expression::Identifier(_) => {}
+                Expression::AssignmentExpression(assignment) => {
+                    if assignment.operator != oxc_syntax::operator::AssignmentOperator::Assign {
+                        self.error(
+                            assignment.left.span().end,
+                            "Only '=' operator can be used for specifying default value.",
+                        );
+                    }
+                }
+                Expression::ArrayExpression(array) => {
+                    let count = array.elements.len();
+                    for (i, element) in array.elements.iter().enumerate() {
+                        match element {
+                            ArrayExpressionElement::SpreadElement(spread) => {
+                                self.spread(spread.span, &spread.argument, i + 1 == count);
+                            }
+                            ArrayExpressionElement::Elision(_) => {}
+                            other => {
+                                if let Some(inner) = other.as_expression() {
+                                    self.target(inner);
+                                }
+                            }
+                        }
+                    }
+                }
+                Expression::ObjectExpression(object) => {
+                    let count = object.properties.len();
+                    for (i, property) in object.properties.iter().enumerate() {
+                        match property {
+                            ObjectPropertyKind::SpreadProperty(spread) => {
+                                self.spread(spread.span, &spread.argument, i + 1 == count);
+                            }
+                            ObjectPropertyKind::ObjectProperty(property) => {
+                                self.target(&property.value);
+                            }
+                        }
+                    }
+                }
+                Expression::ParenthesizedExpression(inner) => {
+                    self.error(inner.span.start, "Parenthesized pattern");
+                }
+                other if self.ts && other.is_member_expression() => {
+                    self.error(other.span().start, "Binding member expression");
+                }
+                other => self.error(other.span().start, "Assigning to rvalue"),
+            }
+        }
+    }
+    let mut check = Check {
+        text: parameters,
+        ts,
+        first: None,
+    };
+    match &group.expression {
+        Expression::SequenceExpression(sequence) => {
+            for parameter in &sequence.expressions {
+                check.target(parameter);
+            }
+        }
+        single => check.target(single),
+    }
+    check
+        .first
+        .map(|(at, message)| Candidate::at(open as u32 + at, message))
+}
+
+/// Whether `at` lies inside an async function.
+fn in_async_function(program: &Program<'_>, at: u32) -> bool {
+    struct Finder {
+        at: u32,
+        innermost: Option<bool>,
+    }
+    impl<'a> Visit<'a> for Finder {
+        fn visit_function(&mut self, it: &oxc_ast::ast::Function<'a>, flags: ScopeFlags) {
+            // A function's own name belongs to the code around it.
+            let in_name = it
+                .id
+                .as_ref()
+                .is_some_and(|id| id.span.start <= self.at && self.at < id.span.end);
+            if it.span.start <= self.at && self.at < it.span.end && !in_name {
+                self.innermost = Some(it.r#async);
+                walk::walk_function(self, it, flags);
+            }
+        }
+
+        fn visit_arrow_function_expression(&mut self, it: &ArrowFunctionExpression<'a>) {
+            if it.span.start <= self.at && self.at < it.span.end {
+                self.innermost = Some(it.r#async);
+                walk::walk_arrow_function_expression(self, it);
+            }
+        }
+    }
+    let mut finder = Finder {
+        at,
+        innermost: None,
+    };
+    finder.visit_program(program);
+    finder.innermost == Some(true)
+}
+
+/// acorn's own wording and position for an error oxc words differently,
+/// one entry per `raise` site in acorn that has an oxc counterpart.
+fn acorn_wording(
+    diagnostic: &OxcDiagnostic,
+    all: &[OxcDiagnostic],
+    text: &str,
+    mode: Mode,
+) -> Option<Candidate> {
+    let message = diagnostic.message.as_ref();
+    let span = diagnostic.labels.first().map(|l| l.span())?;
+    let (s, e) = (span.start, span.end);
+    let last = diagnostic.labels.last().map_or(s, |l| l.span().start);
+    let at = |offset: u32, message: &str| Some(Candidate::at(offset, message));
+    let byte = |offset: u32| text.as_bytes().get(offset as usize).copied();
+    let slice = text.get(s as usize..e as usize).unwrap_or_default();
+    match message {
+        "'import statement' declaration can only be used at the top level of a module"
+        | "'export statement' declaration can only be used at the top level of a module" => {
+            at(s, "'import' and 'export' may only appear at the top level")
+        }
+        "A 'default' clause cannot appear more than once in a 'switch' statement." => {
+            at(last, "Multiple default clauses")
+        }
+        // At the end of the `throw` keyword.
+        "Illegal newline after throw" => at(e, "Illegal newline after throw"),
+        "Missing catch or finally clause" => {
+            // At the `try` this block belongs to.
+            let before = &text[..s as usize];
+            let block = before.trim_end().strip_suffix('}')?;
+            let mut depth = 1usize;
+            let mut open = None;
+            for (i, c) in block.char_indices().rev() {
+                match c {
+                    '}' => depth += 1,
+                    '{' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            open = Some(i);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let keyword = block[..open?].trim_end().strip_suffix("try")?.len();
+            at(keyword as u32, "Missing catch or finally clause")
+        }
+        "Classes may not have a static property named 'prototype'"
+            if byte(next_token_start(text, e)) == Some(b'(') =>
+        {
+            at(s, "Classes may not have a static property named prototype")
+        }
+        "A 'set' accessor cannot have rest parameter." => at(s, "Setter cannot use rest params"),
+        "A string literal cannot be used as an exported binding without `from`" => at(
+            s,
+            "A string literal cannot be used as an exported binding without `from`.",
+        ),
+        "An export name cannot include a unicode lone surrogate" => {
+            at(s, "An export name cannot include a lone surrogate.")
+        }
+        "A rest element cannot have an initializer." => {
+            at(s, "Rest elements cannot have a default value")
+        }
+        "Invalid rest element target in destructuring assignment" if slice.contains('=') => {
+            at(s, "Rest elements cannot have a default value")
+        }
+        "Only '=' operator can be used for specifying default value." => {
+            // At the end of the target, before the operator.
+            let equals = slice.find('=')?;
+            let left = slice[..equals]
+                .trim_end_matches(|c: char| !c.is_alphanumeric() && !"_$)]}".contains(c));
+            at(s + left.len() as u32, message)
+        }
+        "Invalid optional chain from new expression." => at(
+            s,
+            "Optional chaining cannot appear in the callee of new expressions",
+        ),
+        // acorn-typescript accepts it.
+        "'new super()' is not allowed" => {
+            (!mode.ts).then(|| Candidate::at(s, "Invalid use of 'super'"))
+        }
+        "'super' can only be used with function calls or in property accesses" => {
+            at(next_token_start(text, e), "Unexpected token")
+        }
+        "The left-hand side of a `for...of` statement may not start with `let`" => {
+            at(s, "The keyword 'let' is reserved")
+        }
+        // acorn reads `async of` as the start of an arrow function.
+        "The left-hand side of a `for...of` statement may not be `async`" => {
+            let of = next_token_start(text, e);
+            at(next_token_start(text, of + 2), "Unexpected token")
+        }
+        "Only a single declaration is allowed in a `for...of` statement" => {
+            at(next_token_start(text, e), "Unexpected token")
+        }
+        "Unexpected private identifier" if text[..s as usize].contains("class") => at(
+            s,
+            "Private identifier can only be left side of binary expression",
+        ),
+        "A 'yield' expression is only allowed in a generator body." => {
+            at(s, "The keyword 'yield' is reserved")
+        }
+        "A 'return' statement cannot be used inside a class static block." => {
+            at(s, "'return' outside of function")
+        }
+        "A module cannot have multiple default exports." => {
+            // acorn-typescript does not track exports.
+            (!mode.ts).then(|| Candidate::at(last, "Duplicate export 'default'"))
+        }
+        "Keywords cannot contain escape characters" => {
+            let word = unescaped(slice);
+            // The property of `import.meta` / `new.target`.
+            let before = text[..s as usize].trim_end();
+            if let Some(object) = before.strip_suffix('.').map(str::trim_end) {
+                for (keyword, name) in [("import", "import.meta"), ("new", "new.target")] {
+                    if let Some(start) = object.strip_suffix(keyword).map(str::len) {
+                        return at(
+                            start as u32,
+                            &format!("'{name}' must not contain escaped characters"),
+                        );
+                    }
+                }
+            }
+            at(s, &format!("Escape sequence in keyword {word}"))
+        }
+        "The only valid property accesses on import are `import.meta`, `import.source()`, and `import.defer()`" =>
+        {
+            let dot = slice.find('.')? as u32;
+            at(
+                next_token_start(text, s + dot + 1),
+                "The only valid meta property for import is 'import.meta'",
+            )
+        }
+        "The only valid meta property for new is new.target" => {
+            let dot = slice.find('.')? as u32;
+            at(
+                next_token_start(text, s + dot + 1),
+                "The only valid meta property for new is 'new.target'",
+            )
+        }
+        "Dynamic imports can only accept a module specifier and an optional set of attributes as arguments" => {
+            at(next_token_start(text, e), "Unexpected token")
+        }
+        "import() requires a specifier." => at(e.saturating_sub(1), "Unexpected token"),
+        "Argument of dynamic import cannot be a spread element." => at(s, "Unexpected token"),
+        "Invalid Unicode escape sequence"
+            if s > 0 && byte(s - 1) == Some(b'\\') && byte(s) != Some(b'u') =>
+        {
+            at(s, "Expecting Unicode escape sequence \\uXXXX")
+        }
+        _ => {
+            if let Some(flag) = message
+                .strip_prefix("Unexpected flag ")
+                .filter(|rest| rest.ends_with("in regular expression literal"))
+            {
+                let _ = flag;
+                // The regular expression's start comes with the next
+                // report.
+                let start = all
+                    .iter()
+                    .filter_map(|d| d.labels.first().map(|l| l.span()))
+                    .find(|span| span.end == e && byte(span.start) == Some(b'/'))?
+                    .start;
+                return Some(
+                    Candidate::at(start + 1, "Invalid regular expression flag").in_token(start),
+                );
+            }
+            if let Some(rest) = message.strip_prefix("Identifier `") {
+                // A repeated key in an import's `with { … }`.
+                let name = rest.split('`').next().unwrap_or_default();
+                let before = &text[..last as usize];
+                let attributes = before.rfind("with")?;
+                let inside = &before[attributes + 4..];
+                if rest.ends_with("has already been declared")
+                    && inside.trim_start().starts_with('{')
+                    && !inside.contains('}')
+                {
+                    if mode.ts {
+                        // acorn-typescript words it differently, once it
+                        // has read the attribute's value.
+                        let colon = text[last as usize..].find(':')? as u32;
+                        let value = next_token_start(text, last + colon + 1);
+                        let quote = byte(value).filter(|q| matches!(q, b'"' | b'\''))?;
+                        let close = text[value as usize + 1..].find(char::from(quote))? as u32;
+                        return at(value + 1 + close + 1, "Duplicated key in attributes");
+                    }
+                    return at(last, &format!("Duplicate attribute key '{name}'"));
+                }
+            }
+            number_error(message, text, s)
+        }
+    }
+}
+
+/// acorn's errors for a malformed numeric literal, which oxc reports
+/// at the character that does not fit (`at`).
+fn number_error(message: &str, text: &str, at: u32) -> Option<Candidate> {
+    let unfit = message == "Unexpected end of file"
+        || message.starts_with("Invalid Character `")
+        || message == "Invalid characters after number";
+    if !unfit {
+        return None;
+    }
+    let before = text.get(..at as usize)?;
+    let bytes = before.as_bytes();
+    // An exponent without digits: `1e`, `1e+`.
+    let mantissa = before.trim_end_matches(['+', '-']);
+    if let Some(digits) = mantissa.strip_suffix(['e', 'E']) {
+        let start = digits
+            .rfind(|c: char| !c.is_ascii_digit() && c != '.' && c != '_')
+            .map_or(0, |i| i + 1);
+        let number = &digits[start..];
+        if number.starts_with(|c: char| c.is_ascii_digit())
+            && !digits[..start].ends_with(|c: char| c.is_alphanumeric() || c == '_' || c == '$')
+        {
+            return Some(Candidate::at(start as u32, "Invalid number"));
+        }
+    }
+    let here = text.as_bytes().get(at as usize).copied();
+    let start = number_start(text, at);
+    let literal = &before[start as usize..];
+    if literal.is_empty() || !literal.as_bytes()[0].is_ascii_digit() {
+        return None;
+    }
+    let radix = match literal.to_ascii_lowercase().as_str() {
+        "0x" => Some(16),
+        "0o" => Some(8),
+        "0b" => Some(2),
+        _ => None,
+    };
+    if let Some(radix) = radix {
+        if here == Some(b'_') {
+            return Some(Candidate::at(
+                at,
+                "Numeric separator is not allowed at the first of digits",
+            ));
+        }
+        return Some(
+            Candidate::at(at, format!("Expected number in radix {radix}")).in_token(start),
+        );
+    }
+    if here == Some(b'_') && bytes[start as usize] == b'0' {
+        return Some(
+            Candidate::at(
+                at,
+                "Numeric separator is not allowed in legacy octal numeric literals",
+            )
+            .in_token(start),
+        );
+    }
+    if literal.ends_with('_') && here != Some(b'_') {
+        return Some(
+            Candidate::at(
+                at - 1,
+                "Numeric separator is not allowed at the last of digits",
+            )
+            .in_token(start),
+        );
+    }
+    None
+}
+
+/// `word` with its `\uXXXX` / `\u{…}` escapes decoded.
+fn unescaped(word: &str) -> String {
+    let mut out = String::with_capacity(word.len());
+    let mut rest = word;
+    while let Some(escape) = rest.find("\\u") {
+        out.push_str(&rest[..escape]);
+        let after = &rest[escape + 2..];
+        let (digits, tail) = match after.strip_prefix('{') {
+            Some(braced) => match braced.find('}') {
+                Some(close) => (&braced[..close], &braced[close + 1..]),
+                None => ("", after),
+            },
+            None => after.split_at(after.len().min(4)),
+        };
+        match u32::from_str_radix(digits, 16)
+            .ok()
+            .and_then(char::from_u32)
+        {
+            Some(c) => out.push(c),
+            None => out.push_str("\\u"),
+        }
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Words strict-mode code may not use as identifiers.

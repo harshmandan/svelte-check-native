@@ -32,20 +32,20 @@
 use oxc_ast::ast::{
     ArrowFunctionBody, ArrowFunctionExpression, AssignmentTargetPropertyIdentifier,
     AwaitExpression, BindingIdentifier, BindingPattern, BlockStatement, BreakStatement,
-    CallExpression, CatchClause, Class, ClassElement, ContinueStatement, Decorator,
-    DoWhileStatement, Expression, ForInStatement, ForOfStatement, ForStatement, ForStatementInit,
-    ForStatementLeft, FormalParameter, FormalParameters, Function, FunctionBody, FunctionType,
-    IdentifierReference, ImportDeclaration, ImportDeclarationSpecifier, ImportOrExportKind,
-    LabelIdentifier, LabeledStatement, MethodDefinitionKind, NumericLiteral, ObjectExpression,
-    ObjectPropertyKind, PrivateFieldExpression, PrivateInExpression, Program, PropertyKey,
-    PropertyKind, RegExpLiteral, SimpleAssignmentTarget, Statement, StaticBlock, StringLiteral,
-    Super, SwitchStatement, TSAsExpression, TSClassImplements, TSEnumDeclaration,
+    CallExpression, CatchClause, ChainElement, Class, ClassElement, ContinueStatement, Decorator,
+    Directive, DoWhileStatement, Expression, ForInStatement, ForOfStatement, ForStatement,
+    ForStatementInit, ForStatementLeft, FormalParameter, FormalParameters, Function, FunctionBody,
+    FunctionType, IdentifierReference, IfStatement, ImportDeclaration, ImportDeclarationSpecifier,
+    ImportOrExportKind, LabelIdentifier, LabeledStatement, MethodDefinitionKind, NumericLiteral,
+    ObjectExpression, ObjectPropertyKind, PrivateFieldExpression, PrivateInExpression, Program,
+    PropertyKey, PropertyKind, RegExpLiteral, SimpleAssignmentTarget, Statement, StaticBlock,
+    StringLiteral, Super, SwitchStatement, TSAsExpression, TSClassImplements, TSEnumDeclaration,
     TSExternalModuleDeclaration, TSGlobalDeclaration, TSImportEqualsDeclaration,
     TSInterfaceDeclaration, TSNamespaceDeclaration, TSNamespaceDeclarationBody,
     TSSatisfiesExpression, TSType, TSTypeAliasDeclaration, TSTypeAnnotation,
     TSTypeParameterDeclaration, TSTypeParameterInstantiation, TaggedTemplateExpression,
     UnaryExpression, UnaryOperator, VariableDeclaration, VariableDeclarationKind,
-    VariableDeclarator, WhileStatement, WithStatement,
+    VariableDeclarator, WhileStatement, WithStatement, YieldExpression,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_span::{GetSpan, Span};
@@ -115,8 +115,15 @@ pub(crate) fn first_early_error(
         scopes: Vec::new(),
         classes: Vec::new(),
         declaration_kind: None,
+        top_level: module_level_statements(program),
+        in_parameter_default: false,
+        parameter_await_is_expression: false,
         best: None,
     };
+    // A directive is a string literal like any other.
+    for directive in &program.directives {
+        checker.check_string_escapes(directive.expression.span);
+    }
     checker.scopes.push(Scope {
         flags: TOP,
         context: Some(Context::default()),
@@ -124,6 +131,22 @@ pub(crate) fn first_early_error(
     });
     checker.visit_statements(&program.body);
     checker.best
+}
+
+/// Where the statements start that may be an `import` or `export`: the
+/// program's own, and those of a TypeScript namespace or module body,
+/// where `export` marks what the namespace exposes.
+fn module_level_statements(program: &Program<'_>) -> Vec<u32> {
+    struct Collector(Vec<u32>);
+    impl<'a> Visit<'a> for Collector {
+        fn visit_ts_module_block(&mut self, it: &oxc_ast::ast::TSModuleBlock<'a>) {
+            self.0.extend(it.body.iter().map(|s| s.span().start));
+            walk::walk_ts_module_block(self, it);
+        }
+    }
+    let mut collector = Collector(program.body.iter().map(|s| s.span().start).collect());
+    collector.visit_program(program);
+    collector.0
 }
 
 /// Where the first bodiless function declaration (overload signature,
@@ -226,6 +249,17 @@ struct Checker<'s, 't> {
     classes: Vec<PrivateNames<'t>>,
     /// The kind of the variable declaration being visited.
     declaration_kind: Option<VariableDeclarationKind>,
+    /// Where the program's own statements start: an `import` or
+    /// `export` anywhere else is not at the top level.
+    top_level: Vec<u32>,
+    /// Inside the default value of a parameter of the innermost
+    /// function: acorn refuses a `yield` or `await` expression there.
+    in_parameter_default: bool,
+    /// Whether an `await` in the innermost function's parameters is an
+    /// await expression: the function is async, or it is an arrow
+    /// function whose parameters acorn first read as an expression
+    /// where `await` is one.
+    parameter_await_is_expression: bool,
     best: Option<Candidate>,
 }
 
@@ -867,6 +901,28 @@ pub(crate) use svn_parser::acorn::next_token_start;
 
 impl<'a> Visit<'a> for Checker<'_, 'a> {
     fn visit_statement(&mut self, it: &Statement<'a>) {
+        // oxc's TypeScript reading accepts a module declaration inside a
+        // block or function and leaves the error to a later pass.
+        let module_declaration = matches!(
+            it,
+            Statement::ImportDeclaration(_)
+                | Statement::ExportNamedDeclaration(_)
+                | Statement::ExportDefaultDeclaration(_)
+                | Statement::ExportAllDeclaration(_)
+        );
+        let start = it.span().start;
+        // It reads `export` before a nested declaration as a modifier
+        // and keeps only the declaration.
+        let exported = self.text.get(start as usize..).is_some_and(|rest| {
+            rest.strip_prefix("export")
+                .is_some_and(|after| !after.starts_with(oxc_syntax::identifier::is_identifier_part))
+        });
+        if (module_declaration || exported) && !self.top_level.contains(&start) {
+            self.error(
+                start,
+                "'import' and 'export' may only appear at the top level",
+            );
+        }
         if !self.settled(it.span().start) {
             walk::walk_statement(self, it);
         }
@@ -940,9 +996,19 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
             generator: it.generator,
             ..Context::default()
         };
+        let outer = (
+            self.in_parameter_default,
+            self.parameter_await_is_expression,
+        );
+        self.in_parameter_default = false;
+        self.parameter_await_is_expression = it.r#async;
         self.with_context(ctx, FUNCTION, |this| {
             this.function_parts(&it.params, it.body.as_deref(), it.span.start, false);
         });
+        (
+            self.in_parameter_default,
+            self.parameter_await_is_expression,
+        ) = outer;
         if it.body.is_none() {
             self.leak_signature_scope(it);
         }
@@ -977,6 +1043,16 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
             static_block: false,
             labels: Vec::new(),
         };
+        // acorn reads an arrow function's parameters as an expression
+        // of the code around it before it sees the arrow.
+        let await_is_expression =
+            it.r#async || parent.is_async || (!parent.function && !parent.field_init);
+        let outer = (
+            self.in_parameter_default,
+            self.parameter_await_is_expression,
+        );
+        self.in_parameter_default = false;
+        self.parameter_await_is_expression = await_is_expression;
         self.with_context(ctx, FUNCTION, |this| match &it.body {
             ArrowFunctionBody::FunctionBody(body) => {
                 this.function_parts(&it.params, Some(body), it.span.start, false);
@@ -988,6 +1064,35 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
                 }
             }
         });
+        (
+            self.in_parameter_default,
+            self.parameter_await_is_expression,
+        ) = outer;
+    }
+
+    fn visit_directive(&mut self, it: &Directive<'a>) {
+        self.check_string_escapes(it.expression.span);
+    }
+
+    fn visit_yield_expression(&mut self, it: &YieldExpression<'a>) {
+        if self.in_parameter_default {
+            self.error(it.span.start, "Yield expression cannot be a default value");
+        }
+        walk::walk_yield_expression(self, it);
+    }
+
+    fn visit_if_statement(&mut self, it: &IfStatement<'a>) {
+        // Strict mode has no function declaration as the body of an
+        // `if`.
+        for branch in [Some(&it.consequent), it.alternate.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            if let Statement::FunctionDeclaration(function) = branch {
+                self.error(function.span.start, "Unexpected token");
+            }
+        }
+        walk::walk_if_statement(self, it);
     }
 
     fn visit_formal_parameter(&mut self, it: &FormalParameter<'a>) {
@@ -996,7 +1101,9 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
         }
         self.visit_binding_pattern(&it.pattern);
         if let Some(init) = &it.initializer {
+            let outer = std::mem::replace(&mut self.in_parameter_default, true);
             self.visit_expression(init);
+            self.in_parameter_default = outer;
         }
     }
 
@@ -1271,6 +1378,20 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
         {
             self.error(it.span.start, "Deleting local variable in strict mode");
         }
+        if it.operator == UnaryOperator::Delete {
+            let mut target = it.argument.get_inner_expression();
+            if let Expression::ChainExpression(chain) = target
+                && let ChainElement::PrivateFieldExpression(_) = &chain.expression
+            {
+                self.error(it.span.start, "Private fields can not be deleted");
+            }
+            while let Expression::ParenthesizedExpression(inner) = target {
+                target = &inner.expression;
+            }
+            if matches!(target, Expression::PrivateFieldExpression(_)) {
+                self.error(it.span.start, "Private fields can not be deleted");
+            }
+        }
         walk::walk_unary_expression(self, it);
     }
 
@@ -1324,7 +1445,9 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
 
     fn visit_call_expression(&mut self, it: &CallExpression<'a>) {
         if let Expression::Super(s) = &it.callee {
-            if !self.context().allow_direct_super {
+            if !self.context().allow_super {
+                self.error(s.span.start, "'super' keyword outside a method");
+            } else if !self.context().allow_direct_super {
                 self.error(
                     s.span.start,
                     "super() call outside constructor of a subclass",
@@ -1340,7 +1463,9 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
 
     fn visit_await_expression(&mut self, it: &AwaitExpression<'a>) {
         let ctx = self.context();
-        if ctx.static_block {
+        if self.in_parameter_default && self.parameter_await_is_expression {
+            self.error(it.span.start, "Await expression cannot be a default value");
+        } else if ctx.static_block {
             self.error(
                 it.span.start,
                 "Cannot use await in class static initialization block",

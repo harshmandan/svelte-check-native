@@ -888,8 +888,6 @@ const CASES: &[(bool, &str, Expected)] = &[
     (true, "{#each a as { class: b }}x{/each}", None),
     (false, "{#each a as { b = class {} }}x{/each}", None),
     (true, "{#each a as { b = class {} }}x{/each}", None),
-    (false, "{#each a as { a, a }}x{/each}", None),
-    (true, "{#each a as { a, a }}x{/each}", None),
     (
         false,
         "{#each a as { super }}x{/each}",

@@ -32,6 +32,7 @@ use oxc_ast::ast::{
 use oxc_ast_visit::{Visit, walk};
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_span::GetSpan;
+use oxc_syntax::scope::ScopeFlags;
 use svn_core::Range;
 use svn_parser::{Document, ScriptSection};
 
@@ -156,11 +157,27 @@ pub(crate) fn merged_script_error(
 
 /// The first error acorn raises in one script.
 fn first_error(script: &Script<'_, '_, '_>, mode: Mode) -> Option<Candidate> {
-    let text = script.section.content;
-    let from_oxc = script
-        .errors
+    first_error_in(
+        script.section.content,
+        script.program,
+        script.errors,
+        script.panicked,
+        mode,
+    )
+}
+
+/// The first error acorn raises reading `text`, given oxc's parse of
+/// it: the program, the parser's errors, and whether it gave up.
+pub(crate) fn first_error_in(
+    text: &str,
+    program: &Program<'_>,
+    errors: &[OxcDiagnostic],
+    panicked: bool,
+    mode: Mode,
+) -> Option<Candidate> {
+    let from_oxc = errors
         .first()
-        .and_then(|first| translate(first, script.errors, script.program, text, mode))
+        .and_then(|first| translate(first, errors, program, text, mode))
         .filter(|c| !(mode.transpiled && TRANSPILE_REWRITES.contains(&c.message.as_str())));
     // acorn-typescript reads everything after a bodiless function
     // declaration as inside a function (see `acorn_early_errors`).
@@ -168,12 +185,11 @@ fn first_error(script: &Script<'_, '_, '_>, mode: Mode) -> Option<Candidate> {
         let allowed_in_function = c.message == "'return' outside of function"
             || c.message.starts_with("'new.target' can only be used");
         !(allowed_in_function
-            && crate::rules::acorn_early_errors::signature_scope_start(script.program, mode)
+            && crate::rules::acorn_early_errors::signature_scope_start(program, mode)
                 .is_some_and(|start| start <= c.detect))
     });
-    let early = if script.panicked {
-        let stop = script
-            .errors
+    let early = if panicked {
+        let stop = errors
             .first()
             .and_then(|d| d.labels.first())
             .map_or(0, |l| l.span().start);
@@ -184,7 +200,7 @@ fn first_error(script: &Script<'_, '_, '_>, mode: Mode) -> Option<Candidate> {
             (a, b) => a.or(b),
         }
     } else {
-        first_early_error(script.program, text, mode)
+        first_early_error(program, text, mode)
     };
     match (from_oxc, early) {
         (Some(a), Some(b)) => Some(if b.detect < a.detect { b } else { a }),
@@ -445,6 +461,27 @@ fn translate(
         _ => {}
     }
 
+    if matches!(
+        message,
+        "Spread must be last element" | "A rest parameter must be last in a parameter list"
+    ) && let Some(comma) = comma_after_rest(text, s)
+    {
+        return Some(Candidate::at(
+            comma,
+            "Comma is not permitted after the rest element",
+        ));
+    }
+    if message.starts_with("Expected a semicolon or an implicit semicolon")
+        && text[s as usize..].trim_start().starts_with("=>")
+        && let Some(comma) = comma_after_rest_in_arrow_parameters(&text[..s as usize], ts)
+    {
+        // oxc read the parameters as a parenthesized expression, where
+        // a spread may come first, and stopped at the arrow.
+        return Some(Candidate::at(
+            comma,
+            "Comma is not permitted after the rest element",
+        ));
+    }
     if message.starts_with("Expected a semicolon or an implicit semicolon") {
         // A strict-mode reserved word read as an identifier fails
         // before the statement does.
@@ -465,6 +502,11 @@ fn translate(
             ));
         }
         return unexpected(next_token_start(text, s));
+    }
+    if message.starts_with("Expected `:` but found")
+        && let Some(candidate) = keyword_as_shorthand_name(text, s)
+    {
+        return Some(candidate);
     }
     if message.starts_with("Expected `") && message.contains("but found") {
         return unexpected(s);
@@ -551,6 +593,139 @@ fn translate(
         return None;
     }
     unexpected(s)
+}
+
+/// acorn's keywords: a name it refuses wherever an identifier is read.
+const KEYWORDS: &[&str] = &[
+    "break",
+    "case",
+    "catch",
+    "class",
+    "const",
+    "continue",
+    "debugger",
+    "default",
+    "delete",
+    "do",
+    "else",
+    "export",
+    "extends",
+    "false",
+    "finally",
+    "for",
+    "function",
+    "if",
+    "import",
+    "in",
+    "instanceof",
+    "new",
+    "null",
+    "return",
+    "super",
+    "switch",
+    "this",
+    "throw",
+    "true",
+    "try",
+    "typeof",
+    "var",
+    "void",
+    "while",
+    "with",
+];
+
+/// acorn's error for a keyword written as a shorthand property name
+/// (`{ class }`, `{ a, case = 1 }`), which oxc reads as a property key
+/// and reports at the token after it (`at`). acorn checks the name
+/// itself, so its error is at the word.
+fn keyword_as_shorthand_name(text: &str, at: u32) -> Option<Candidate> {
+    let before = text.get(..at as usize)?.trim_end();
+    let word_start = before
+        .char_indices()
+        .rev()
+        .take_while(|&(_, c)| oxc_syntax::identifier::is_identifier_part(c))
+        .last()
+        .map(|(i, _)| i)?;
+    let word = &before[word_start..];
+    if !before[..word_start].trim_end().ends_with(['{', ',']) {
+        return None;
+    }
+    let message = match word {
+        "await" => "Cannot use keyword 'await' outside an async function".to_string(),
+        "enum" => "The keyword 'enum' is reserved".to_string(),
+        _ if KEYWORDS.contains(&word) => format!("Unexpected keyword '{word}'"),
+        _ => return None,
+    };
+    Some(Candidate::at(word_start as u32, message))
+}
+
+/// The comma that follows the rest element whose `...` is at `rest`.
+fn comma_after_rest(text: &str, rest: u32) -> Option<u32> {
+    let target = next_token_start(text, rest + 3);
+    let end = match text.as_bytes().get(target as usize)? {
+        b'{' | b'[' => svn_parser::acorn::match_bracket(text, target).ok()?,
+        _ => identifier_end(text, target),
+    };
+    let comma = next_token_start(text, end);
+    (text.as_bytes().get(comma as usize) == Some(&b',')).then_some(comma)
+}
+
+/// The first comma after a rest element in arrow-function parameters
+/// that oxc read as the parenthesized expression `parameters`.
+fn comma_after_rest_in_arrow_parameters(parameters: &str, ts: bool) -> Option<u32> {
+    struct Finder<'s> {
+        text: &'s str,
+        found: Option<u32>,
+    }
+    impl Finder<'_> {
+        fn spread(&mut self, span: oxc_span::Span, last: bool) {
+            if last {
+                return;
+            }
+            let comma = next_token_start(self.text, span.end);
+            if self.found.is_none_or(|found| comma < found) {
+                self.found = Some(comma);
+            }
+        }
+    }
+    impl<'a> Visit<'a> for Finder<'_> {
+        fn visit_object_expression(&mut self, it: &oxc_ast::ast::ObjectExpression<'a>) {
+            let count = it.properties.len();
+            for (i, property) in it.properties.iter().enumerate() {
+                if let oxc_ast::ast::ObjectPropertyKind::SpreadProperty(spread) = property {
+                    self.spread(spread.span, i + 1 == count);
+                }
+            }
+            walk::walk_object_expression(self, it);
+        }
+
+        fn visit_array_expression(&mut self, it: &oxc_ast::ast::ArrayExpression<'a>) {
+            let count = it.elements.len();
+            for (i, element) in it.elements.iter().enumerate() {
+                if let oxc_ast::ast::ArrayExpressionElement::SpreadElement(spread) = element {
+                    self.spread(spread.span, i + 1 == count);
+                }
+            }
+            walk::walk_array_expression(self, it);
+        }
+
+        // A function inside a default value has parameters of its own.
+        fn visit_arrow_function_expression(&mut self, _: &ArrowFunctionExpression<'a>) {}
+        fn visit_function(&mut self, _: &oxc_ast::ast::Function<'a>, _: ScopeFlags) {}
+    }
+    let allocator = oxc_allocator::Allocator::default();
+    let source_type = oxc_span::SourceType::default()
+        .with_module(true)
+        .with_typescript(ts);
+    let expression = oxc_parser::Parser::new(&allocator, parameters, source_type)
+        .parse_expression()
+        .ok()?;
+    let mut finder = Finder {
+        text: parameters,
+        found: None,
+    };
+    finder.visit_expression(&expression);
+    finder.found
 }
 
 /// Words strict-mode code may not use as identifiers.

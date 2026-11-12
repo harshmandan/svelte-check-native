@@ -28,6 +28,10 @@ mod tag_reader;
 
 use tag_reader::TagError;
 
+use crate::rules::acorn_early_errors::{Mode, Position};
+use crate::rules::js_parse_error::first_error_in;
+use svn_parser::tag_read::{AcornRead, AcornReadShape};
+
 /// One parse error: code, rendered message and range.
 pub(crate) struct ParseFinding {
     pub code: Code,
@@ -102,8 +106,92 @@ impl Finder<'_> {
     }
 
     /// The error the parser met reading a tag the way the compiler does.
+    /// Where acorn threw on a pattern or a parameter list, the error is
+    /// acorn's own for that text.
     fn read_error(&mut self, error: Option<&svn_parser::tag_read::TagReadError>) {
-        self.tag_error(error.cloned().map(TagError::from));
+        let Some(error) = error else { return };
+        // The parser's reading already places a plain unexpected token
+        // and the tokenizer's errors as acorn does.
+        if let Some(read) = error.read
+            && self.acorn_read_error(read, false)
+        {
+            return;
+        }
+        self.tag_error(Some(TagError::from(error.clone())));
+    }
+
+    /// Reports the error acorn raises for a pattern or a parameter list,
+    /// read as a strict-mode module the way the compiler wraps it.
+    /// Returns whether there is one.
+    ///
+    /// The parser's own reading only tells whether acorn accepts the
+    /// text. acorn also rejects what oxc's parser leaves to a later
+    /// pass (`yield` as a name, `eval` as a target, a parameter named
+    /// twice), and words its errors differently: a keyword used as a
+    /// shorthand name is reported at the keyword, a comma after a rest
+    /// element at the comma.
+    ///
+    /// `any`: report an `Unexpected token` too (the parser found no
+    /// error of its own to prefer).
+    fn acorn_read_error(&mut self, read: AcornRead, any: bool) -> bool {
+        let (wrapped, origin) = read.wrapped(self.source);
+        let allocator = Allocator::default();
+        let source_type = SourceType::default()
+            .with_module(true)
+            .with_typescript(self.ts);
+        let parsed = oxc_parser::Parser::new(&allocator, &wrapped, source_type).parse();
+        let mode = Mode {
+            ts: self.ts,
+            transpiled: false,
+        };
+        let candidate = first_error_in(
+            &wrapped,
+            &parsed.program,
+            &parsed.diagnostics,
+            parsed.fatal_error,
+            mode,
+        );
+        let Some(candidate) = candidate else {
+            return false;
+        };
+        let Position::At(at) = candidate.at else {
+            return false;
+        };
+        if !any && candidate.message == "Unexpected token" {
+            return false;
+        }
+        let at = origin + at;
+        self.report(
+            at,
+            Code::js_parse_error,
+            format!("{}\nhttps://svelte.dev/e/js_parse_error", candidate.message),
+            Self::point(at),
+        );
+        true
+    }
+
+    /// The pattern the compiler reads at `start`, when it is a
+    /// destructuring one: its text is what acorn reads.
+    fn pattern_at(&self, start: u32) -> Option<AcornRead> {
+        if !matches!(
+            self.source.as_bytes().get(start as usize),
+            Some(b'{' | b'[')
+        ) {
+            return None;
+        }
+        let end = svn_parser::acorn::match_bracket(self.source, start).ok()?;
+        Some(AcornRead {
+            range: Range::new(start, end),
+            shape: AcornReadShape::Pattern,
+        })
+    }
+
+    /// acorn's error for the pattern at `start`, which the parser read
+    /// without one.
+    fn pattern(&mut self, start: Option<u32>) {
+        if let Some(read) = start.and_then(|start| self.pattern_at(start)) {
+            self.acorn_read_error(read, true);
+        }
     }
 
     fn fragment(&mut self, fragment: &Fragment, at_root: bool) {
@@ -184,6 +272,10 @@ impl Finder<'_> {
             }
             Node::EachBlock(b) => {
                 self.read_error(b.open_error.as_ref());
+                if b.open_error.is_none() {
+                    let context = b.as_clause.as_ref().and_then(|c| c.context_range);
+                    self.pattern(context.map(|r| r.start));
+                }
                 self.fragment(&b.body, false);
                 if let Some(alt) = &b.alternate {
                     self.fragment(alt, false);
@@ -196,10 +288,16 @@ impl Finder<'_> {
                 }
                 if let Some(then) = &b.then_branch {
                     self.read_error(then.open_error.as_ref());
+                    if b.open_error.is_none() && then.open_error.is_none() {
+                        self.pattern(then.context_range.map(|r| r.start));
+                    }
                     self.fragment(&then.body, false);
                 }
                 if let Some(catch) = &b.catch_branch {
                     self.read_error(catch.open_error.as_ref());
+                    if b.open_error.is_none() && catch.open_error.is_none() {
+                        self.pattern(catch.context_range.map(|r| r.start));
+                    }
                     self.fragment(&catch.body, false);
                 }
             }
@@ -209,6 +307,17 @@ impl Finder<'_> {
             }
             Node::SnippetBlock(b) => {
                 self.read_error(b.open_error.as_ref());
+                if b.open_error.is_none() {
+                    // From the type parameters' `<`, or the `(`, to the `)`.
+                    let start = b.generics_range.unwrap_or(b.parameters_range).start - 1;
+                    self.acorn_read_error(
+                        AcornRead {
+                            range: Range::new(start, b.parameters_range.end + 1),
+                            shape: AcornReadShape::Parameters,
+                        },
+                        true,
+                    );
+                }
                 self.fragment(&b.body, false);
             }
             Node::Interpolation(i) => self.tag(i),
@@ -467,7 +576,12 @@ impl Finder<'_> {
                     );
                 }
             }
-            InterpolationKind::AtConst => self.const_tag(i),
+            InterpolationKind::AtConst => {
+                if i.open_error.is_none() {
+                    self.pattern(Some(i.expression_range.start));
+                }
+                self.const_tag(i);
+            }
             InterpolationKind::AtHtml
             | InterpolationKind::Expression
             | InterpolationKind::DeclConst

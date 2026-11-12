@@ -27,6 +27,42 @@ use crate::acorn::{self, BracketError, Read};
 pub struct TagReadError {
     pub at: u32,
     pub kind: TagReadErrorKind,
+    /// The text acorn was reading when it threw, for a pattern or a
+    /// snippet's parameters. acorn has errors of its own for these
+    /// (a keyword as a shorthand name, a comma after a rest element);
+    /// the lint works out which one from this.
+    pub read: Option<AcornRead>,
+}
+
+/// A part of the template the compiler wraps before acorn reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AcornRead {
+    pub range: Range,
+    pub shape: AcornReadShape,
+}
+
+/// How the compiler wraps an [`AcornRead`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcornReadShape {
+    /// A destructuring pattern, read as `(pattern = 1)`.
+    Pattern,
+    /// A snippet's type parameters and parenthesized parameters, read
+    /// as `parameters => {}`.
+    Parameters,
+}
+
+impl AcornRead {
+    /// The text acorn reads for this part of `source`, and the offset in
+    /// `source` its first character stands for.
+    pub fn wrapped(&self, source: &str) -> (String, u32) {
+        let text = self.range.slice(source);
+        match self.shape {
+            AcornReadShape::Pattern => {
+                (format!("({text} = 1)"), self.range.start.saturating_sub(1))
+            }
+            AcornReadShape::Parameters => (format!("{text} => {{}}"), self.range.start),
+        }
+    }
 }
 
 /// The compiler error a [`TagReadError`] is.
@@ -47,7 +83,16 @@ pub enum TagReadErrorKind {
 
 impl TagReadError {
     fn new(at: u32, kind: TagReadErrorKind) -> Self {
-        Self { at, kind }
+        Self {
+            at,
+            kind,
+            read: None,
+        }
+    }
+
+    fn reading(mut self, read: AcornRead) -> Self {
+        self.read = Some(read);
+        self
     }
 
     /// The error `match_bracket()` throws.
@@ -390,15 +435,17 @@ impl<'s> TagReader<'s> {
             let end = acorn::match_bracket(self.source, start).map_err(TagReadError::bracket)?;
             // acorn reads the pattern as the left side of an assignment,
             // written where it stands in the template.
-            let pattern = &self.source[start as usize..end as usize];
-            let wrapped = format!("({pattern} = 1)");
-            let origin = start - 1;
+            let read = AcornRead {
+                range: Range::new(start, end),
+                shape: AcornReadShape::Pattern,
+            };
+            let (wrapped, origin) = read.wrapped(self.source);
             match acorn::read_expression(&wrapped, self.ts) {
                 Read::Error { at, message } => {
-                    return Err(TagReadError::new(
-                        origin + at,
-                        TagReadErrorKind::JsParse(message),
-                    ));
+                    return Err(
+                        TagReadError::new(origin + at, TagReadErrorKind::JsParse(message))
+                            .reading(read),
+                    );
                 }
                 Read::Expression { lookahead, .. } => {
                     self.collect_comments(&wrapped, origin, lookahead, comments);
@@ -729,17 +776,15 @@ impl<'s> TagReader<'s> {
             ));
         }
         let close = index;
-        let params = self
-            .source
-            .get(params_start as usize..=close as usize)
-            .unwrap_or("");
-        if let Read::Error { at, message } =
-            acorn::read_expression(&format!("{params} => {{}}"), self.ts)
-        {
-            return Err(TagReadError::new(
-                params_start + at,
-                TagReadErrorKind::JsParse(message),
-            ));
+        let read = AcornRead {
+            range: Range::new(params_start, close + 1),
+            shape: AcornReadShape::Parameters,
+        };
+        let (wrapped, origin) = read.wrapped(self.source);
+        if let Read::Error { at, message } = acorn::read_expression(&wrapped, self.ts) {
+            return Err(
+                TagReadError::new(origin + at, TagReadErrorKind::JsParse(message)).reading(read),
+            );
         }
         Ok(SnippetOpen {
             name: Range::new(start, name_end),

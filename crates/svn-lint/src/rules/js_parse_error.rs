@@ -297,6 +297,7 @@ fn translate(
     // Messages that only change wording.
     const RENAMED: &[(&str, &str)] = &[
         ("Unterminated string", "Unterminated string constant"),
+        ("Unterminated multiline comment", "Unterminated comment"),
         (
             "`await` is only allowed within async functions and at the top levels of modules",
             "Cannot use keyword 'await' outside an async function",
@@ -339,8 +340,9 @@ fn translate(
         ),
     ];
     if let Some((_, acorn)) = RENAMED.iter().find(|(oxc, _)| *oxc == message) {
-        if message == "Unterminated string" && char_at(s) == Some('`') {
-            return Some(Candidate::at(s + 1, "Unterminated template").in_token(s));
+        if message == "Unterminated string" && matches!(char_at(s), Some('`' | '}')) {
+            let (at, message) = svn_parser::acorn::unterminated_template(text, s, ts);
+            return Some(Candidate::at(at, message).in_token(s));
         }
         if message == "Invalid characters after number" {
             return Some(Candidate::at(s, *acorn).in_token(number_start(text, s)));
@@ -502,6 +504,30 @@ fn translate(
             ));
         }
         return unexpected(next_token_start(text, s));
+    }
+    if message.starts_with("Expected `in` but found") {
+        // A private name not followed by `in`. Outside every class acorn
+        // stops at the name itself.
+        let before = text[..s as usize].trim_end();
+        let name_start = before
+            .char_indices()
+            .rev()
+            .take_while(|&(_, c)| oxc_syntax::identifier::is_identifier_part(c))
+            .last()
+            .map_or(before.len(), |(i, _)| i);
+        if let Some(hash) = name_start.checked_sub(1)
+            && before.as_bytes()[hash] == b'#'
+            && !before[..hash].contains("class")
+        {
+            return unexpected(hash as u32);
+        }
+        return unexpected(s);
+    }
+    if message.starts_with("A unary expression with the")
+        && message.ends_with("exponentiation expression")
+    {
+        // acorn reads the unary expression and then meets the `**`.
+        return unexpected(next_token_start(text, e));
     }
     if message.starts_with("Expected `:` but found")
         && let Some(candidate) = keyword_as_shorthand_name(text, s)
@@ -729,7 +755,7 @@ fn comma_after_rest_in_arrow_parameters(parameters: &str, ts: bool) -> Option<u3
 }
 
 /// Words strict-mode code may not use as identifiers.
-const RESERVED_IN_STRICT_MODE: &[&str] = &[
+pub(crate) const RESERVED_IN_STRICT_MODE: &[&str] = &[
     "implements",
     "interface",
     "let",

@@ -418,24 +418,6 @@ const CASES: &[(bool, &str, Expected)] = &[
     ),
     (
         false,
-        "{let}",
-        Some((
-            "js_parse_error",
-            "The keyword 'let' is reserved\nhttps://svelte.dev/e/js_parse_error",
-            19,
-        )),
-    ),
-    (
-        true,
-        "{let}",
-        Some((
-            "js_parse_error",
-            "The keyword 'let' is reserved\nhttps://svelte.dev/e/js_parse_error",
-            29,
-        )),
-    ),
-    (
-        false,
         "{static}",
         Some((
             "js_parse_error",

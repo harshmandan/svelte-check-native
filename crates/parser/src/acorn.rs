@@ -101,25 +101,9 @@ pub fn read_expression(text: &str, ts: bool) -> Read {
     }
     // Errors of acorn's tokenizer, thrown where the token starts.
     match message {
-        "Unterminated string" if text[label as usize..].starts_with('`') => {
+        "Unterminated string" if text[label as usize..].starts_with(['`', '}']) => {
             let (at, message) = unterminated_template(text, label, ts);
             return Read::Error { at, message };
-        }
-        // oxc reports a template chunk that follows a `${…}` from the
-        // `}` before it.
-        "Unterminated string" if text[label as usize..].starts_with('}') => {
-            let chunk = label + 1;
-            return if chunk == len {
-                Read::Error {
-                    at: len,
-                    message: "Unterminated template literal",
-                }
-            } else {
-                Read::Error {
-                    at: chunk,
-                    message: "Unterminated template",
-                }
-            };
         }
         "Unterminated string" => {
             return Read::Error {
@@ -185,17 +169,20 @@ fn tokenizer_error(text: &str, ts: bool) -> Option<(u32, &'static str)> {
     })
 }
 
-/// Where acorn throws for the template literal that opens at `tick` in
-/// `text` and does not close before the text ends, and its message.
+/// Where acorn throws for a template literal in `text` that does not
+/// close before the text ends, and its message. `from` is where oxc
+/// reports it: the opening backtick, or the `}` that ends a `${…}` when
+/// the chunk after it is the one left open.
 ///
 /// acorn reads a template one chunk at a time. A chunk that the text
 /// ends inside is `Unterminated template`, at the chunk's start. When
 /// the text ends right after a `${…}`, there is no chunk to start, and
 /// the parser throws `Unterminated template literal` at the end. An
 /// error inside a `${…}` that does not close is that expression's own.
-fn unterminated_template(text: &str, tick: u32, ts: bool) -> (u32, &'static str) {
+pub fn unterminated_template(text: &str, tick: u32, ts: bool) -> (u32, &'static str) {
     let bytes = text.as_bytes();
     let len = bytes.len();
+    let after_interpolation = bytes.get(tick as usize) == Some(&b'}');
     let mut chunk = tick as usize + 1;
     let mut i = chunk;
     while i < len {
@@ -218,7 +205,7 @@ fn unterminated_template(text: &str, tick: u32, ts: bool) -> (u32, &'static str)
             _ => i += 1,
         }
     }
-    if chunk == len && chunk > tick as usize + 1 {
+    if chunk == len && (after_interpolation || chunk > tick as usize + 1) {
         (len as u32, "Unterminated template literal")
     } else {
         (chunk as u32, "Unterminated template")

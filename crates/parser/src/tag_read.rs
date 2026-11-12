@@ -49,6 +49,12 @@ pub enum AcornReadShape {
     /// A snippet's type parameters and parenthesized parameters, read
     /// as `parameters => {}`.
     Parameters,
+    /// An expression, read where it stands. To find acorn's error for
+    /// it the lint reads it as the statement `_ = expression`: the right
+    /// side of an assignment is read exactly as an expression on its own
+    /// (parentheses would turn `a,` into arrow parameters, and nothing
+    /// in front would turn `{ a }` into a block).
+    Expression,
 }
 
 impl AcornRead {
@@ -61,6 +67,9 @@ impl AcornRead {
                 (format!("({text} = 1)"), self.range.start.saturating_sub(1))
             }
             AcornReadShape::Parameters => (format!("{text} => {{}}"), self.range.start),
+            AcornReadShape::Expression => {
+                (format!("_ = {text}"), self.range.start.saturating_sub(4))
+            }
         }
     }
 }
@@ -394,10 +403,14 @@ impl<'s> TagReader<'s> {
             }
             Read::Error { at, message } => {
                 self.collect_comments(text, start, at, comments);
-                Err(TagReadError::new(
-                    start + at,
-                    TagReadErrorKind::JsParse(message),
-                ))
+                Err(
+                    TagReadError::new(start + at, TagReadErrorKind::JsParse(message)).reading(
+                        AcornRead {
+                            range: Range::new(start, start + text.len() as u32),
+                            shape: AcornReadShape::Expression,
+                        },
+                    ),
+                )
             }
         }
     }

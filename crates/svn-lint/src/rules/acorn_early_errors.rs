@@ -1374,7 +1374,13 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
     }
 
     fn visit_private_in_expression(&mut self, it: &PrivateInExpression<'a>) {
-        self.use_private(it.left.name.as_str(), it.left.span.start);
+        // Outside every class acorn does not read `#x in` at all: the
+        // private name is an unexpected token.
+        if self.classes.is_empty() {
+            self.error(it.left.span.start, "Unexpected token");
+        } else {
+            self.use_private(it.left.name.as_str(), it.left.span.start);
+        }
         self.visit_expression(&it.right);
     }
 

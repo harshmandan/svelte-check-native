@@ -29,7 +29,7 @@ mod tag_reader;
 use tag_reader::TagError;
 
 use crate::rules::acorn_early_errors::{Mode, Position};
-use crate::rules::js_parse_error::first_error_in;
+use crate::rules::js_parse_error::{RESERVED_IN_STRICT_MODE, first_error_in};
 use svn_parser::tag_read::{AcornRead, AcornReadShape};
 
 /// One parse error: code, rendered message and range.
@@ -106,34 +106,33 @@ impl Finder<'_> {
     }
 
     /// The error the parser met reading a tag the way the compiler does.
-    /// Where acorn threw on a pattern or a parameter list, the error is
-    /// acorn's own for that text.
+    ///
+    /// Where acorn threw, the error is the one [`Self::acorn_read_error`]
+    /// works out for the text acorn was reading: that is the one place
+    /// that knows acorn's messages and positions. The parser's own
+    /// reading decides where a tag ends; its error stands only when the
+    /// other finds none in the text.
     fn read_error(&mut self, error: Option<&svn_parser::tag_read::TagReadError>) {
         let Some(error) = error else { return };
-        // The parser's reading already places a plain unexpected token
-        // and the tokenizer's errors as acorn does.
         if let Some(read) = error.read
-            && self.acorn_read_error(read, false)
+            && self.acorn_read_error(read)
         {
             return;
         }
         self.tag_error(Some(TagError::from(error.clone())));
     }
 
-    /// Reports the error acorn raises for a pattern or a parameter list,
-    /// read as a strict-mode module the way the compiler wraps it.
-    /// Returns whether there is one.
+    /// Reports the error acorn raises for a text the compiler hands it
+    /// (an expression, a pattern, a parameter list), read as strict-mode
+    /// module code and wrapped the way the compiler wraps it. Returns
+    /// whether there is one.
     ///
-    /// The parser's own reading only tells whether acorn accepts the
-    /// text. acorn also rejects what oxc's parser leaves to a later
-    /// pass (`yield` as a name, `eval` as a target, a parameter named
-    /// twice), and words its errors differently: a keyword used as a
-    /// shorthand name is reported at the keyword, a comma after a rest
-    /// element at the comma.
-    ///
-    /// `any`: report an `Unexpected token` too (the parser found no
-    /// error of its own to prefer).
-    fn acorn_read_error(&mut self, read: AcornRead, any: bool) -> bool {
+    /// The error comes from the same translation the `<script>` contents
+    /// go through (`rules::js_parse_error`): oxc's parser errors turned
+    /// into acorn's message and position, and the checks oxc leaves to a
+    /// later pass replayed on the tree (`yield` as a name, a private name
+    /// outside its class, a parameter named twice, an octal literal).
+    fn acorn_read_error(&mut self, read: AcornRead) -> bool {
         let (wrapped, origin) = read.wrapped(self.source);
         let allocator = Allocator::default();
         let source_type = SourceType::default()
@@ -157,10 +156,16 @@ impl Finder<'_> {
         let Position::At(at) = candidate.at else {
             return false;
         };
-        if !any && candidate.message == "Unexpected token" {
-            return false;
+        let mut at = origin + at;
+        if at > read.range.end {
+            // In the text the wrapping adds after the read. An expression
+            // that runs out is acorn meeting whatever follows it; for a
+            // pattern or parameters the wrapping itself is at fault.
+            if read.shape != AcornReadShape::Expression {
+                return false;
+            }
+            at = read.range.end;
         }
-        let at = origin + at;
         self.report(
             at,
             Code::js_parse_error,
@@ -168,6 +173,38 @@ impl Finder<'_> {
             Self::point(at),
         );
         true
+    }
+
+    /// acorn's error for the expression it reads at the start of
+    /// `range`, which the parser read without one: acorn rejects more
+    /// than a syntax error in strict-mode module code (a private name
+    /// outside its class, `yield` as a name, an octal literal).
+    fn expression(&mut self, range: Range) {
+        let text = range.slice(self.source);
+        let svn_parser::acorn::Read::Expression { end, .. } =
+            svn_parser::acorn::read_expression(text, self.ts)
+        else {
+            return;
+        };
+        let text = &text[..end as usize];
+        if is_plain_reference(text) {
+            return;
+        }
+        self.acorn_read_error(AcornRead {
+            range: Range::new(range.start, range.start + end),
+            shape: AcornReadShape::Expression,
+        });
+    }
+
+    /// The initializer of the `{@const pattern = init}` whose pattern
+    /// starts at `start` and whose tag closes at `close`.
+    fn const_initializer(&self, start: u32, close: u32) -> Option<Range> {
+        let reader = svn_parser::tag_read::TagReader::new(self.source, self.ts);
+        let (_, after) = reader
+            .read_pattern(start, close, &mut svn_parser::tag_read::Comments::default())
+            .ok()?;
+        let equals = reader.skip_whitespace(after);
+        (reader.byte(equals) == Some(b'=')).then(|| Range::new(equals + 1, close))
     }
 
     /// The pattern the compiler reads at `start`, when it is a
@@ -190,7 +227,7 @@ impl Finder<'_> {
     /// without one.
     fn pattern(&mut self, start: Option<u32>) {
         if let Some(read) = start.and_then(|start| self.pattern_at(start)) {
-            self.acorn_read_error(read, true);
+            self.acorn_read_error(read);
         }
     }
 
@@ -261,9 +298,15 @@ impl Finder<'_> {
             }
             Node::IfBlock(b) => {
                 self.read_error(b.open_error.as_ref());
+                if b.open_error.is_none() {
+                    self.expression(b.condition_range);
+                }
                 self.fragment(&b.consequent, false);
                 for arm in &b.elseif_arms {
                     self.read_error(arm.open_error.as_ref());
+                    if arm.open_error.is_none() {
+                        self.expression(arm.condition_range);
+                    }
                     self.fragment(&arm.body, false);
                 }
                 if let Some(alt) = &b.alternate {
@@ -273,8 +316,12 @@ impl Finder<'_> {
             Node::EachBlock(b) => {
                 self.read_error(b.open_error.as_ref());
                 if b.open_error.is_none() {
+                    self.expression(b.expression_range);
                     let context = b.as_clause.as_ref().and_then(|c| c.context_range);
                     self.pattern(context.map(|r| r.start));
+                    if let Some(key) = b.as_clause.as_ref().and_then(|c| c.key_range) {
+                        self.expression(key);
+                    }
                 }
                 self.fragment(&b.body, false);
                 if let Some(alt) = &b.alternate {
@@ -283,6 +330,9 @@ impl Finder<'_> {
             }
             Node::AwaitBlock(b) => {
                 self.read_error(b.open_error.as_ref());
+                if b.open_error.is_none() {
+                    self.expression(b.expression_range);
+                }
                 if let Some(pending) = &b.pending {
                     self.fragment(pending, false);
                 }
@@ -303,6 +353,9 @@ impl Finder<'_> {
             }
             Node::KeyBlock(b) => {
                 self.read_error(b.open_error.as_ref());
+                if b.open_error.is_none() {
+                    self.expression(b.expression_range);
+                }
                 self.fragment(&b.body, false);
             }
             Node::SnippetBlock(b) => {
@@ -310,13 +363,10 @@ impl Finder<'_> {
                 if b.open_error.is_none() {
                     // From the type parameters' `<`, or the `(`, to the `)`.
                     let start = b.generics_range.unwrap_or(b.parameters_range).start - 1;
-                    self.acorn_read_error(
-                        AcornRead {
-                            range: Range::new(start, b.parameters_range.end + 1),
-                            shape: AcornReadShape::Parameters,
-                        },
-                        true,
-                    );
+                    self.acorn_read_error(AcornRead {
+                        range: Range::new(start, b.parameters_range.end + 1),
+                        shape: AcornReadShape::Parameters,
+                    });
                 }
                 self.fragment(&b.body, false);
             }
@@ -346,6 +396,11 @@ impl Finder<'_> {
         for attr in attributes {
             let at = attr.range().start;
             self.attribute_value(attr);
+            match attr {
+                Attribute::Spread(spread) => self.expression(spread.expression_range),
+                Attribute::Attach(attach) => self.expression(attach.expression_range),
+                _ => {}
+            }
             if let Attribute::Shorthand(s) = attr {
                 let inner = &self.source[s.range.start as usize + 1..s.range.end as usize];
                 let at = s.range.start + 1 + (inner.len() - inner.trim_start().len()) as u32;
@@ -438,6 +493,7 @@ impl Finder<'_> {
             _ => Vec::new(),
         };
         for expression in &expressions {
+            self.expression(*expression);
             if expression.slice(self.source).trim().is_empty() {
                 let at = expression.end;
                 self.report(
@@ -541,6 +597,21 @@ impl Finder<'_> {
     fn tag(&mut self, i: &Interpolation) {
         let start = i.range.start;
         self.read_error(i.open_error.as_ref());
+        if i.open_error.is_none() {
+            match i.kind {
+                InterpolationKind::Expression
+                | InterpolationKind::AtHtml
+                | InterpolationKind::AtRender
+                | InterpolationKind::AtDebug => self.expression(i.expression_range),
+                InterpolationKind::AtConst => {
+                    let close = i.range.end.saturating_sub(1);
+                    if let Some(init) = self.const_initializer(i.expression_range.start, close) {
+                        self.expression(init);
+                    }
+                }
+                _ => {}
+            }
+        }
         match i.kind {
             InterpolationKind::AtTag => {
                 // `special()` reads `html`, `debug`, `const` and
@@ -646,6 +717,25 @@ impl Finder<'_> {
             Range::new(init_start, end),
         );
     }
+}
+
+/// Whether `text` is a dotted chain of plain names (`a`, `a.b.c`), which
+/// acorn accepts whenever it parses: nothing in it can be a reserved
+/// word, a private name or a literal.
+fn is_plain_reference(text: &str) -> bool {
+    text.trim().split('.').all(|part| {
+        let part = part.trim();
+        let mut chars = part.chars();
+        chars
+            .next()
+            .is_some_and(|c| c.is_alphabetic() || matches!(c, '_' | '$'))
+            && chars.all(|c| c.is_alphanumeric() || matches!(c, '_' | '$'))
+            && !RESERVED_IN_STRICT_MODE.contains(&part)
+            && !matches!(
+                part,
+                "eval" | "arguments" | "await" | "enum" | "super" | "new"
+            )
+    })
 }
 
 fn expression_start(e: &Expression<'_>) -> u32 {

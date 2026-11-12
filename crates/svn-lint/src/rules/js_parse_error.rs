@@ -285,6 +285,9 @@ fn translate(
     let char_at = |at: u32| text.get(at as usize..).and_then(|r| r.chars().next());
     let ts = mode.ts;
 
+    if ts && let Some(decided) = acorn_typescript_wording(diagnostic, program, text) {
+        return decided;
+    }
     if let Some(candidate) = acorn_wording(diagnostic, all, text, mode) {
         return Some(candidate);
     }
@@ -508,8 +511,13 @@ fn translate(
     }
     if message.starts_with("Expected a semicolon or an implicit semicolon")
         && text[s as usize..].trim_start().starts_with("=>")
-        && let Some(candidate) = arrow_parameters_error(text, s, ts)
+        && !in_type_alias(text, s)
+        && let Some(decided) = arrow_parameters_error(text, s, ts)
+        && (decided.is_some() || ts)
     {
+        // Nothing wrong with them: acorn-typescript reads parameters
+        // oxc does not (a cast around a name).
+        let candidate = decided?;
         // oxc read the parameters as a parenthesized expression and
         // stopped at the arrow; acorn turns that expression into
         // parameters and rejects what cannot be one.
@@ -526,6 +534,12 @@ fn translate(
             .last()
             .map_or(before.len(), |(i, _)| i);
         let word = &before[word_start..];
+        if ts && word == "interface" && !before[..word_start].trim_end().ends_with(['.', '?']) {
+            return Some(Candidate::at(
+                next_token_start(text, s),
+                "'interface' declarations must be followed by an identifier.",
+            ));
+        }
         if RESERVED_IN_STRICT_MODE.contains(&word)
             && !before[..word_start].trim_end().ends_with(['.', '?'])
         {
@@ -747,7 +761,7 @@ fn comma_after_rest(text: &str, rest: u32) -> Option<u32> {
 /// binding (`toAssignable`, then `checkParams`): a spread must come
 /// last, a default uses `=`, and the target is a name or a pattern, not
 /// a member, a literal or something in parentheses of its own.
-fn arrow_parameters_error(text: &str, arrow: u32, ts: bool) -> Option<Candidate> {
+fn arrow_parameters_error(text: &str, arrow: u32, ts: bool) -> Option<Option<Candidate>> {
     use oxc_ast::ast::{ArrayExpressionElement, ObjectPropertyKind};
 
     // The parameters are the last parenthesized group before the arrow.
@@ -852,6 +866,13 @@ fn arrow_parameters_error(text: &str, arrow: u32, ts: bool) -> Option<Candidate>
                 Expression::ParenthesizedExpression(inner) => {
                     self.error(inner.span.start, "Parenthesized pattern");
                 }
+                // acorn-typescript takes the expression under a cast.
+                Expression::TSAsExpression(cast) if self.ts => self.target(&cast.expression),
+                Expression::TSSatisfiesExpression(cast) if self.ts => {
+                    self.target(&cast.expression);
+                }
+                Expression::TSTypeAssertion(cast) if self.ts => self.target(&cast.expression),
+                Expression::TSNonNullExpression(cast) if self.ts => self.target(&cast.expression),
                 other if self.ts && other.is_member_expression() => {
                     self.error(other.span().start, "Binding member expression");
                 }
@@ -872,9 +893,11 @@ fn arrow_parameters_error(text: &str, arrow: u32, ts: bool) -> Option<Candidate>
         }
         single => check.target(single),
     }
-    check
-        .first
-        .map(|(at, message)| Candidate::at(open as u32 + at, message))
+    Some(
+        check
+            .first
+            .map(|(at, message)| Candidate::at(open as u32 + at, message)),
+    )
 }
 
 /// Whether `at` lies inside an async function.
@@ -909,6 +932,435 @@ fn in_async_function(program: &Program<'_>, at: u32) -> bool {
     };
     finder.visit_program(program);
     finder.innermost == Some(true)
+}
+
+/// Whether the `=>` at `arrow` follows the parenthesized start of a type
+/// alias's type (`type A = (…) => …`), where the parentheses are no
+/// arrow function's parameters.
+fn in_type_alias(text: &str, arrow: u32) -> bool {
+    let before = &text[..arrow as usize];
+    let statement = before
+        .rfind(['\n', ';'])
+        .map_or(before, |i| &before[i + 1..])
+        .trim_start();
+    statement.starts_with("type ")
+        || statement.starts_with("export type ")
+        || statement.starts_with("declare type ")
+}
+
+/// The text from the start of the class, interface or type literal
+/// member list that `at` lies in back to the previous statement: what
+/// kind of body it is.
+fn enclosing_body_header(text: &str, at: u32) -> &str {
+    let before = &text[..at as usize];
+    let mut depth = 0usize;
+    for (i, c) in before.char_indices().rev() {
+        match c {
+            '}' => depth += 1,
+            '{' if depth == 0 => {
+                let head = &before[..i];
+                let from = head.rfind(['\n', ';', '}']).map_or(0, |j| j + 1);
+                return head[from..].trim();
+            }
+            '{' => depth -= 1,
+            _ => {}
+        }
+    }
+    ""
+}
+
+/// Whether `at` is a member of a class body (not of an interface or a
+/// type literal).
+fn in_class_body(text: &str, at: u32) -> bool {
+    let header = enclosing_body_header(text, at);
+    header.split_whitespace().any(|word| word == "class")
+        || header.starts_with("class")
+        || header.contains(" class ")
+}
+
+/// Where the class member whose name is at `key` starts, modifiers
+/// included.
+fn class_member_start(program: &Program<'_>, key: u32) -> Option<u32> {
+    struct Finder {
+        key: u32,
+        found: Option<u32>,
+    }
+    impl<'a> Visit<'a> for Finder {
+        fn visit_class_element(&mut self, it: &oxc_ast::ast::ClassElement<'a>) {
+            if it
+                .property_key()
+                .is_some_and(|k| k.span().start == self.key)
+            {
+                self.found = Some(it.span().start);
+            }
+            walk::walk_class_element(self, it);
+        }
+    }
+    let mut finder = Finder { key, found: None };
+    finder.visit_program(program);
+    finder.found
+}
+
+/// Whether a class field's value starts at `value`.
+fn class_field_value_at(program: &Program<'_>, value: u32) -> bool {
+    struct Finder {
+        value: u32,
+        found: bool,
+    }
+    impl<'a> Visit<'a> for Finder {
+        fn visit_property_definition(&mut self, it: &oxc_ast::ast::PropertyDefinition<'a>) {
+            if it
+                .value
+                .as_ref()
+                .is_some_and(|v| v.span().start == self.value)
+            {
+                self.found = true;
+            }
+            walk::walk_property_definition(self, it);
+        }
+    }
+    let mut finder = Finder {
+        value,
+        found: false,
+    };
+    finder.visit_program(program);
+    finder.found
+}
+
+/// Where the function whose body starts at `body` starts.
+fn function_start_with_body_at(program: &Program<'_>, body: u32) -> Option<u32> {
+    struct Finder {
+        body: u32,
+        found: Option<u32>,
+    }
+    impl<'a> Visit<'a> for Finder {
+        fn visit_function(&mut self, it: &oxc_ast::ast::Function<'a>, flags: ScopeFlags) {
+            if matches!(
+                it.r#type,
+                oxc_ast::ast::FunctionType::FunctionDeclaration
+                    | oxc_ast::ast::FunctionType::TSDeclareFunction
+            ) && it.body.as_ref().is_some_and(|b| b.span.start == self.body)
+            {
+                self.found = Some(it.span.start);
+            }
+            walk::walk_function(self, it, flags);
+        }
+    }
+    let mut finder = Finder { body, found: None };
+    finder.visit_program(program);
+    finder.found
+}
+
+/// acorn-typescript's answer to an error oxc reports for TypeScript
+/// syntax, one entry per error in acorn-typescript's own table that has
+/// an oxc counterpart. `Some(None)`: acorn-typescript accepts it.
+/// `None`: not decided here.
+fn acorn_typescript_wording(
+    diagnostic: &OxcDiagnostic,
+    program: &Program<'_>,
+    text: &str,
+) -> Option<Option<Candidate>> {
+    let message = diagnostic.message.as_ref();
+    let span = diagnostic.labels.first().map(|l| l.span())?;
+    let (s, e) = (span.start, span.end);
+    let last = diagnostic.labels.last().map_or(s, |l| l.span().start);
+    let at = |offset: u32, message: &str| Some(Some(Candidate::at(offset, message)));
+    let unexpected = |offset: u32| Some(Some(Candidate::at(offset, "Unexpected token")));
+    let byte = |offset: u32| text.as_bytes().get(offset as usize).copied();
+    let slice = text.get(s as usize..e as usize).unwrap_or_default();
+    let before = text[..s as usize].trim_end();
+    match message {
+        "Initializers are not allowed in ambient contexts." => {
+            // On a class field, at its `=`.
+            if class_field_value_at(program, s)
+                && let Some(equals) = before.strip_suffix('=').map(str::len)
+            {
+                return at(equals as u32, message);
+            }
+            at(s, message)
+        }
+        "'override' modifier cannot appear on an index signature."
+        | "A required element cannot follow an optional element."
+        | "'readonly' type modifier is only permitted on array and tuple literal types."
+        | "A parameter property may not be declared using a binding pattern."
+        | "The 'type' modifier cannot be used on a named export when 'export type' is used on its export statement."
+        | "The 'type' modifier cannot be used on a named import when 'import type' is used on its import statement." => {
+            at(s, message)
+        }
+        "'readonly' modifier can only appear on a property declaration or index signature." => {
+            if in_class_body(text, s) {
+                at(s, "Class methods cannot have the 'readonly' modifier.")
+            } else {
+                at(s, message)
+            }
+        }
+        "Type parameters cannot appear on a constructor declaration" => at(
+            s,
+            "Type parameters cannot appear on a constructor declaration.",
+        ),
+        "'abstract' modifier cannot appear on an index signature." => {
+            at(s, "Index signatures cannot have the 'abstract' modifier.")
+        }
+        "'declare' modifier cannot appear on an index signature." => {
+            at(s, "Index signatures cannot have the 'declare' modifier.")
+        }
+        "'public' modifier cannot appear on an index signature."
+        | "'private' modifier cannot appear on an index signature."
+        | "'protected' modifier cannot appear on an index signature." => at(
+            s,
+            &format!("Index signatures cannot have an accessibility modifier ('{slice}')."),
+        ),
+        "'abstract' modifier cannot be used with a private identifier." => {
+            at(s, "Private elements cannot have the 'abstract' modifier.")
+        }
+        "An accessibility modifier cannot be used with a private identifier." => {
+            // A method when a parameter list follows the name.
+            let name = next_token_start(text, e);
+            let after = next_token_start(text, identifier_end(text, name + 1));
+            let kind = if matches!(byte(after), Some(b'(' | b'<')) {
+                "methods"
+            } else {
+                "elements"
+            };
+            at(
+                s,
+                &format!("Private {kind} cannot have an accessibility modifier ('{slice}')."),
+            )
+        }
+        "'declare' modifier cannot appear on class elements of this kind." => {
+            at(s, "Class methods cannot have the 'declare' modifier.")
+        }
+        "'declare' modifier cannot be used here." if in_class_body(text, s) => {
+            at(s, "Class methods cannot have the 'declare' modifier.")
+        }
+        "An implementation cannot be declared in ambient contexts." => {
+            // Only for a function declaration: a declared class may give
+            // its methods a body.
+            match function_start_with_body_at(program, s) {
+                Some(start) => at(start, message),
+                None => Some(None),
+            }
+        }
+        "'extends' list cannot be empty." | "'implements' list cannot be empty." => {
+            at(next_token_start(text, e), message)
+        }
+        "Type argument list cannot be empty." => {
+            // In a call acorn-typescript does not get as far as a type
+            // argument list.
+            if matches!(byte(next_token_start(text, e)), Some(b'(' | b'`')) {
+                return unexpected(s + 1);
+            }
+            at(s + 1, message)
+        }
+        "Type parameter list cannot be empty." => at(next_token_start(text, e), message),
+        "An import alias cannot use 'import type'" => {
+            let equals = slice.find('=')? as u32;
+            at(
+                next_token_start(text, s + equals + 1),
+                "An import alias can not use 'import type'.",
+            )
+        }
+        "An instantiation expression cannot be followed by a property access." => {
+            let close = slice.rfind('>')? as u32;
+            at(
+                s + close + 1,
+                "Invalid property access after an instantiation expression. You can either wrap the instantiation expression in parentheses, or delete the type arguments.",
+            )
+        }
+        "A type-only import can specify a default import or named bindings, but not both." => {
+            let statement = text[..s as usize].rfind("import")?;
+            at(statement as u32, message)
+        }
+        "String literal expected." if before.ends_with("import(") => {
+            at(s, "Argument in a type import must be a string literal.")
+        }
+        "An arrow function cannot have a `this` parameter." => at(s, "Assigning to rvalue"),
+        "A rest parameter cannot be optional" => {
+            let rest = text[..s as usize].rfind("...")?;
+            at(
+                rest as u32,
+                "A binding pattern parameter cannot be optional in an implementation signature.",
+            )
+        }
+        "Modifiers cannot appear here." => {
+            // A modifier before a static block, reported inside the block.
+            let block = text[e as usize..].find('{')? as u32;
+            at(
+                e + block + 1,
+                "Static class blocks cannot have any modifier.",
+            )
+        }
+        "'extends' clause must precede 'implements' clause" => unexpected(last),
+        "Classes can only extend a single class." => {
+            unexpected(text[..s as usize].rfind(',')? as u32)
+        }
+        "Interface declaration cannot have 'implements' clause."
+        | "An enum member cannot have a numeric name." => unexpected(s),
+        "A property cannot be both optional and definite." => unexpected(s + 1),
+        "Only string literals are allowed as module attribute values." => {
+            at(e, "Only string is supported as an attribute value")
+        }
+        // acorn-typescript accepts these.
+        "'new super()' is not allowed"
+        | "Dynamic imports can only accept a module specifier and an optional set of attributes as arguments" => {
+            Some(None)
+        }
+        "Tagged template expressions are not permitted in an optional chain"
+            if s > 0 && byte(s - 1) == Some(b'>') =>
+        {
+            Some(None)
+        }
+        "Declaration cannot appear in a single-statement context" => {
+            // A type-level declaration is one acorn-typescript reads
+            // anywhere a statement goes.
+            let word = slice.split_whitespace().next().unwrap_or_default();
+            matches!(
+                word,
+                "type" | "interface" | "namespace" | "module" | "declare" | "enum" | "abstract"
+            )
+            .then_some(None)
+        }
+        _ => {
+            if let Some(rest) = message
+                .strip_prefix("Method '")
+                .or_else(|| message.strip_prefix("Accessor '"))
+            {
+                if rest.ends_with("cannot have an implementation because it is marked abstract.") {
+                    let name = rest.split('\'').next().unwrap_or_default();
+                    return at(
+                        class_member_start(program, s).unwrap_or(s),
+                        &format!(
+                            "Method '{name}' cannot have an implementation because it is marked abstract."
+                        ),
+                    );
+                }
+            }
+            if message.starts_with("Property '")
+                && message.ends_with("cannot have an initializer because it is marked abstract.")
+            {
+                return at(next_token_start(text, e), message);
+            }
+            if message.ends_with("' modifier cannot appear on a type member.") {
+                // acorn-typescript passes its message template itself.
+                return at(
+                    next_token_start(text, e),
+                    "({ modifier }) => `'${modifier}' modifier cannot appear on a type member.`",
+                );
+            }
+            if message.ends_with(
+                "' modifier can only appear on a type parameter of a class, interface or type alias.",
+            ) {
+                return at(
+                    next_token_start(text, e),
+                    "({ modifier }) => `'${modifier}' modifier can only appear on a type parameter of a class, interface or type alias.`",
+                );
+            }
+            if message.ends_with("' modifier cannot be used on a type parameter.") {
+                // Read as the parameter's name, so what follows it is
+                // unexpected, unless the name itself is reserved.
+                if RESERVED_IN_STRICT_MODE.contains(&slice) {
+                    return at(s, &format!("The keyword '{slice}' is reserved"));
+                }
+                return unexpected(next_token_start(text, e));
+            }
+            if message.ends_with("' modifier cannot be used here.") {
+                // The modifier is read as a name: a reserved one is
+                // refused there, and after any other the next token is
+                // unexpected. `abstract` before a word that is no
+                // keyword (`let`, `enum`, `type`, `namespace`) starts a
+                // declaration that is then refused at `abstract`.
+                if RESERVED_IN_STRICT_MODE.contains(&slice) {
+                    return at(s, &format!("The keyword '{slice}' is reserved"));
+                }
+                let next = next_token_start(text, e);
+                if slice == "abstract" && !KEYWORDS.contains(&word_at(text, next)) {
+                    return unexpected(s);
+                }
+                return unexpected(next);
+            }
+            if message == "Identifier expected. 'this' is a reserved word that cannot be used here."
+            {
+                // A `this` parameter is read wherever it stands.
+                return Some(None);
+            }
+            if message == "Unexpected token" {
+                // What follows `implements` / `export declare`.
+                if before.ends_with("implements") {
+                    return at(s, "'implements' list cannot be empty.");
+                }
+                if before.ends_with("export declare") {
+                    return at(
+                        s,
+                        "'export declare' must be followed by an ambient declaration.",
+                    );
+                }
+                // A decorator before something that is no class.
+                if let Some(decorator) = before.rfind('@') {
+                    let expression = &before[decorator + 1..];
+                    let is_decorator = !expression.is_empty()
+                        && !expression.contains(char::is_whitespace)
+                        && !expression.contains([';', '{', '}']);
+                    if is_decorator && !slice.starts_with("class") && !slice.starts_with("export") {
+                        return at(
+                            s,
+                            "Leading decorators must be attached to a class declaration.",
+                        );
+                    }
+                }
+            }
+            if message.starts_with("Expected `;` but found") {
+                // The same modifier written twice before a member.
+                let mut words = before.split_whitespace().rev();
+                if let (Some(a), Some(b)) = (words.next(), words.next())
+                    && a == b
+                    && matches!(
+                        a,
+                        "static" | "declare" | "abstract" | "override" | "readonly"
+                    )
+                    && in_class_body(text, s)
+                {
+                    return at(s, &format!("Duplicate modifier: '{a}'."));
+                }
+            }
+            if message.starts_with("Expected `,` or `]` but found `:`") && byte(last) == Some(b'[')
+            {
+                // A tuple member whose label is no plain name, at the
+                // member.
+                let member = text[..s as usize].rfind([',', '['])? as u32;
+                return at(
+                    next_token_start(text, member + 1),
+                    "Tuple members must be labeled with a simple identifier.",
+                );
+            }
+            if message.starts_with("Expected `,` or `)` but found `:`") && byte(last) == Some(b'(')
+            {
+                // After a parameter's default value. In parentheses that
+                // are no parameter list acorn-typescript reads a type
+                // annotation and goes on.
+                let head = text[..last as usize].trim_end();
+                let parameters = head
+                    .ends_with(|c: char| oxc_syntax::identifier::is_identifier_part(c) || c == '>')
+                    && !head.ends_with("return");
+                if !parameters {
+                    return Some(None);
+                }
+                return at(
+                    s,
+                    "Type annotations must come before default assignments, e.g. instead of `age = 25: number` use `age: number = 25`.",
+                );
+            }
+            // Parentheses holding a type annotation and no arrow after
+            // them: acorn-typescript reads a typed expression.
+            if (message.starts_with("Expected `=>` but found")
+                || message == "Line terminator not permitted before arrow")
+                && !text[s as usize..].trim_start().starts_with("=>")
+                && before.contains(':')
+            {
+                return Some(None);
+            }
+            None
+        }
+    }
 }
 
 /// acorn's own wording and position for an error oxc words differently,

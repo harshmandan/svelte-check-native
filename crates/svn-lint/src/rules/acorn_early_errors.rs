@@ -30,6 +30,10 @@
 //!   namespaces in scopes of its own.
 
 use oxc_ast::ast::{
+    AccessorPropertyType, ConditionalExpression, ImportExpression, MethodDefinitionType,
+    PropertyDefinitionType,
+};
+use oxc_ast::ast::{
     ArrowFunctionBody, ArrowFunctionExpression, AssignmentTargetPropertyIdentifier,
     AwaitExpression, BindingIdentifier, BindingPattern, BlockStatement, BreakStatement,
     CallExpression, CatchClause, ChainElement, Class, ClassElement, ContinueStatement, Decorator,
@@ -671,6 +675,18 @@ impl<'s, 't> Checker<'s, 't> {
     ) {
         for param in &params.items {
             self.check_parameter_modifiers(param, modifiers_allowed);
+            // acorn-typescript: a destructured parameter of a function
+            // with a body cannot be optional.
+            if self.ts_as_written()
+                && body.is_some()
+                && param.optional
+                && param.pattern.is_destructuring_pattern()
+            {
+                self.error(
+                    param.span.start,
+                    "A binding pattern parameter cannot be optional in an implementation signature.",
+                );
+            }
         }
         self.visit_formal_parameters(params);
         // Parameter names: function-scoped, never repeated.
@@ -827,6 +843,37 @@ impl<'s, 't> Checker<'s, 't> {
     }
 }
 
+/// acorn-typescript's `isValidAmbientConstInitializer`: a literal, a
+/// template without expressions, a signed number, or a reference to an
+/// enum member.
+fn ambient_const_initializer(init: &Expression<'_>) -> bool {
+    fn name_chain(expression: &Expression<'_>) -> bool {
+        match expression {
+            Expression::Identifier(_) => true,
+            Expression::StaticMemberExpression(member) => name_chain(&member.object),
+            _ => false,
+        }
+    }
+    match init {
+        Expression::TemplateLiteral(template) => template.expressions.is_empty(),
+        Expression::UnaryExpression(unary) => {
+            matches!(
+                unary.operator,
+                UnaryOperator::UnaryNegation | UnaryOperator::UnaryPlus
+            ) && matches!(
+                unary.argument,
+                Expression::NumericLiteral(_) | Expression::BigIntLiteral(_)
+            )
+        }
+        Expression::StaticMemberExpression(member) => name_chain(&member.object),
+        Expression::ComputedMemberExpression(member) => {
+            matches!(&member.expression, Expression::TemplateLiteral(t) if t.expressions.is_empty())
+                && name_chain(&member.object)
+        }
+        other => other.is_literal(),
+    }
+}
+
 /// acorn's wording (V8's) for why a regular expression pattern is
 /// invalid, from oxc's.
 fn regexp_reason(message: &str) -> String {
@@ -937,6 +984,21 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
     fn visit_variable_declaration(&mut self, it: &VariableDeclaration<'a>) {
         if it.declare && self.mode.transpiled {
             return;
+        }
+        // acorn-typescript: what a declared `const` without a type may
+        // be initialized with.
+        if self.ts_as_written() && it.declare && it.kind == VariableDeclarationKind::Const {
+            for declarator in &it.declarations {
+                if declarator.type_annotation.is_none()
+                    && let Some(init) = &declarator.init
+                    && !ambient_const_initializer(init)
+                {
+                    self.error(
+                        init.span().start,
+                        "A 'const' initializer in an ambient context must be a string or numeric literal or literal enum reference.",
+                    );
+                }
+            }
         }
         if matches!(
             it.kind,
@@ -1070,6 +1132,40 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
         ) = outer;
     }
 
+    fn visit_conditional_expression(&mut self, it: &ConditionalExpression<'a>) {
+        // `a ? (b) : c => d`: acorn-typescript reads `(b): c => d` as an
+        // arrow function with a return type and never goes back, so the
+        // conditional is left without its `:`.
+        if self.ts_as_written()
+            && let Expression::ParenthesizedExpression(group) = &it.consequent
+            && matches!(group.expression, Expression::Identifier(_))
+            && let Expression::ArrowFunctionExpression(arrow) = &it.alternate
+            && !arrow.r#async
+            && arrow.type_parameters.is_none()
+            && !self.span_text(arrow.span).starts_with('(')
+        {
+            let at = self.next_token(it.span.end);
+            self.error(at, "Unexpected token");
+        }
+        walk::walk_conditional_expression(self, it);
+    }
+
+    fn visit_import_expression(&mut self, it: &ImportExpression<'a>) {
+        // acorn-typescript has no trailing comma in `import()`.
+        if self.ts_as_written() {
+            let last = it
+                .options
+                .as_ref()
+                .map_or(it.source.span().end, |o| o.span().end);
+            let after = self.next_token(last);
+            if self.text.as_bytes().get(after as usize) == Some(&b',') {
+                let close = self.next_token(after + 1);
+                self.error(close, "Unexpected token");
+            }
+        }
+        walk::walk_import_expression(self, it);
+    }
+
     fn visit_directive(&mut self, it: &Directive<'a>) {
         self.check_string_escapes(it.expression.span);
     }
@@ -1128,6 +1224,52 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
             self.error(at, "Unexpected token");
         }
         let derived = it.heritage.is_some();
+        if self.ts_as_written() {
+            // An abstract class needs its name.
+            if it.r#abstract && it.id.is_none() {
+                self.error(it.body.span.start, "Unexpected token");
+            }
+            for element in &it.body.body {
+                let (is_abstract, is_override) = match element {
+                    ClassElement::MethodDefinition(m) => (
+                        m.r#type == MethodDefinitionType::TSAbstractMethodDefinition,
+                        m.r#override,
+                    ),
+                    ClassElement::PropertyDefinition(p) => (
+                        p.r#type == PropertyDefinitionType::TSAbstractPropertyDefinition,
+                        p.r#override,
+                    ),
+                    ClassElement::AccessorProperty(p) => (
+                        p.r#type == AccessorPropertyType::TSAbstractAccessorProperty,
+                        p.r#override,
+                    ),
+                    _ => (false, false),
+                };
+                // Raised once the member has been read, after any error
+                // in its modifiers.
+                let (start, end) = (element.span().start, element.span().end);
+                let after_member = |this: &mut Self, message: &str| {
+                    this.record(Candidate {
+                        detect: end,
+                        at: Position::At(start),
+                        message: message.to_string(),
+                        token_start: None,
+                    });
+                };
+                if is_abstract && !it.r#abstract {
+                    after_member(
+                        self,
+                        "Abstract methods can only appear within an abstract class.",
+                    );
+                }
+                if is_override && !derived {
+                    after_member(
+                        self,
+                        "This member cannot have an 'override' modifier because its containing class does not extend another class.",
+                    );
+                }
+            }
+        }
         self.classes.push(PrivateNames::default());
         let mut had_constructor = false;
         let mut previous = None;
@@ -1221,6 +1363,19 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
     }
 
     fn visit_for_of_statement(&mut self, it: &ForOfStatement<'a>) {
+        if self.ts_as_written()
+            && matches!(
+                it.left,
+                ForStatementLeft::TSAsExpression(_)
+                    | ForStatementLeft::TSSatisfiesExpression(_)
+                    | ForStatementLeft::TSTypeAssertion(_)
+            )
+        {
+            self.error(
+                it.left.span().start,
+                "Unexpected type cast in parameter position.",
+            );
+        }
         self.for_each(&it.left, &it.right, &it.body, "for-of");
     }
 
@@ -1489,7 +1644,10 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
         // TypeScript's parser accepts it (the checker reports it), and
         // TypeScript's transpile prints it unchanged, so the compiler
         // still sees it in a transpiled script.
-        if crate::transpile_sensitive::tag_has_optional_chain(&it.tag) {
+        // With type arguments acorn-typescript reads the template as
+        // part of the chain.
+        let typed = self.mode.ts && it.type_arguments.is_some();
+        if !typed && crate::transpile_sensitive::tag_has_optional_chain(&it.tag) {
             self.error(
                 it.quasi.span.start,
                 "Optional chaining cannot appear in the tag of tagged template expressions",
@@ -1773,6 +1931,22 @@ impl<'a> Checker<'_, 'a> {
                     self.declare_private(p.name.as_str(), state, p.span.start);
                 } else {
                     self.visit_property_key(&m.key);
+                }
+                // acorn-typescript counts a `this` parameter as one of
+                // an accessor's parameters.
+                if self.ts_as_written() && m.value.this_param.is_some() {
+                    match m.kind {
+                        MethodDefinitionKind::Get => {
+                            self.error(m.value.params.span.start, "getter should have no params");
+                        }
+                        MethodDefinitionKind::Set => {
+                            self.error(
+                                m.value.params.span.start,
+                                "setter should have exactly one param",
+                            );
+                        }
+                        _ => {}
+                    }
                 }
                 let ctor = m.kind == MethodDefinitionKind::Constructor;
                 self.method(&m.value, ctor && derived);

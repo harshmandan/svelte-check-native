@@ -230,6 +230,17 @@ impl<'a> Visit<'a> for Checker<'_> {
         }
     }
 
+    fn visit_export_declaration(&mut self, it: &oxc_ast::ast::ExportDeclaration<'a>) {
+        // The compiler drops an export of anything declared before it
+        // looks inside, so a declared enum never throws there.
+        if !self.transpiled
+            && matches!(&it.declaration, Declaration::TSEnumDeclaration(e) if e.declare)
+        {
+            return;
+        }
+        walk::walk_export_declaration(self, it);
+    }
+
     fn visit_formal_parameter(&mut self, it: &FormalParameter<'a>) {
         let is_property = it.accessibility.is_some() || it.readonly || it.r#override;
         if !is_property {
@@ -413,7 +424,10 @@ fn declaration_removed(decl: &Declaration<'_>) -> bool {
         | Declaration::TSExternalModuleDeclaration(_)
         | Declaration::TSNamespaceDeclaration(_)
         | Declaration::TSGlobalDeclaration(_) => true,
-        Declaration::TSEnumDeclaration(_) | Declaration::TSImportEqualsDeclaration(_) => false,
+        // The compiler drops an export of anything declared before it
+        // looks inside, so a declared enum never throws there.
+        Declaration::TSEnumDeclaration(e) => e.declare,
+        Declaration::TSImportEqualsDeclaration(_) => false,
     }
 }
 

@@ -34,7 +34,8 @@ use crate::mustache::{MustacheSigil, classify_mustache_sigil, find_mustache_end}
 use crate::scanner::{Scanner, is_svelte_whitespace_at};
 use crate::sections::{SectionCollector, section_tag_at};
 use crate::tag_read::{
-    AwaitBranch, ExpressionRead, TagReadError, TagReader, compiler_reads_typescript,
+    AwaitBranch, ExpressionRead, TagReadError, TagReadErrorKind, TagReader,
+    compiler_reads_typescript,
 };
 
 /// Parse one template fragment out of the source string.
@@ -1149,7 +1150,30 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         end_expressions_as_acorn(&mut attributes, self.scanner.source(), self.ts);
 
         // Consume `>` or `/>`.
-        let (self_closing, open_tag_end) = self.finish_opening_tag()?;
+        let Some((self_closing, open_tag_end)) = self.finish_opening_tag() else {
+            // The tag cannot be read to its end. A block or `@` tag in
+            // an attribute value is why, and the compiler names it:
+            // keep the tag so that error is not lost with it.
+            return open_error
+                .filter(|error| {
+                    matches!(
+                        error.kind,
+                        TagReadErrorKind::BlockInvalidPlacement { .. }
+                            | TagReadErrorKind::TagInvalidPlacement { .. }
+                    )
+                })
+                .map(|error| {
+                    Node::Element(Box::new(Element {
+                        name,
+                        attributes,
+                        children: Fragment::default(),
+                        self_closing: false,
+                        implicit_close: None,
+                        open_error: Some(error),
+                        range: Range::new(tag_start, self.scanner.pos()),
+                    }))
+                });
+        };
 
         // Distinguish element kinds.
         if let Some(suffix) = name.strip_prefix("svelte:") {
@@ -1438,18 +1462,48 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                     flush_text(&mut nodes, text_start, pos);
                     let (sigil, _) =
                         classify_mustache_sigil(self.scanner.source().as_bytes(), pos as usize);
-                    if matches!(sigil, MustacheSigil::Other) {
+                    // The compiler reads whatever follows a `{` here as
+                    // an expression, `{:else}` and `{/if}` included; only
+                    // `{#` and `{@` are named and refused first.
+                    let names_a_tag = matches!(
+                        self.scanner.source().as_bytes().get(pos as usize + 1),
+                        Some(b'#' | b'@')
+                    );
+                    if matches!(sigil, MustacheSigil::Other) || !names_a_tag {
                         nodes.push(self.parse_interpolation());
                     } else {
-                        // `{#...}` / `{@...}` / `{:...}` / `{/...}` are
-                        // invalid inside a textarea — record and skip the
-                        // balanced mustache.
+                        // `{#...}` / `{@...}` are invalid inside a
+                        // textarea — record and skip the balanced
+                        // mustache.
                         self.errors.push(ParseError::MalformedOpenTag {
                             range: Range::new(pos, pos + 1),
                         });
-                        match self.find_mustache_end_in_fragment(pos + 1) {
-                            Some(end) => self.scanner.set_pos(end + 1),
-                            None => self.scanner.set_pos(self.fragment_end),
+                        let end = match self.find_mustache_end_in_fragment(pos + 1) {
+                            Some(end) => end + 1,
+                            None => self.fragment_end,
+                        };
+                        self.scanner.set_pos(end);
+                        // The compiler names a block or an `@` tag here
+                        // (`read_sequence`); keep that error on a node.
+                        let source = self.scanner.source();
+                        let sigil = source.as_bytes().get(pos as usize + 1).copied();
+                        if matches!(sigil, Some(b'#' | b'@')) {
+                            let name: String = source[pos as usize + 2..]
+                                .chars()
+                                .take_while(char::is_ascii_lowercase)
+                                .collect();
+                            let location = "inside <textarea>";
+                            let kind = if sigil == Some(b'#') {
+                                TagReadErrorKind::BlockInvalidPlacement { name, location }
+                            } else {
+                                TagReadErrorKind::TagInvalidPlacement { name, location }
+                            };
+                            nodes.push(Node::Interpolation(Interpolation {
+                                kind: InterpolationKind::Expression,
+                                expression_range: Range::new(pos + 1, pos + 1),
+                                range: Range::new(pos, end),
+                                open_error: Some(TagReadError::new(pos, kind)),
+                            }));
                         }
                     }
                     text_start = self.scanner.pos();

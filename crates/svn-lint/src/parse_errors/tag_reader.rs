@@ -60,13 +60,13 @@ impl From<TagReadError> for TagError {
                 Code::directive_invalid_value,
                 messages::directive_invalid_value(),
             ),
-            TagReadErrorKind::BlockInvalidPlacement(name) => (
+            TagReadErrorKind::BlockInvalidPlacement { name, location } => (
                 Code::block_invalid_placement,
-                messages::block_invalid_placement(&name, "in attribute value"),
+                messages::block_invalid_placement(&name, location),
             ),
-            TagReadErrorKind::TagInvalidPlacement(name) => (
+            TagReadErrorKind::TagInvalidPlacement { name, location } => (
                 Code::tag_invalid_placement,
-                messages::tag_invalid_placement(&name, "in attribute value"),
+                messages::tag_invalid_placement(&name, location),
             ),
             TagReadErrorKind::JsParse(message) => (
                 Code::js_parse_error,

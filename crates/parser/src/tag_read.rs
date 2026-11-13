@@ -101,16 +101,24 @@ pub enum TagReadErrorKind {
         end: u32,
     },
     DirectiveInvalidValue,
-    /// `block_invalid_placement` for a `{#name …}` in an attribute value.
-    BlockInvalidPlacement(String),
-    /// `tag_invalid_placement` for a `{@name …}` in an attribute value.
-    TagInvalidPlacement(String),
+    /// `block_invalid_placement` for a `{#name …}` where only text and
+    /// expressions may stand; `location` is how the compiler names the
+    /// place (`in attribute value`, `inside <textarea>`).
+    BlockInvalidPlacement {
+        name: String,
+        location: &'static str,
+    },
+    /// `tag_invalid_placement` for a `{@name …}` in such a place.
+    TagInvalidPlacement {
+        name: String,
+        location: &'static str,
+    },
     /// `js_parse_error` with acorn's message.
     JsParse(&'static str),
 }
 
 impl TagReadError {
-    fn new(at: u32, kind: TagReadErrorKind) -> Self {
+    pub(crate) fn new(at: u32, kind: TagReadErrorKind) -> Self {
         Self {
             at,
             kind,
@@ -1052,10 +1060,11 @@ impl<'s> TagReader<'s> {
                     .chars()
                     .take_while(char::is_ascii_lowercase)
                     .collect();
+                let location = "in attribute value";
                 let kind = if sigil == Some(b'#') {
-                    TagReadErrorKind::BlockInvalidPlacement(name)
+                    TagReadErrorKind::BlockInvalidPlacement { name, location }
                 } else {
-                    TagReadErrorKind::TagInvalidPlacement(name)
+                    TagReadErrorKind::TagInvalidPlacement { name, location }
                 };
                 return Err(TagReadError::new(brace, kind));
             }

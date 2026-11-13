@@ -605,16 +605,56 @@ impl Finder<'_> {
             let text = &self.source[start as usize + 1..i.range.end as usize];
             let inner = text.trim_start();
             let at = start + 1 + (text.len() - inner.len()) as u32;
+            // The compiler's regexes end in `\b`: the keyword is whole
+            // when no ASCII letter, digit or `_` follows it.
+            let whole_word = |keyword: &str| {
+                inner.strip_prefix(keyword).is_some_and(|rest| {
+                    !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+                })
+            };
             for keyword in ["var", "interface", "enum"] {
-                if inner.strip_prefix(keyword).is_some_and(|rest| {
-                    !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '$')
-                }) {
+                if whole_word(keyword) {
                     self.report(
                         at,
                         Code::declaration_tag_invalid_type,
                         messages::declaration_tag_invalid_type(),
                         Range::new(at, at + keyword.len() as u32),
                     );
+                }
+            }
+            // `type` is no reserved word, so the compiler has acorn read
+            // a statement and refuses the tag when that is a type alias
+            // (`{type A = B}`); `{type}` and `{type + 1}` stay expressions.
+            // A statement acorn cannot read is its error, not the
+            // expression reader's.
+            if whole_word("type") {
+                let statement = inner.strip_suffix('}').unwrap_or(inner);
+                let allocator = Allocator::default();
+                let source_type = SourceType::default()
+                    .with_module(true)
+                    .with_typescript(self.ts);
+                let parsed = oxc_parser::Parser::new(&allocator, statement, source_type).parse();
+                let clean = parsed.diagnostics.is_empty() && !parsed.fatal_error;
+                match parsed.program.body.first() {
+                    Some(oxc_ast::ast::Statement::TSTypeAliasDeclaration(alias)) if clean => {
+                        self.report(
+                            at,
+                            Code::declaration_tag_invalid_type,
+                            messages::declaration_tag_invalid_type(),
+                            Range::new(at + alias.span.start, at + alias.span.end),
+                        );
+                        return;
+                    }
+                    Some(_) if clean => {}
+                    _ => {
+                        let read = AcornRead {
+                            range: Range::new(at, at + statement.len() as u32),
+                            shape: AcornReadShape::Statement,
+                        };
+                        if self.acorn_read_error(read) {
+                            return;
+                        }
+                    }
                 }
             }
         }

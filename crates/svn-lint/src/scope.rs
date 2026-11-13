@@ -1077,10 +1077,22 @@ impl TreeBuilder {
         // treatment: at statement level oxc reads it as a directive
         // prologue (`"use strict"`), not an expression, and the
         // literal would never be visited.
+        //
+        // So does one starting with `class` or `function`: at statement
+        // level that is a declaration, which would put its name in
+        // scope and count as a nested class; in a template it is an
+        // expression.
+        let first_word = leading.map_or("", |i| {
+            let rest = &slice[i..];
+            let end = rest
+                .find(|c: char| !c.is_ascii_alphabetic())
+                .unwrap_or(rest.len());
+            &rest[..end]
+        });
         let needs_wrap = matches!(
             leading.and_then(|i| slice.as_bytes().get(i).copied()),
             Some(b'{' | b'"' | b'\'')
-        );
+        ) || matches!(first_word, "class" | "function");
         let wrapped: String;
         let (effective_slice, base_adjust): (&str, u32) = if needs_wrap && range.start > 0 {
             wrapped = format!("({slice})");

@@ -521,11 +521,12 @@ fn parse_directive_value(
             // exactly a two-element SequenceExpression — mirror that
             // with an oxc probe parse.
             if matches!(kind, DirectiveKind::Bind)
-                && let Some(comma_pos) = bind_pair_split(scanner.source(), expr_start, end)
+                && let Some((comma_pos, setter_end)) =
+                    bind_pair_split(scanner.source(), expr_start, end)
             {
                 return Some(DirectiveValue::BindPair {
                     getter_range: Range::new(expr_start, comma_pos),
-                    setter_range: Range::new(comma_pos + 1, end),
+                    setter_range: Range::new(comma_pos + 1, setter_end),
                     range: Range::new(start, end + 1),
                 });
             }
@@ -550,11 +551,12 @@ fn parse_directive_value(
             {
                 let (expr_start, end) = (expression_range.start, expression_range.end);
                 if matches!(kind, DirectiveKind::Bind)
-                    && let Some(comma_pos) = bind_pair_split(scanner.source(), expr_start, end)
+                    && let Some((comma_pos, setter_end)) =
+                        bind_pair_split(scanner.source(), expr_start, end)
                 {
                     return Some(DirectiveValue::BindPair {
                         getter_range: Range::new(expr_start, comma_pos),
-                        setter_range: Range::new(comma_pos + 1, end),
+                        setter_range: Range::new(comma_pos + 1, setter_end),
                         range: quoted.range,
                     });
                 }
@@ -813,7 +815,8 @@ fn parse_quoted_value(
 }
 
 /// Byte offset of the comma splitting a `bind:x={get, set}` function
-/// pair, or `None` when the value is a single expression.
+/// pair and of the setter's end, or `None` when the value is a single
+/// expression.
 ///
 /// Decided the way upstream does: parse the whole value (acorn there,
 /// oxc here, TS mode) — a pair is exactly a two-element
@@ -821,7 +824,7 @@ fn parse_quoted_value(
 /// as a single CallExpression and never splits; a generic call inside a
 /// pair half (`() => pick<A, B>(x), (v) => sink(v)`) still yields the
 /// two-arrow sequence with the split at the real pair comma.
-fn bind_pair_split(src: &str, start: u32, end: u32) -> Option<u32> {
+fn bind_pair_split(src: &str, start: u32, end: u32) -> Option<(u32, u32)> {
     use oxc_ast::ast::{Expression, Statement};
 
     let text = &src[start as usize..end as usize];
@@ -848,7 +851,9 @@ fn bind_pair_split(src: &str, start: u32, end: u32) -> Option<u32> {
     let Expression::SequenceExpression(seq) = &paren.expression else {
         return None;
     };
-    if seq.expressions.len() != 2 {
+    // svelte2tsx takes the first two expressions of the sequence as the
+    // getter and the setter, whatever follows them.
+    if seq.expressions.len() < 2 {
         return None;
     }
     // The comma sits between the two expression spans. Probe offsets are
@@ -856,7 +861,8 @@ fn bind_pair_split(src: &str, start: u32, end: u32) -> Option<u32> {
     let gap_start = oxc_span::GetSpan::span(&seq.expressions[0]).end as usize;
     let gap_end = oxc_span::GetSpan::span(&seq.expressions[1]).start as usize;
     let comma_in_probe = probe[gap_start..gap_end].find(',')? + gap_start;
-    Some(start + comma_in_probe as u32 - 1)
+    let setter_end = oxc_span::GetSpan::span(&seq.expressions[1]).end;
+    Some((start + comma_in_probe as u32 - 1, start + setter_end - 1))
 }
 
 #[cfg(test)]

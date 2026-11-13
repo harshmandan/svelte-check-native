@@ -746,15 +746,30 @@ pub fn is_component_tag(name: &str) -> bool {
     let Some(first) = name.chars().next() else {
         return false;
     };
-    // Unicode-uppercase start: always a component; dots permitted freely
-    // (mirrors upstream regex branch 1, `\p{Lu}[...\.]*`).
+    // The compiler's `regex_valid_component_name`. Either an uppercase
+    // letter followed by name characters and dots (`Foo`, `Foo.Bar`), so
+    // `<A-b>` is an element; or a member chain of two or more names
+    // (`ns.Comp`), where bare, trailing and empty segments (`foo.`,
+    // `.foo`, `foo..bar`) do not count.
+    let name_char = |c: char| {
+        oxc_syntax::identifier::is_identifier_part(c) || matches!(c, '$' | '\u{200c}' | '\u{200d}')
+    };
     if first.is_uppercase() {
-        return true;
+        return name.chars().skip(1).all(|c| name_char(c) || c == '.');
     }
-    // Otherwise only a well-formed dotted member chain (`ns.Comp`) is a
-    // component; bare/trailing/empty segments (`foo.`, `.foo`, `foo..bar`)
-    // are not (mirrors branch 2's `(?:\.ID_Continue+)+`).
-    name.contains('.') && name.split('.').all(|seg| !seg.is_empty())
+    let mut segments = name.split('.');
+    let head = segments.next().unwrap_or_default();
+    let head_ok = head
+        .chars()
+        .next()
+        .is_some_and(oxc_syntax::identifier::is_identifier_start)
+        && head.chars().skip(1).all(name_char);
+    let mut rest = 0;
+    let rest_ok = segments.all(|segment| {
+        rest += 1;
+        !segment.is_empty() && segment.chars().all(name_char)
+    });
+    head_ok && rest_ok && rest > 0
 }
 
 #[cfg(test)]

@@ -644,7 +644,7 @@ pub(crate) fn visit_attribute(
                         bind_element_checks(d, target, siblings, ctx);
                     }
                 }
-                let expression = bind_expression(d);
+                let expression = bind_expression(d, ctx.source);
                 let is_sequence =
                     expression.is_some_and(|range| bind_sequence_checks(d, range, ctx.source, ctx));
                 crate::rules::binding_rules::flush_template_write_violations(
@@ -1306,17 +1306,24 @@ fn bind_element_checks(
 
 /// The source range of a `bind:` directive's expression; the
 /// `bind:name` shorthand has none.
-fn bind_expression(d: &svn_parser::ast::Directive) -> Option<svn_core::Range> {
+fn bind_expression(d: &svn_parser::ast::Directive, source: &str) -> Option<svn_core::Range> {
     use svn_parser::ast::DirectiveValue;
     match &d.value {
         Some(DirectiveValue::Expression {
             expression_range, ..
         }) => Some(*expression_range),
+        // The whole sequence the compiler read: the pair is its first
+        // two expressions, and more than two is an error.
         Some(DirectiveValue::BindPair {
             getter_range,
             setter_range,
             ..
-        }) => Some(svn_core::Range::new(getter_range.start, setter_range.end)),
+        }) => Some(svn_core::Range::new(
+            getter_range.start,
+            svn_parser::find_mustache_end(source, getter_range.start)
+                .unwrap_or(setter_range.end)
+                .max(setter_range.end),
+        )),
         Some(DirectiveValue::Quoted(_)) | None => None,
     }
 }

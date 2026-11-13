@@ -558,7 +558,7 @@ fn attribute_comments(attributes: &[Attribute], source: &str, out: &mut Vec<Rang
                     getter_range,
                     setter_range,
                     ..
-                }) => out.extend(js_comments_in(
+                }) => out.extend(expression_comments(
                     source,
                     Range::new(getter_range.start, setter_range.end),
                 )),

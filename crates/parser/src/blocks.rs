@@ -187,7 +187,8 @@ fn skip_ws_end(src: &str, start: u32, mut end: u32) -> u32 {
 
 /// The header of a tag that holds one expression after its keyword.
 pub(crate) struct ExpressionHeader {
-    /// From the expression's start to the `}` that closes the tag.
+    /// The expression acorn read; on an error, the text up to the `}`
+    /// that closes the tag.
     pub range: Range,
     /// The error the compiler throws reading the tag.
     pub error: Option<TagReadError>,
@@ -212,10 +213,10 @@ pub(crate) fn read_expression_header(
     let reader = TagReader::new(source, ts);
     let start = reader.skip_whitespace(keyword_end);
     match reader.read_keyword_expression(keyword_end, limit) {
-        Ok(end) => {
-            scanner.set_pos(end);
+        Ok(read) => {
+            scanner.set_pos(read.end);
             ExpressionHeader {
-                range: Range::new(start, end - 1),
+                range: Range::new(start, read.expression_end),
                 error: None,
             }
         }

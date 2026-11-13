@@ -24,7 +24,7 @@ use crate::ast::{
     SnippetBlock, SvelteElement, SvelteElementKind, Text, ThenBranch, is_component_tag,
     is_void_element,
 };
-use crate::attributes::parse_attributes;
+use crate::attributes::{end_expressions_as_acorn, parse_attributes};
 use crate::blocks::{
     BlockTerminator, peek_and_consume_terminator, read_expression_header, trimmed_range,
 };
@@ -33,7 +33,9 @@ use crate::html5::closing_tag_omitted;
 use crate::mustache::{MustacheSigil, classify_mustache_sigil, find_mustache_end};
 use crate::scanner::{Scanner, is_svelte_whitespace_at};
 use crate::sections::{SectionCollector, section_tag_at};
-use crate::tag_read::{AwaitBranch, TagReadError, TagReader, compiler_reads_typescript};
+use crate::tag_read::{
+    AwaitBranch, ExpressionRead, TagReadError, TagReader, compiler_reads_typescript,
+};
 
 /// Parse one template fragment out of the source string.
 ///
@@ -1010,7 +1012,10 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             // The compiler rejects an unknown tag at its name; the tag
             // ends at the counted `}`.
             _ => match counted_close {
-                Some(close) => Ok(close + 1),
+                Some(close) => Ok(ExpressionRead {
+                    expression_end: close,
+                    end: close + 1,
+                }),
                 None => reader.read_expression_tag(keyword_end, limit),
             },
         };
@@ -1019,18 +1024,19 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
     }
 
     /// The node of a `{…}` tag starting at `start`, whose expression
-    /// starts at `body_start`, after the compiler's reading of it ended
-    /// at `read` (just past its `}`).
+    /// starts at `body_start`, after the compiler's reading of it
+    /// (`read`). The expression ends where acorn's does; when the
+    /// reading failed, at the `}` that closes the tag.
     fn finish_tag(
         &mut self,
         kind: InterpolationKind,
         start: u32,
         body_start: u32,
         counted_close: Option<u32>,
-        read: Result<u32, TagReadError>,
+        read: Result<ExpressionRead, TagReadError>,
     ) -> Node {
         let (close, end, open_error) = match (read, counted_close) {
-            (Ok(end), _) => (end - 1, end, None),
+            (Ok(read), _) => (read.expression_end, read.end, None),
             // The compiler throws, and the component is rejected. The
             // tag stays, carrying the error, and ends at the counted `}`.
             (Err(error), Some(close)) => (close, close + 1, Some(error)),
@@ -1107,7 +1113,9 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         let name: SmolStr = self.scanner.source()[name_start as usize..name_end as usize].into();
 
         // Parse attributes into real AST nodes.
-        let attributes = parse_attributes(&mut self.scanner, self.fragment_end, &mut self.errors);
+        let mut attributes =
+            parse_attributes(&mut self.scanner, self.fragment_end, &mut self.errors);
+        end_expressions_as_acorn(&mut attributes, self.scanner.source(), self.ts);
 
         // Consume `>` or `/>`.
         let (self_closing, open_tag_end) = self.finish_opening_tag()?;

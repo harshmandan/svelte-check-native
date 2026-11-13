@@ -40,6 +40,61 @@ use crate::scanner::{Scanner, is_svelte_whitespace_at, unicode_identifier_len};
 /// Parse zero or more attributes, stopping before `>` or `/>`.
 ///
 /// On return, the scanner points at the `>` or `/` of the tag close.
+/// Ends each attribute expression where acorn's reading of it ends.
+///
+/// The ranges come out of the scan above running up to the `}` that
+/// closes the expression. svelte2tsx copies the expression acorn read,
+/// so a comment or whitespace before the `}` is not part of it; with a
+/// `//` comment kept in, everything written after the expression in the
+/// generated code would be commented out.
+pub(crate) fn end_expressions_as_acorn(attributes: &mut [Attribute], source: &str, ts: bool) {
+    let end = |range: &mut Range| {
+        let text = range.slice(source);
+        let trimmed = text.trim_end();
+        if !trimmed.contains("//") && !trimmed.contains("/*") {
+            // No comment to drop: only the whitespace goes.
+            if !trimmed.is_empty() {
+                range.end = range.start + trimmed.len() as u32;
+            }
+            return;
+        }
+        if let crate::acorn::Read::Expression { end, .. } = crate::acorn::read_expression(text, ts)
+        {
+            range.end = range.start + end;
+        }
+    };
+    let parts = |value: &mut AttrValue| {
+        for part in &mut value.parts {
+            if let AttrValuePart::Expression {
+                expression_range, ..
+            } = part
+            {
+                end(expression_range);
+            }
+        }
+    };
+    for attribute in attributes {
+        match attribute {
+            Attribute::Plain(plain) => {
+                if let Some(value) = &mut plain.value {
+                    parts(value);
+                }
+            }
+            Attribute::Expression(expression) => end(&mut expression.expression_range),
+            Attribute::Spread(spread) => end(&mut spread.expression_range),
+            Attribute::Attach(attach) => end(&mut attach.expression_range),
+            Attribute::Directive(directive) => match &mut directive.value {
+                Some(DirectiveValue::Expression {
+                    expression_range, ..
+                }) => end(expression_range),
+                Some(DirectiveValue::Quoted(value)) => parts(value),
+                Some(DirectiveValue::BindPair { .. }) | None => {}
+            },
+            Attribute::Shorthand(_) | Attribute::Comment(_) => {}
+        }
+    }
+}
+
 pub fn parse_attributes(
     scanner: &mut Scanner<'_>,
     fragment_end: u32,

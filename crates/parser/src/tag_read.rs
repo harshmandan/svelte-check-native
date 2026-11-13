@@ -166,6 +166,16 @@ pub struct BranchOpen {
     pub end: u32,
 }
 
+/// A tag that ends with one expression, as the compiler read it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpressionRead {
+    /// Where acorn's expression ends. svelte2tsx copies the text up to
+    /// here, so a comment or whitespace before the `}` is not part of it.
+    pub expression_end: u32,
+    /// Just past the `}` that closes the tag.
+    pub end: u32,
+}
+
 /// A `{#snippet}` opening tag as the compiler read it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnippetOpen {
@@ -682,32 +692,39 @@ impl<'s> TagReader<'s> {
     }
 
     /// An expression read by acorn from `start`, then the `}` the
-    /// compiler expects after it: just past that `}`.
+    /// compiler expects after it.
     fn expression_then_brace(
         &self,
         start: u32,
         limit: u32,
         comments: &mut Comments,
-    ) -> Result<u32, TagReadError> {
-        let end = self.read_expression(start, limit, comments)?;
+    ) -> Result<ExpressionRead, TagReadError> {
+        let expression_end = self.read_expression(start, limit, comments)?;
         // Reading an expression moves past the last collected comment.
-        self.closing_brace(end.max(comments.last_end))
+        let end = self.closing_brace(expression_end.max(comments.last_end))?;
+        Ok(ExpressionRead {
+            expression_end,
+            end,
+        })
     }
 
-    /// An `{expression}` tag whose `{` ends at `start`: just past the `}`
-    /// that closes it.
-    pub fn read_expression_tag(&self, start: u32, limit: u32) -> Result<u32, TagReadError> {
+    /// An `{expression}` tag whose `{` ends at `start`.
+    pub fn read_expression_tag(
+        &self,
+        start: u32,
+        limit: u32,
+    ) -> Result<ExpressionRead, TagReadError> {
         self.expression_then_brace(start, limit, &mut Comments::default())
     }
 
     /// A tag that holds whitespace and one expression after its keyword
     /// (`{#if`, `{:else if`, `{#key`, `{@html`, `{@render`), whose
-    /// keyword ends at `keyword_end`: just past the `}` that closes it.
+    /// keyword ends at `keyword_end`.
     pub fn read_keyword_expression(
         &self,
         keyword_end: u32,
         limit: u32,
-    ) -> Result<u32, TagReadError> {
+    ) -> Result<ExpressionRead, TagReadError> {
         let start = self.require_whitespace(keyword_end)?;
         self.read_expression_tag(start, limit)
     }
@@ -715,17 +732,28 @@ impl<'s> TagReader<'s> {
     /// A `{@debug}` tag whose keyword ends at `keyword_end`. No
     /// whitespace is required after the keyword, and the tag may be
     /// empty.
-    pub fn read_debug_tag(&self, keyword_end: u32, limit: u32) -> Result<u32, TagReadError> {
+    pub fn read_debug_tag(
+        &self,
+        keyword_end: u32,
+        limit: u32,
+    ) -> Result<ExpressionRead, TagReadError> {
         let at = self.skip_whitespace(keyword_end);
         if self.byte(at) == Some(b'}') {
-            return Ok(at + 1);
+            return Ok(ExpressionRead {
+                expression_end: at,
+                end: at + 1,
+            });
         }
         self.read_expression_tag(keyword_end, limit)
     }
 
     /// A `{@const pattern = expression}` tag whose keyword ends at
     /// `keyword_end`.
-    pub fn read_const_tag(&self, keyword_end: u32, limit: u32) -> Result<u32, TagReadError> {
+    pub fn read_const_tag(
+        &self,
+        keyword_end: u32,
+        limit: u32,
+    ) -> Result<ExpressionRead, TagReadError> {
         let start = self.require_whitespace(keyword_end)?;
         let mut comments = Comments::default();
         let (_, after) = self.read_pattern(start, limit, &mut comments)?;

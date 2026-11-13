@@ -457,7 +457,7 @@ fn collect_fragment_comments(fragment: &Fragment, source: &str, before: u32, out
         if node.range().start >= before {
             break;
         }
-        let mut expr = |range: Range| out.extend(js_comments_in(source, range));
+        let mut expr = |range: Range| out.extend(expression_comments(source, range));
         match node {
             Node::Text(_) | Node::Comment(_) => {}
             Node::Interpolation(i) => expr(i.expression_range),
@@ -477,7 +477,7 @@ fn collect_fragment_comments(fragment: &Fragment, source: &str, before: u32, out
                 expr(b.condition_range);
                 collect_fragment_comments(&b.consequent, source, before, out);
                 for arm in &b.elseif_arms {
-                    out.extend(js_comments_in(source, arm.condition_range));
+                    out.extend(expression_comments(source, arm.condition_range));
                     collect_fragment_comments(&arm.body, source, before, out);
                 }
                 if let Some(alt) = &b.alternate {
@@ -515,10 +515,11 @@ fn collect_fragment_comments(fragment: &Fragment, source: &str, before: u32, out
                 collect_fragment_comments(&b.body, source, before, out);
             }
             Node::SnippetBlock(b) => {
+                // Read whole: no expression ends early here.
                 if let Some(generics) = b.generics_range {
-                    expr(generics);
+                    out.extend(js_comments_in(source, generics));
                 }
-                expr(b.parameters_range);
+                out.extend(js_comments_in(source, b.parameters_range));
                 collect_fragment_comments(&b.body, source, before, out);
             }
         }
@@ -532,7 +533,7 @@ fn attribute_comments(attributes: &[Attribute], source: &str, out: &mut Vec<Rang
                 expression_range, ..
             } = part
             {
-                out.extend(js_comments_in(source, *expression_range));
+                out.extend(expression_comments(source, *expression_range));
             }
         }
     };
@@ -543,14 +544,16 @@ fn attribute_comments(attributes: &[Attribute], source: &str, out: &mut Vec<Rang
                     parts(value, out);
                 }
             }
-            Attribute::Expression(e) => out.extend(js_comments_in(source, e.expression_range)),
+            Attribute::Expression(e) => {
+                out.extend(expression_comments(source, e.expression_range));
+            }
             Attribute::Shorthand(_) => {}
-            Attribute::Spread(s) => out.extend(js_comments_in(source, s.expression_range)),
-            Attribute::Attach(a) => out.extend(js_comments_in(source, a.expression_range)),
+            Attribute::Spread(s) => out.extend(expression_comments(source, s.expression_range)),
+            Attribute::Attach(a) => out.extend(expression_comments(source, a.expression_range)),
             Attribute::Directive(d) => match &d.value {
                 Some(DirectiveValue::Expression {
                     expression_range, ..
-                }) => out.extend(js_comments_in(source, *expression_range)),
+                }) => out.extend(expression_comments(source, *expression_range)),
                 Some(DirectiveValue::BindPair {
                     getter_range,
                     setter_range,
@@ -571,6 +574,17 @@ fn attribute_comments(attributes: &[Attribute], source: &str, out: &mut Vec<Rang
 /// declaration's body, a binding pattern or a parameter list — as oxc
 /// reads them. Each shape is tried in a wrapper that makes it a
 /// program; the first that parses cleanly has lexed the whole text.
+/// The comments acorn lexes reading the expression of a tag or an
+/// attribute value that starts at `range`: those inside it, and those
+/// between its end and the `}` that closes the tag (the node's range
+/// stops at the expression, but acorn looks at the next token).
+fn expression_comments(source: &str, range: Range) -> Vec<Range> {
+    let close = svn_parser::find_mustache_end(source, range.start)
+        .unwrap_or(range.end)
+        .max(range.end);
+    js_comments_in(source, Range::new(range.start, close))
+}
+
 fn js_comments_in(source: &str, range: Range) -> Vec<Range> {
     let Some(text) = source.get(range.start as usize..range.end as usize) else {
         return Vec::new();

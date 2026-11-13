@@ -43,6 +43,31 @@ impl From<TagReadError> for TagError {
                 Code::unterminated_string_constant,
                 messages::unterminated_string_constant(),
             ),
+            TagReadErrorKind::AttributeEmptyShorthand => (
+                Code::attribute_empty_shorthand,
+                messages::attribute_empty_shorthand(),
+            ),
+            TagReadErrorKind::ExpectedAttributeValue => (
+                Code::expected_attribute_value,
+                "Expected attribute value\nhttps://svelte.dev/e/expected_attribute_value"
+                    .to_string(),
+            ),
+            TagReadErrorKind::DirectiveMissingName { name, .. } => (
+                Code::directive_missing_name,
+                messages::directive_missing_name(&name),
+            ),
+            TagReadErrorKind::DirectiveInvalidValue => (
+                Code::directive_invalid_value,
+                messages::directive_invalid_value(),
+            ),
+            TagReadErrorKind::BlockInvalidPlacement(name) => (
+                Code::block_invalid_placement,
+                messages::block_invalid_placement(&name, "in attribute value"),
+            ),
+            TagReadErrorKind::TagInvalidPlacement(name) => (
+                Code::tag_invalid_placement,
+                messages::tag_invalid_placement(&name, "in attribute value"),
+            ),
             TagReadErrorKind::JsParse(message) => (
                 Code::js_parse_error,
                 format!("{message}\nhttps://svelte.dev/e/js_parse_error"),

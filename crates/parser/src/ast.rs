@@ -197,6 +197,9 @@ pub struct Element {
     /// or an ancestor's closing tag (`<div><span>a</div>`). `range` then
     /// stops at the trigger.
     pub implicit_close: Option<ImplicitClose>,
+    /// The error the compiler throws reading the opening tag's
+    /// attributes; the component is rejected.
+    pub open_error: Option<crate::tag_read::TagReadError>,
     /// Range of the full element, including opening and closing tags.
     pub range: Range,
 }
@@ -224,6 +227,9 @@ pub struct Component {
     pub attributes: Vec<Attribute>,
     pub children: Fragment,
     pub self_closing: bool,
+    /// The error the compiler throws reading the opening tag's
+    /// attributes; the component is rejected.
+    pub open_error: Option<crate::tag_read::TagReadError>,
     pub range: Range,
 }
 
@@ -234,6 +240,9 @@ pub struct SvelteElement {
     pub attributes: Vec<Attribute>,
     pub children: Fragment,
     pub self_closing: bool,
+    /// The error the compiler throws reading the opening tag's
+    /// attributes; the component is rejected.
+    pub open_error: Option<crate::tag_read::TagReadError>,
     pub range: Range,
 }
 

@@ -655,6 +655,17 @@ fn parse_unquoted_value(scanner: &mut Scanner<'_>) -> Option<AttrValue> {
     // Expression part. Terminator remains whitespace / `>`
     // / `/`.
     let start = scanner.pos();
+    // `a=/>`: the compiler takes the `/` as the value, so the tag is
+    // not self-closing.
+    if scanner.starts_with("/>") {
+        scanner.advance_byte();
+        let range = Range::new(start, start + 1);
+        return Some(AttrValue {
+            parts: vec![AttrValuePart::Text { range }],
+            range,
+            quoted: false,
+        });
+    }
     let mut parts: Vec<AttrValuePart> = Vec::new();
     let mut chunk_start = start;
     while let Some(b) = scanner.peek_byte() {

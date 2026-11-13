@@ -370,32 +370,31 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                 .filter(|(kind, _)| *kind == MustacheSigil::Other)
                 .and_then(|(_, sigil_idx)| self.peek_declaration_tag(sigil_idx))
             {
+                // The compiler has acorn read a statement from the
+                // keyword. A declaration is the tag; anything else
+                // (`{let}` reads as the expression `let`) is an
+                // expression tag.
                 let start = self.scanner.pos();
-                match self.find_mustache_end_in_fragment(self.scanner.pos() + 1) {
-                    Some(end) => {
-                        let src = self.scanner.source();
-                        let bytes = src.as_bytes();
-                        // Skip whitespace after the `const`/`let` keyword.
-                        let mut p = kw_end as usize;
-                        while p < end as usize && bytes[p].is_ascii_whitespace() {
-                            p += 1;
-                        }
-                        let expr_range = Range::new(p as u32, end);
-                        self.scanner.set_pos(end + 1);
-                        nodes.push(Node::Interpolation(Interpolation {
-                            kind,
-                            expression_range: expr_range,
-                            range: Range::new(start, end + 1),
-                            open_error: None,
-                        }));
+                let source = self.scanner.source();
+                let counted_close = self.find_mustache_end_in_fragment(start + 1);
+                let limit = counted_close.unwrap_or(self.fragment_end);
+                let reader = TagReader::new(source, self.ts);
+                let keyword_start = kw_end
+                    - if kind == InterpolationKind::DeclConst {
+                        5
+                    } else {
+                        3
+                    };
+                let read = match reader.read_declaration_tag(keyword_start, limit) {
+                    Ok(Some(read)) => Ok(read),
+                    Ok(None) => {
+                        nodes.push(self.parse_interpolation());
+                        continue;
                     }
-                    None => {
-                        self.errors.push(ParseError::UnterminatedMustache {
-                            range: Range::new(start, self.fragment_end),
-                        });
-                        self.scanner.set_pos(self.fragment_end);
-                    }
-                }
+                    Err(error) => Err(error),
+                };
+                let body_start = reader.skip_whitespace(kw_end).min(limit);
+                nodes.push(self.finish_tag(kind, start, body_start, counted_close, read));
                 continue;
             }
 
@@ -598,6 +597,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                     condition_range,
                     error,
                 }) => {
+                    self.duplicate_else(alternate.is_some());
                     let body_start = self.scanner.pos();
                     let (body_nodes, t) = self.parse_fragment_until(None);
                     elseif_arms.push(ElseIfArm {
@@ -611,6 +611,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                     next = t;
                 }
                 Some(BlockTerminator::Else) => {
+                    self.duplicate_else(alternate.is_some());
                     let body_start = self.scanner.pos();
                     let (body_nodes, t) = self.parse_fragment_until(None);
                     alternate = Some(Fragment {
@@ -637,6 +638,25 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             open_error: header.error,
             range: Range::new(block_start, self.scanner.pos()),
         })))
+    }
+
+    /// The compiler's `block_duplicate_clause` for an `{:else}` or
+    /// `{:else if}` that follows the block's `{:else}`, at the `:` of the
+    /// tag just read.
+    fn duplicate_else(&mut self, has_else: bool) {
+        if !has_else {
+            return;
+        }
+        let tag = self.last_terminator_range;
+        let colon = tag
+            .slice(self.scanner.source())
+            .find(':')
+            .map_or(tag.start, |i| tag.start + i as u32);
+        self.errors.push(ParseError::Compiler {
+            code: "block_duplicate_clause",
+            message: "{:else} cannot appear more than once within a block\nhttps://svelte.dev/e/block_duplicate_clause".to_string(),
+            range: Range::new(colon, colon),
+        });
     }
 
     fn parse_each_block(&mut self, block_start: u32) -> Option<Node> {
@@ -776,44 +796,46 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                 });
             }
         }
-        // `{:then}` after the pending branch, then `{:catch}` after either.
-        if pending.is_some()
-            && let Some(BlockTerminator::Then {
-                context_range,
-                error,
-            }) = &term
-        {
-            let (context_range, open_error) = (*context_range, error.clone());
-            let start = self.scanner.pos();
-            let (nodes, next) = self.parse_fragment_until(None);
-            then_branch = Some(ThenBranch {
-                context_range,
-                body: Fragment {
-                    nodes,
-                    range: Range::new(start, self.scanner.pos()),
-                },
-                open_error,
-            });
-            term = next;
-        }
-        if catch_branch.is_none()
-            && let Some(BlockTerminator::Catch {
-                context_range,
-                error,
-            }) = &term
-        {
-            let (context_range, open_error) = (*context_range, error.clone());
-            let start = self.scanner.pos();
-            let (nodes, next) = self.parse_fragment_until(None);
-            catch_branch = Some(CatchBranch {
-                context_range,
-                body: Fragment {
-                    nodes,
-                    range: Range::new(start, self.scanner.pos()),
-                },
-                open_error,
-            });
-            term = next;
+        // A `{:then}` and a `{:catch}`, each once, in either order: the
+        // compiler only refuses a clause the block already has.
+        loop {
+            match &term {
+                Some(BlockTerminator::Then {
+                    context_range,
+                    error,
+                }) if then_branch.is_none() => {
+                    let (context_range, open_error) = (*context_range, error.clone());
+                    let start = self.scanner.pos();
+                    let (nodes, next) = self.parse_fragment_until(None);
+                    then_branch = Some(ThenBranch {
+                        context_range,
+                        body: Fragment {
+                            nodes,
+                            range: Range::new(start, self.scanner.pos()),
+                        },
+                        open_error,
+                    });
+                    term = next;
+                }
+                Some(BlockTerminator::Catch {
+                    context_range,
+                    error,
+                }) if catch_branch.is_none() => {
+                    let (context_range, open_error) = (*context_range, error.clone());
+                    let start = self.scanner.pos();
+                    let (nodes, next) = self.parse_fragment_until(None);
+                    catch_branch = Some(CatchBranch {
+                        context_range,
+                        body: Fragment {
+                            nodes,
+                            range: Range::new(start, self.scanner.pos()),
+                        },
+                        open_error,
+                    });
+                    term = next;
+                }
+                _ => break,
+            }
         }
         self.finish_await_block(term, block_start);
 
@@ -1113,6 +1135,15 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         let name: SmolStr = self.scanner.source()[name_start as usize..name_end as usize].into();
 
         // Parse attributes into real AST nodes.
+        // The compiler's own reading of the attributes, for the error it
+        // throws.
+        let open_error = if doctype_shaped {
+            None
+        } else {
+            TagReader::new(self.scanner.source(), self.ts)
+                .read_open_tag(name_end)
+                .err()
+        };
         let mut attributes =
             parse_attributes(&mut self.scanner, self.fragment_end, &mut self.errors);
         end_expressions_as_acorn(&mut attributes, self.scanner.source(), self.ts);
@@ -1139,6 +1170,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                 attributes,
                 children,
                 self_closing,
+                open_error,
                 range: Range::new(tag_start, self.scanner.pos()),
             })));
         }
@@ -1154,6 +1186,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                 attributes,
                 children,
                 self_closing,
+                open_error,
                 range: Range::new(tag_start, self.scanner.pos()),
             })));
         }
@@ -1191,6 +1224,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             children,
             self_closing: self_closing || is_void,
             implicit_close,
+            open_error,
             range: Range::new(tag_start, self.scanner.pos()),
         })))
     }
@@ -1320,9 +1354,18 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                     }
                 }
             }
-            self.scanner.skip_ascii_whitespace();
+            self.scanner.skip_svelte_whitespace();
             if self.scanner.peek_byte() == Some(b'>') {
                 self.scanner.advance_byte();
+            } else {
+                // The compiler takes nothing but whitespace between a
+                // closing tag's name and its `>`.
+                let at = self.scanner.pos();
+                self.errors.push(ParseError::Compiler {
+                    code: "expected_token",
+                    message: "Expected token >\nhttps://svelte.dev/e/expected_token".to_string(),
+                    range: Range::new(at, at),
+                });
             }
         } else {
             // Missing closing tag.

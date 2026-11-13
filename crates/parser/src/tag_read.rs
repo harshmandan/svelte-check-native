@@ -49,6 +49,9 @@ pub enum AcornReadShape {
     /// A snippet's type parameters and parenthesized parameters, read
     /// as `parameters => {}`.
     Parameters,
+    /// A statement, read where it stands: a declaration tag's
+    /// `const …` / `let …`.
+    Statement,
     /// An expression, read where it stands. To find acorn's error for
     /// it the lint reads it as the statement `_ = expression`: the right
     /// side of an assignment is read exactly as an expression on its own
@@ -67,6 +70,7 @@ impl AcornRead {
                 (format!("({text} = 1)"), self.range.start.saturating_sub(1))
             }
             AcornReadShape::Parameters => (format!("{text} => {{}}"), self.range.start),
+            AcornReadShape::Statement => (text.to_string(), self.range.start),
             AcornReadShape::Expression => {
                 (format!("_ = {text}"), self.range.start.saturating_sub(4))
             }
@@ -86,6 +90,21 @@ pub enum TagReadErrorKind {
     ReservedWord(String),
     UnexpectedEof,
     UnterminatedStringConstant,
+    /// `attribute_empty_shorthand`: `{}` or `{@html …}` where an
+    /// attribute is read.
+    AttributeEmptyShorthand,
+    ExpectedAttributeValue,
+    /// `directive_missing_name` for the attribute name as written
+    /// (`on:`). The error covers the name's prefix, up to `end`.
+    DirectiveMissingName {
+        name: String,
+        end: u32,
+    },
+    DirectiveInvalidValue,
+    /// `block_invalid_placement` for a `{#name …}` in an attribute value.
+    BlockInvalidPlacement(String),
+    /// `tag_invalid_placement` for a `{@name …}` in an attribute value.
+    TagInvalidPlacement(String),
     /// `js_parse_error` with acorn's message.
     JsParse(&'static str),
 }
@@ -766,6 +785,319 @@ impl<'s> TagReader<'s> {
         }
         let init = self.skip_whitespace(equals + 1);
         self.expression_then_brace(init, limit, &mut comments)
+    }
+
+    /// A `{const …}` / `{let …}` declaration tag whose keyword starts at
+    /// `start`, reading no further than `limit`.
+    ///
+    /// The compiler has acorn read a statement there. A variable
+    /// declaration is the tag's content, and the `}` must follow it.
+    /// Anything else acorn reads (`{let}` is the expression `let`) makes
+    /// the tag an expression tag: `Ok(None)`.
+    pub fn read_declaration_tag(
+        &self,
+        start: u32,
+        limit: u32,
+    ) -> Result<Option<ExpressionRead>, TagReadError> {
+        let text = self
+            .source
+            .get(start as usize..limit as usize)
+            .unwrap_or("");
+        let read = AcornRead {
+            range: Range::new(start, limit),
+            shape: AcornReadShape::Statement,
+        };
+        let alloc = Allocator::default();
+        let source_type = SourceType::default()
+            .with_module(true)
+            .with_typescript(self.ts);
+        let parsed = oxc_parser::Parser::new(&alloc, text, source_type).parse();
+        let whole = parsed.diagnostics.is_empty() && parsed.program.body.len() == 1;
+        match parsed.program.body.first() {
+            Some(oxc_ast::ast::Statement::VariableDeclaration(declaration)) if whole => {
+                let expression_end = start + declaration.span.end;
+                Ok(Some(ExpressionRead {
+                    expression_end,
+                    end: self.closing_brace(expression_end)?,
+                }))
+            }
+            Some(_) if whole => Ok(None),
+            first => {
+                // acorn stops inside the statement, or after it where
+                // the `}` should be.
+                let at = parsed
+                    .diagnostics
+                    .first()
+                    .and_then(|d| d.labels.first())
+                    .map(|l| l.span().start)
+                    .or_else(|| first.map(|statement| statement.span().end))
+                    .unwrap_or(text.len() as u32);
+                Err(
+                    TagReadError::new(start + at, TagReadErrorKind::JsParse("Unexpected token"))
+                        .reading(read),
+                )
+            }
+        }
+    }
+
+    /// The attributes of an opening tag whose name ends at `name_end`, and
+    /// the `>` or `/>` after them, as the compiler's `read_attribute`
+    /// loop reads them: just past the `>`.
+    ///
+    /// Only the reading is replayed, for the errors it throws. Which
+    /// attributes there are is still decided by the parser's own scan.
+    pub fn read_open_tag(&self, name_end: u32) -> Result<u32, TagReadError> {
+        let mut at = self.skip_whitespace(name_end);
+        loop {
+            // Comments between attributes belong to the next one, and
+            // are read even when none follows.
+            at = self.skip_attribute_comments(at);
+            match self.read_attribute(at)? {
+                Some(end) => at = self.skip_whitespace(end),
+                None => break,
+            }
+        }
+        if self.byte(at) == Some(b'/') {
+            at += 1;
+        }
+        if self.byte(at) != Some(b'>') {
+            return Err(TagReadError::new(at, TagReadErrorKind::ExpectedToken(">")));
+        }
+        Ok(at + 1)
+    }
+
+    /// Where the template ends for the compiler, which trims it.
+    fn template_end(&self) -> u32 {
+        self.source.trim_end().len() as u32
+    }
+
+    /// `read_tag_name()`: the end of the name at `at`. An attribute's
+    /// name also stops at a quote or `=`.
+    fn tag_name_end(&self, at: u32, attribute: bool) -> Result<u32, TagReadError> {
+        let end = self.template_end();
+        if at >= end {
+            return Err(TagReadError::new(end, TagReadErrorKind::UnexpectedEof));
+        }
+        let rest = &self.source[at as usize..end as usize];
+        let len = rest
+            .char_indices()
+            .find(|&(_, c)| {
+                is_compiler_whitespace(c)
+                    || matches!(c, '/' | '>')
+                    || (attribute && matches!(c, '"' | '\'' | '='))
+            })
+            .map_or(rest.len(), |(i, _)| i);
+        Ok(at + len as u32)
+    }
+
+    /// The expression of an attribute's `{…}` from `start`, up to its
+    /// `}`: just past it.
+    fn attribute_expression(&self, start: u32) -> Result<u32, TagReadError> {
+        // acorn stops at an unpaired `}`, so no read goes past the one a
+        // brace count finds.
+        let limit = crate::mustache::find_mustache_end(self.source, start)
+            .unwrap_or_else(|| self.template_end());
+        Ok(self.read_expression_tag(start, limit)?.end)
+    }
+
+    /// The `//` and `/* */` comments the compiler reads before an
+    /// attribute, with the whitespace after each: where they end.
+    fn skip_attribute_comments(&self, mut at: u32) -> u32 {
+        loop {
+            let rest = self.source.get(at as usize..).unwrap_or("");
+            if rest.starts_with("//") {
+                at += rest.find('\n').unwrap_or(rest.len()) as u32;
+            } else if rest.starts_with("/*") {
+                at += rest.find("*/").map_or(rest.len(), |i| i + 2) as u32;
+            } else {
+                break;
+            }
+            at = self.skip_whitespace(at);
+        }
+        at
+    }
+
+    /// `read_attribute()` at `at`, past its comments: where the
+    /// attribute ends, or `None` when no attribute starts there.
+    fn read_attribute(&self, at: u32) -> Result<Option<u32>, TagReadError> {
+        let start = at;
+        if self.byte(at) == Some(b'{') {
+            let inner = self.skip_whitespace(at + 1);
+            let rest = &self.source[inner as usize..];
+            if rest.starts_with("@attach") {
+                let expression = self.require_whitespace(inner + 7)?;
+                return self.attribute_expression(expression).map(Some);
+            }
+            if rest.starts_with("...") {
+                return self.attribute_expression(inner + 3).map(Some);
+            }
+            let name_end = self.read_identifier(inner)?;
+            if name_end == inner {
+                return Err(TagReadError::new(
+                    start,
+                    TagReadErrorKind::AttributeEmptyShorthand,
+                ));
+            }
+            return self.closing_brace(name_end).map(Some);
+        }
+        let name_end = self.tag_name_end(at, true)?;
+        if name_end == at {
+            return Ok(None);
+        }
+        let name = &self.source[at as usize..name_end as usize];
+        let after = self.skip_whitespace(name_end);
+        let mut end = name_end;
+        // The value: where its first chunk starts, and whether it holds
+        // text (anything but one `{expression}`).
+        let mut value: Option<(u32, bool)> = None;
+        if self.byte(after) == Some(b'=') {
+            let value_start = self.skip_whitespace(after + 1);
+            if self.source[value_start as usize..].starts_with("/>") {
+                // `a=/>`: the value is the `/`.
+                end = value_start + 1;
+                value = Some((value_start, true));
+            } else {
+                let read = self.read_attribute_value(value_start)?;
+                end = read.0;
+                value = read.1;
+            }
+        } else if matches!(self.byte(after), Some(b'"' | b'\'')) {
+            return Err(TagReadError::new(
+                after,
+                TagReadErrorKind::ExpectedToken("="),
+            ));
+        }
+        if let Some(colon) = name.find(':') {
+            let directive = matches!(
+                &name[..colon],
+                "use"
+                    | "animate"
+                    | "bind"
+                    | "class"
+                    | "style"
+                    | "on"
+                    | "let"
+                    | "in"
+                    | "out"
+                    | "transition"
+            );
+            if directive {
+                let directive_name = name[colon + 1..].split('|').next().unwrap_or_default();
+                if directive_name.is_empty() {
+                    return Err(TagReadError::new(
+                        start,
+                        TagReadErrorKind::DirectiveMissingName {
+                            name: name.to_string(),
+                            end: start + colon as u32 + 1,
+                        },
+                    ));
+                }
+                if &name[..colon] != "style"
+                    && let Some((first, true)) = value
+                {
+                    return Err(TagReadError::new(
+                        first,
+                        TagReadErrorKind::DirectiveInvalidValue,
+                    ));
+                }
+            }
+        }
+        Ok(Some(end))
+    }
+
+    /// `read_attribute_value()` at `at`: where the value ends, and where
+    /// its first chunk starts with whether the value holds text. `None`
+    /// for an empty quoted value, which is one empty text chunk.
+    #[allow(clippy::type_complexity)]
+    fn read_attribute_value(&self, at: u32) -> Result<(u32, Option<(u32, bool)>), TagReadError> {
+        let quote = self.byte(at).filter(|b| matches!(b, b'"' | b'\''));
+        let mut index = at + u32::from(quote.is_some());
+        if let Some(quote) = quote
+            && self.byte(index) == Some(quote)
+        {
+            return Ok((index + 1, Some((index, true))));
+        }
+        let end = self.template_end();
+        let closing = match quote {
+            Some(b'"') => "\"",
+            Some(_) => "'",
+            None => "}",
+        };
+        let mut chunk_start = index;
+        // The chunks: (start, is text).
+        let mut chunks: Vec<(u32, bool)> = Vec::new();
+        let mut done = false;
+        while index < end {
+            let c = self.char_at(index).unwrap_or('\0');
+            let stops = match quote {
+                Some(quote) => c == char::from(quote),
+                None => {
+                    is_compiler_whitespace(c)
+                        || matches!(c, '"' | '\'' | '=' | '<' | '>' | '`')
+                        || self.source[index as usize..].starts_with("/>")
+                }
+            };
+            if stops {
+                done = true;
+                break;
+            }
+            if c != '{' {
+                index += c.len_utf8() as u32;
+                continue;
+            }
+            let brace = index;
+            let sigil = self.byte(brace + 1);
+            if matches!(sigil, Some(b'#' | b'@')) {
+                let name: String = self.source[brace as usize + 2..]
+                    .chars()
+                    .take_while(char::is_ascii_lowercase)
+                    .collect();
+                let kind = if sigil == Some(b'#') {
+                    TagReadErrorKind::BlockInvalidPlacement(name)
+                } else {
+                    TagReadErrorKind::TagInvalidPlacement(name)
+                };
+                return Err(TagReadError::new(brace, kind));
+            }
+            if brace > chunk_start {
+                chunks.push((chunk_start, true));
+            }
+            index = match self.attribute_expression(self.skip_whitespace(brace + 1)) {
+                Ok(end) => end,
+                Err(error) => {
+                    // An expression that runs into the tag's `/>`: acorn
+                    // fails on the `/`, and the compiler says what was
+                    // missing before it.
+                    let slash = error.at.saturating_sub(1);
+                    if matches!(error.kind, TagReadErrorKind::JsParse(_))
+                        && self.source.get(slash as usize..slash as usize + 2) == Some("/>")
+                    {
+                        return Err(TagReadError::new(
+                            error.at,
+                            TagReadErrorKind::ExpectedToken(closing),
+                        ));
+                    }
+                    return Err(error);
+                }
+            };
+            chunks.push((brace, false));
+            chunk_start = index;
+        }
+        if !done {
+            return Err(TagReadError::new(end, TagReadErrorKind::UnexpectedEof));
+        }
+        if index > chunk_start {
+            chunks.push((chunk_start, true));
+        }
+        if chunks.is_empty() && quote.is_none() {
+            return Err(TagReadError::new(
+                index,
+                TagReadErrorKind::ExpectedAttributeValue,
+            ));
+        }
+        let holds_text = chunks.len() > 1 || chunks.first().is_some_and(|c| c.1);
+        let first = chunks.first().map(|c| (c.0, holds_text));
+        Ok((index + u32::from(quote.is_some()), first))
     }
 
     /// The `{#snippet}` opening tag whose keyword ends at `keyword_end`.

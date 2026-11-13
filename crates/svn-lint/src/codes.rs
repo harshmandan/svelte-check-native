@@ -80,6 +80,7 @@ pub enum Code {
     bind_invalid_target,
     bind_invalid_value,
     bindable_invalid_location,
+    block_duplicate_clause,
     block_empty,
     block_invalid_placement,
     block_unexpected_character,
@@ -109,6 +110,7 @@ pub enum Code {
     event_handler_invalid_component_modifier,
     event_handler_invalid_modifier,
     event_handler_invalid_modifier_combination,
+    expected_attribute_value,
     expected_identifier,
     expected_pattern,
     expected_tag,
@@ -336,6 +338,7 @@ impl Code {
             Self::bind_invalid_target => "bind_invalid_target",
             Self::bind_invalid_value => "bind_invalid_value",
             Self::bindable_invalid_location => "bindable_invalid_location",
+            Self::block_duplicate_clause => "block_duplicate_clause",
             Self::block_empty => "block_empty",
             Self::block_invalid_placement => "block_invalid_placement",
             Self::block_unexpected_character => "block_unexpected_character",
@@ -369,6 +372,7 @@ impl Code {
             Self::event_handler_invalid_modifier_combination => {
                 "event_handler_invalid_modifier_combination"
             }
+            Self::expected_attribute_value => "expected_attribute_value",
             Self::expected_identifier => "expected_identifier",
             Self::expected_pattern => "expected_pattern",
             Self::expected_tag => "expected_tag",
@@ -616,6 +620,7 @@ impl Code {
             "bind_invalid_target" => Some(Self::bind_invalid_target),
             "bind_invalid_value" => Some(Self::bind_invalid_value),
             "bindable_invalid_location" => Some(Self::bindable_invalid_location),
+            "block_duplicate_clause" => Some(Self::block_duplicate_clause),
             "block_empty" => Some(Self::block_empty),
             "block_invalid_placement" => Some(Self::block_invalid_placement),
             "block_unexpected_character" => Some(Self::block_unexpected_character),
@@ -651,6 +656,7 @@ impl Code {
             "event_handler_invalid_modifier_combination" => {
                 Some(Self::event_handler_invalid_modifier_combination)
             }
+            "expected_attribute_value" => Some(Self::expected_attribute_value),
             "expected_identifier" => Some(Self::expected_identifier),
             "expected_pattern" => Some(Self::expected_pattern),
             "expected_tag" => Some(Self::expected_tag),
@@ -801,7 +807,7 @@ impl Code {
 }
 
 /// All known codes, alphabetically sorted.
-pub const CODES: &[&str; 229] = &[
+pub const CODES: &[&str; 231] = &[
     "a11y_accesskey",
     "a11y_aria_activedescendant_has_tabindex",
     "a11y_aria_attributes",
@@ -872,6 +878,7 @@ pub const CODES: &[&str; 229] = &[
     "bind_invalid_target",
     "bind_invalid_value",
     "bindable_invalid_location",
+    "block_duplicate_clause",
     "block_empty",
     "block_invalid_placement",
     "block_unexpected_character",
@@ -901,6 +908,7 @@ pub const CODES: &[&str; 229] = &[
     "event_handler_invalid_component_modifier",
     "event_handler_invalid_modifier",
     "event_handler_invalid_modifier_combination",
+    "expected_attribute_value",
     "expected_identifier",
     "expected_pattern",
     "expected_tag",
@@ -1059,6 +1067,7 @@ pub const COMPILER_ERROR_CODES: &[&str] = &[
     "bind_invalid_target",
     "bind_invalid_value",
     "bindable_invalid_location",
+    "block_duplicate_clause",
     "block_invalid_placement",
     "block_unexpected_character",
     "component_invalid_directive",
@@ -1081,6 +1090,7 @@ pub const COMPILER_ERROR_CODES: &[&str] = &[
     "event_handler_invalid_component_modifier",
     "event_handler_invalid_modifier",
     "event_handler_invalid_modifier_combination",
+    "expected_attribute_value",
     "expected_identifier",
     "expected_pattern",
     "expected_tag",

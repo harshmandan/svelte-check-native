@@ -104,6 +104,16 @@ pub enum ParseError {
         range: Range,
     },
 
+    /// An error of the compiler's parser that this parser detects where
+    /// it reads the structure, in the compiler's own words: `code` is its
+    /// error code and `message` its text with the documentation link.
+    #[error("{message}")]
+    Compiler {
+        code: &'static str,
+        message: String,
+        range: Range,
+    },
+
     #[error("Unexpected block closing tag")]
     UnexpectedBlockClose { range: Range },
 
@@ -147,6 +157,7 @@ impl ParseError {
             Self::UnterminatedElement { range, .. } => *range,
             Self::MismatchedClosingTag { range, .. } => *range,
             Self::InvalidClosingTag { range, .. } => *range,
+            Self::Compiler { range, .. } => *range,
             Self::UnexpectedBlockClose { range } => *range,
             Self::InvalidBlockContinuation { range } => *range,
             Self::UnknownSvelteElement { range, .. } => *range,
@@ -197,6 +208,7 @@ impl ParseError {
                 ..
             } => "element_invalid_closing_tag",
             Self::InvalidClosingTag { .. } => "element_invalid_closing_tag_autoclosed",
+            Self::Compiler { code, .. } => code,
             Self::UnexpectedBlockClose { .. } => "block-unexpected-close",
             Self::InvalidBlockContinuation { .. } => "block-invalid-continuation-placement",
             Self::UnknownSvelteElement { .. } => "unknown-svelte-element",

@@ -241,16 +241,19 @@ impl Finder<'_> {
         match node {
             Node::Element(el) => {
                 self.tag_name(el.name.as_str(), el.range.start, false);
+                self.read_error(el.open_error.as_ref());
                 self.attributes(&el.attributes);
                 self.fragment(&el.children, false);
             }
             Node::Component(c) => {
                 self.tag_name(c.name.as_str(), c.range.start, true);
+                self.read_error(c.open_error.as_ref());
                 self.attributes(&c.attributes);
                 self.fragment(&c.children, false);
             }
             Node::SvelteElement(se) => {
                 let start = se.range.start;
+                self.read_error(se.open_error.as_ref());
                 let root_only = matches!(
                     se.kind,
                     SvelteElementKind::Head

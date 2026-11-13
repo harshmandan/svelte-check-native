@@ -79,6 +79,11 @@ pub struct LintContext<'src> {
     /// passed one. Some compiler rules only apply when runes mode was
     /// not forced off.
     pub runes_option: Option<bool>,
+    /// The compiler's `maybe_runes`: not in runes mode, but runes were
+    /// not turned off and the component has no legacy-only syntax
+    /// (`$$props`, `$$restProps`, `export let`, a `$:` statement), so it
+    /// may be a runes component that uses none itself.
+    pub maybe_runes: bool,
 
     /// Scope tree over the instance + module scripts. Built once at
     /// the start of [`crate::walk::walk`]; rules query it by name to
@@ -170,6 +175,7 @@ impl<'src> LintContext<'src> {
             ignore_stack: Vec::new(),
             runes: false,
             runes_option: None,
+            maybe_runes: false,
             errored: false,
             exception: None,
             scope_tree: None,

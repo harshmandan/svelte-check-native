@@ -20,9 +20,9 @@
         },
         {
             "file": "src/StaticAccessor.svelte",
-            "line": 0,
-            "column": 9,
-            "code": "js_parse_error"
+            "line": 2,
+            "column": 2,
+            "code": "typescript_invalid_feature"
         },
         {
             "file": "src/TypeTwice.svelte",

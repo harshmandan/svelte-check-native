@@ -446,6 +446,14 @@ pub(crate) fn visit_attribute(
         AttrParent::RegularElement { .. } | AttrParent::SvelteElement
     );
     let fires_invalid_property_name = parent_is_regular_or_svelte;
+    // The global handler property an undeclared `{onresize}` names is
+    // checked on `<svelte:window>`, `<svelte:document>` and
+    // `<svelte:body>` too.
+    let checks_global_event_reference = parent_is_regular_or_svelte
+        || matches!(
+            parent,
+            AttrParent::SvelteSpecial("svelte:window" | "svelte:document" | "svelte:body")
+        );
     let fires_attr_name_checks =
         !matches!(parent, AttrParent::OtherSvelte | AttrParent::SvelteFragment);
     // `on*` attributes / `on:` directives on elements, for
@@ -523,7 +531,7 @@ pub(crate) fn visit_attribute(
 
             // An `on*` attribute holding a single expression (a quoted
             // `"{handler}"` is one) may name the global handler.
-            if parent_is_regular_or_svelte
+            if checks_global_event_reference
                 && name.starts_with("on")
                 && name.len() > 2
                 && let Some(
@@ -551,7 +559,7 @@ pub(crate) fn visit_attribute(
             // `{onkeydown}` — name IS the value identifier. Fire iff
             // the name starts with `on` and has no local binding in
             // the instance/module scope.
-            if parent_is_regular_or_svelte
+            if checks_global_event_reference
                 && name.starts_with("on")
                 && name.len() > 2
                 && let Some(tree) = &ctx.scope_tree

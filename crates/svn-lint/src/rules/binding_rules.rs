@@ -334,6 +334,17 @@ fn state_referenced_locally(tree: &ScopeTree, pending: &mut Vec<(svn_core::Range
             if r.function_depth_at_use != binding_depth {
                 continue;
             }
+            // State declared in the template (`{let a = $state(0)}`) is
+            // read reactively everywhere in the template but in another
+            // declaration tag's initializer.
+            if r.in_template
+                && !tree
+                    .declaration_tag_inits
+                    .iter()
+                    .any(|init| init.start <= r.range.start && r.range.end <= init.end)
+            {
+                continue;
+            }
             if ref_ignores(r, Code::state_referenced_locally) {
                 continue;
             }

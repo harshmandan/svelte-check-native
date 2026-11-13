@@ -295,9 +295,28 @@ fn check_element(
     // references the same values. Mirrors upstream's `role_value /
     // role_static_value` bookkeeping.
     let role_attr = attribute_map.get("role");
-    let role_static_value = role_attr.and_then(|a| match a {
-        Attribute::Plain(p) => get_static_text_value(p, source),
-        _ => None,
+    // A `role` may list fallback roles: the element gets the first one
+    // that is a known, non-abstract role. When none is, the whole value
+    // stands, so an invalid role keeps its own diagnostics.
+    // The compiler holds the value with its character references
+    // decoded (`&#9;` is a tab between two roles).
+    let role_decoded = role_attr
+        .and_then(|a| match a {
+            Attribute::Plain(p) => get_static_text_value(p, source),
+            _ => None,
+        })
+        .map(|value| crate::html_decode::decode_character_references(value, true));
+    let role_static_value = role_decoded.as_deref().map(|value| {
+        value
+            .split_ascii_whitespace()
+            .find_map(|token| {
+                ARIA_ROLES
+                    .iter()
+                    .find(|role| role.eq_ignore_ascii_case(token))
+                    .filter(|role| !ABSTRACT_ROLES.contains(role))
+                    .copied()
+            })
+            .unwrap_or(value)
     });
     let implicit_role = get_implicit_role(name, &attribute_map, source);
     // Upstream: `role ? role_static_value : get_implicit_role(...)` —
@@ -393,10 +412,16 @@ fn check_element(
                 // a11y_no_redundant_roles — all drive off the role's
                 // text value. Each word is evaluated separately.
                 if let Some(val) = static_value {
+                    let decoded = crate::html_decode::decode_character_references(val, true);
+                    let val = decoded.as_ref();
+                    // Role tokens are separated by ASCII whitespace and
+                    // matched without regard to ASCII case.
                     for role_word in val.split_ascii_whitespace() {
                         if role_word.is_empty() {
                             continue;
                         }
+                        let lowered = role_word.to_ascii_lowercase();
+                        let role_word = lowered.as_str();
                         if ABSTRACT_ROLES.contains(&role_word) {
                             let msg = messages::a11y_no_abstract_role(role_word);
                             ctx.emit(Code::a11y_no_abstract_role, msg, attr_range);
@@ -505,7 +530,8 @@ fn check_element(
                             let matches_implicit = Some(role_word) == implicit_role;
                             let exempt_implicit = matches_implicit
                                 && (matches!(name, "ul" | "ol" | "li" | "menu")
-                                    || (name == "a" && !attribute_map.contains_key("href")));
+                                    || (matches!(name, "a" | "area")
+                                        && !attribute_map.contains_key("href")));
                             if matches_implicit && !exempt_implicit {
                                 let msg = messages::a11y_no_redundant_roles(role_word);
                                 ctx.emit(Code::a11y_no_redundant_roles, msg, attr_range);
@@ -721,7 +747,7 @@ fn check_element(
                 .iter()
                 .any(|h| matches!(h.as_str(), "keydown" | "keyup" | "keypress"));
             if !has_key {
-                let msg = messages::a11y_click_events_have_key_events();
+                let msg = messages::a11y_click_events_have_key_events(name);
                 ctx.emit(Code::a11y_click_events_have_key_events, msg, range);
             }
         }
@@ -731,11 +757,18 @@ fn check_element(
     // mouseout w/o blur. Not gated on is_dynamic_element upstream
     // (a11y/index.js:376-382).
     if !has_spread {
-        if handlers.iter().any(|h| h == "mouseover") && !handlers.iter().any(|h| h == "focus") {
+        // `focus` / `blur` do not bubble, so an element that is not
+        // focusable itself hears of focus changes inside it only through
+        // `focusin` / `focusout`: those count as well.
+        if handlers.iter().any(|h| h == "mouseover")
+            && !handlers.iter().any(|h| h == "focus" || h == "focusin")
+        {
             let msg = messages::a11y_mouse_events_have_key_events("mouseover", "focus");
             ctx.emit(Code::a11y_mouse_events_have_key_events, msg, range);
         }
-        if handlers.iter().any(|h| h == "mouseout") && !handlers.iter().any(|h| h == "blur") {
+        if handlers.iter().any(|h| h == "mouseout")
+            && !handlers.iter().any(|h| h == "blur" || h == "focusout")
+        {
             let msg = messages::a11y_mouse_events_have_key_events("mouseout", "blur");
             ctx.emit(Code::a11y_mouse_events_have_key_events, msg, range);
         }

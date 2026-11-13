@@ -599,6 +599,25 @@ impl Finder<'_> {
 
     fn tag(&mut self, i: &Interpolation) {
         let start = i.range.start;
+        // Before it reads anything else in a `{…}` tag, the compiler
+        // refuses a declaration that is no `let` or `const`.
+        if i.kind == InterpolationKind::Expression {
+            let text = &self.source[start as usize + 1..i.range.end as usize];
+            let inner = text.trim_start();
+            let at = start + 1 + (text.len() - inner.len()) as u32;
+            for keyword in ["var", "interface", "enum"] {
+                if inner.strip_prefix(keyword).is_some_and(|rest| {
+                    !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '$')
+                }) {
+                    self.report(
+                        at,
+                        Code::declaration_tag_invalid_type,
+                        messages::declaration_tag_invalid_type(),
+                        Range::new(at, at + keyword.len() as u32),
+                    );
+                }
+            }
+        }
         self.read_error(i.open_error.as_ref());
         if i.open_error.is_none() {
             match i.kind {

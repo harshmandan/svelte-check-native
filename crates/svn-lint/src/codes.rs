@@ -95,6 +95,8 @@ pub enum Code {
     debug_tag_invalid_arguments,
     declaration_duplicate,
     declaration_duplicate_module_import,
+    declaration_tag_invalid_type,
+    declaration_tag_no_legacy_mode,
     derived_invalid_export,
     directive_invalid_value,
     directive_missing_name,
@@ -136,6 +138,7 @@ pub enum Code {
     legacy_reactive_statement_invalid,
     legacy_rest_props_invalid,
     let_directive_invalid_placement,
+    let_directive_snippet_conflict,
     mixed_event_handler_syntaxes,
     module_illegal_default_export,
     node_invalid_placement,
@@ -353,6 +356,8 @@ impl Code {
             Self::debug_tag_invalid_arguments => "debug_tag_invalid_arguments",
             Self::declaration_duplicate => "declaration_duplicate",
             Self::declaration_duplicate_module_import => "declaration_duplicate_module_import",
+            Self::declaration_tag_invalid_type => "declaration_tag_invalid_type",
+            Self::declaration_tag_no_legacy_mode => "declaration_tag_no_legacy_mode",
             Self::derived_invalid_export => "derived_invalid_export",
             Self::directive_invalid_value => "directive_invalid_value",
             Self::directive_missing_name => "directive_missing_name",
@@ -398,6 +403,7 @@ impl Code {
             Self::legacy_reactive_statement_invalid => "legacy_reactive_statement_invalid",
             Self::legacy_rest_props_invalid => "legacy_rest_props_invalid",
             Self::let_directive_invalid_placement => "let_directive_invalid_placement",
+            Self::let_directive_snippet_conflict => "let_directive_snippet_conflict",
             Self::mixed_event_handler_syntaxes => "mixed_event_handler_syntaxes",
             Self::module_illegal_default_export => "module_illegal_default_export",
             Self::node_invalid_placement => "node_invalid_placement",
@@ -637,6 +643,8 @@ impl Code {
             "declaration_duplicate_module_import" => {
                 Some(Self::declaration_duplicate_module_import)
             }
+            "declaration_tag_invalid_type" => Some(Self::declaration_tag_invalid_type),
+            "declaration_tag_no_legacy_mode" => Some(Self::declaration_tag_no_legacy_mode),
             "derived_invalid_export" => Some(Self::derived_invalid_export),
             "directive_invalid_value" => Some(Self::directive_invalid_value),
             "directive_missing_name" => Some(Self::directive_missing_name),
@@ -682,6 +690,7 @@ impl Code {
             "legacy_reactive_statement_invalid" => Some(Self::legacy_reactive_statement_invalid),
             "legacy_rest_props_invalid" => Some(Self::legacy_rest_props_invalid),
             "let_directive_invalid_placement" => Some(Self::let_directive_invalid_placement),
+            "let_directive_snippet_conflict" => Some(Self::let_directive_snippet_conflict),
             "mixed_event_handler_syntaxes" => Some(Self::mixed_event_handler_syntaxes),
             "module_illegal_default_export" => Some(Self::module_illegal_default_export),
             "node_invalid_placement" => Some(Self::node_invalid_placement),
@@ -807,7 +816,7 @@ impl Code {
 }
 
 /// All known codes, alphabetically sorted.
-pub const CODES: &[&str; 231] = &[
+pub const CODES: &[&str; 234] = &[
     "a11y_accesskey",
     "a11y_aria_activedescendant_has_tabindex",
     "a11y_aria_attributes",
@@ -893,6 +902,8 @@ pub const CODES: &[&str; 231] = &[
     "debug_tag_invalid_arguments",
     "declaration_duplicate",
     "declaration_duplicate_module_import",
+    "declaration_tag_invalid_type",
+    "declaration_tag_no_legacy_mode",
     "derived_invalid_export",
     "directive_invalid_value",
     "directive_missing_name",
@@ -934,6 +945,7 @@ pub const CODES: &[&str; 231] = &[
     "legacy_reactive_statement_invalid",
     "legacy_rest_props_invalid",
     "let_directive_invalid_placement",
+    "let_directive_snippet_conflict",
     "mixed_event_handler_syntaxes",
     "module_illegal_default_export",
     "node_invalid_placement",
@@ -1078,6 +1090,8 @@ pub const COMPILER_ERROR_CODES: &[&str] = &[
     "debug_tag_invalid_arguments",
     "declaration_duplicate",
     "declaration_duplicate_module_import",
+    "declaration_tag_invalid_type",
+    "declaration_tag_no_legacy_mode",
     "derived_invalid_export",
     "directive_invalid_value",
     "directive_missing_name",
@@ -1113,6 +1127,7 @@ pub const COMPILER_ERROR_CODES: &[&str] = &[
     "legacy_reactive_statement_invalid",
     "legacy_rest_props_invalid",
     "let_directive_invalid_placement",
+    "let_directive_snippet_conflict",
     "mixed_event_handler_syntaxes",
     "module_illegal_default_export",
     "node_invalid_placement",

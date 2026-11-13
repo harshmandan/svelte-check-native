@@ -574,7 +574,9 @@ impl<'s, 't> Checker<'s, 't> {
                     self.error(after, format!("Duplicate modifier: '{word}'."));
                     return;
                 }
-                for other in ["readonly", "static", "override"] {
+                // acorn-typescript 1.0.13 no longer refuses `static` with
+                // `accessor`.
+                for other in ["readonly", "override"] {
                     if modified.contains(&other) {
                         self.record(column_error(incompatible("accessor", other)));
                         return;
@@ -2169,11 +2171,14 @@ mod tests {
             Some((20, "Unexpected token".into()))
         );
         assert_eq!(ts("class K { constructor(private a) {} }"), None);
+        // `static accessor` is fine for acorn-typescript 1.0.13;
+        // `readonly accessor` is not.
+        assert_eq!(ts("class K { static accessor x = 1 }"), None);
         assert_eq!(
-            ts("class K { static accessor x = 1 }"),
+            ts("class K { readonly accessor x = 1 }"),
             Some((
-                17,
-                "'accessor' modifier cannot be used with 'static' modifier.".into()
+                19,
+                "'accessor' modifier cannot be used with 'readonly' modifier.".into()
             ))
         );
         assert_eq!(

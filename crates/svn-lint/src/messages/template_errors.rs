@@ -152,6 +152,18 @@ pub fn directive_missing_name(type_: &str) -> String {
     format!("`{type_}` name cannot be empty\nhttps://svelte.dev/e/directive_missing_name")
 }
 
+/// Declaration tags must be `let` or `const` declarations
+pub fn declaration_tag_invalid_type() -> String {
+    "Declaration tags must be `let` or `const` declarations\nhttps://svelte.dev/e/declaration_tag_invalid_type"
+        .to_string()
+}
+
+/// Declaration tags cannot be used in legacy mode
+pub fn declaration_tag_no_legacy_mode() -> String {
+    "Declaration tags cannot be used in legacy mode\nhttps://svelte.dev/e/declaration_tag_no_legacy_mode"
+        .to_string()
+}
+
 /// An `{#each ...}` block without an `as` clause cannot have a key
 pub fn each_key_without_as() -> String {
     format!(

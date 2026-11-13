@@ -11,6 +11,8 @@ pub const ARIA_ATTRIBUTES: &[&str] = &[
     "activedescendant",
     "atomic",
     "autocomplete",
+    "braillelabel",
+    "brailleroledescription",
     "busy",
     "checked",
     "colcount",

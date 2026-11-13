@@ -44,6 +44,8 @@ mod fuzzymatch;
 // parser needs `closing_tag_omitted` for implicit-close handling); this
 // alias keeps the `crate::html5::*` paths working here unchanged.
 use svn_parser::html5;
+mod html_decode;
+mod html_entities;
 mod ignore;
 mod messages;
 mod parse_errors;

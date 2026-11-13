@@ -120,6 +120,11 @@ pub struct ScopeTree {
     /// surface in template order, interleaved with the element and
     /// block warnings. Sorted by source position.
     pub(crate) template_rule_events: Vec<crate::rules::script_ast_rules::ScriptRuleEvent>,
+    /// The initializers of the template's declaration tags
+    /// (`{let b = a}`). The compiler counts a read of state there as a
+    /// read in the scope that declares it, unlike any other read in the
+    /// template.
+    pub(crate) declaration_tag_inits: Vec<Range>,
     /// The first error the compiler's scope builder raises while
     /// declaring bindings (`validate_identifier_name`): a `$` or
     /// `$`-prefixed name declared at the module / instance level.
@@ -575,6 +580,8 @@ struct TreeBuilder {
     has_await: bool,
     /// See [`ScopeTree::template_rule_events`].
     template_rule_events: Vec<ScriptRuleEvent>,
+    /// See [`ScopeTree::declaration_tag_inits`].
+    declaration_tag_inits: Vec<Range>,
     /// See [`ScopeTree::declaration_error`].
     declaration_error: Option<(Code, String, Range)>,
     /// The literals the compiler's stateful bidi search reports (see
@@ -709,6 +716,7 @@ impl TreeBuilder {
             has_await: false,
             script_rule_events: Vec::new(),
             template_rule_events: Vec::new(),
+            declaration_tag_inits: Vec::new(),
             declaration_error: None,
             runes: false,
             preprocess_ts: false,
@@ -987,9 +995,14 @@ impl TreeBuilder {
         let alloc = oxc_allocator::Allocator::default();
         let parsed = parse_script_body(&alloc, &wrapped, ctx.lang);
         let offset: i32 = range.start as i32 - 4;
-        if let Some(Statement::VariableDeclaration(vd)) = parsed.program.body.first()
-            && let Some(d) = vd.declarations.first()
-        {
+        // A declaration tag may declare several names
+        // (`{let a = $state(0), b = a}`): each one is declared and its
+        // initializer read before the next.
+        let declarators = match parsed.program.body.first() {
+            Some(Statement::VariableDeclaration(vd)) => vd.declarations.as_slice(),
+            _ => &[],
+        };
+        for d in declarators {
             // Declare every pattern identifier in the current
             // template scope, without feeding them through
             // visit_assignment. Capture the binding-id boundary
@@ -1007,9 +1020,51 @@ impl TreeBuilder {
             // appended (it uses `BindingKind::Each` internally as a
             // generic pattern marker; for `{@const}` the right kind
             // is Template).
+            // A declaration tag (`{let a = $state(0)}`) declares state as
+            // a script declaration does: the rune its initializer calls
+            // decides the binding's kind.
+            let is_declaration_tag = !ctx.source[..range.start as usize]
+                .rsplit('{')
+                .next()
+                .unwrap_or_default()
+                .trim_start()
+                .starts_with('@');
+            let rune = d
+                .init
+                .as_ref()
+                .filter(|_| is_declaration_tag)
+                .and_then(|init| match unwrap_ts_wrappers(init) {
+                    Expression::CallExpression(call) => {
+                        detect_rune_call_from_call(call).map(|rune| (rune, init))
+                    }
+                    _ => None,
+                });
+            let rune_kind = rune.and_then(|(rune, init)| {
+                let primitive_arg = match rune {
+                    RuneCall::State | RuneCall::StateRaw => state_rune_primitive_arg(init),
+                    _ => StateArg::Proxied,
+                };
+                let kind = match rune {
+                    RuneCall::State => BindingKind::State,
+                    RuneCall::StateRaw => BindingKind::RawState,
+                    RuneCall::Derived | RuneCall::DerivedBy => BindingKind::Derived,
+                    _ => return None,
+                };
+                Some((
+                    kind,
+                    InitialKind::RuneCall {
+                        rune,
+                        primitive_arg,
+                    },
+                ))
+            });
             for idx in new_id_start..new_id_end {
                 if matches!(self.bindings[idx as usize].kind, BindingKind::Each) {
                     self.bindings[idx as usize].kind = BindingKind::Template;
+                    if let Some((kind, initial)) = &rune_kind {
+                        self.bindings[idx as usize].kind = *kind;
+                        self.bindings[idx as usize].initial = initial.clone();
+                    }
                 }
             }
             // Walk the initializer expression so refs inside
@@ -1030,6 +1085,9 @@ impl TreeBuilder {
                     .next()
                     .unwrap_or_default();
                 self.declaration_tag_init = !tag_head.trim_start().starts_with('@');
+                if self.declaration_tag_init {
+                    self.declaration_tag_inits.push(abs);
+                }
                 self.walk_expr_range(abs, ctx, RefFlags::default());
                 self.declaration_tag_init = false;
             }
@@ -1894,6 +1952,7 @@ impl TreeBuilder {
             module_script_range: None,
             reactive_statements: self.reactive_statements,
             reactive_assignment_targets: self.reactive_assignment_targets.into_iter().collect(),
+            declaration_tag_inits: self.declaration_tag_inits,
             template_rule_events: {
                 let mut events = self.template_rule_events;
                 events.sort_by_key(|e| e.range().start);

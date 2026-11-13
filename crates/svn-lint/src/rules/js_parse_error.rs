@@ -1983,9 +1983,9 @@ mod tests {
     #[test]
     fn modifier_errors_slip_to_the_column_offset() {
         assert_eq!(
-            as_written("<script lang=\"ts\">\nclass K {\n  static accessor x = 1\n}\n</script>")
+            as_written("<script lang=\"ts\">\nclass K {\n  readonly accessor x = 1\n}\n</script>")
                 .as_deref(),
-            Some("0:9 'accessor' modifier cannot be used with 'static' modifier.")
+            Some("0:11 'accessor' modifier cannot be used with 'readonly' modifier.")
         );
     }
 

@@ -61,6 +61,35 @@ fn scripts_signal_runes(
     probe.found
 }
 
+/// Whether the instance script has syntax only a legacy component has:
+/// a `$:` statement or an exported `let` (the compiler's `maybe_runes`).
+fn has_legacy_only_syntax(program: &oxc_ast::ast::Program<'_>) -> bool {
+    use oxc_ast::ast::{Declaration, Statement, VariableDeclarationKind};
+    let top_level_lets: Vec<&str> = program
+        .body
+        .iter()
+        .filter_map(|statement| match statement {
+            Statement::VariableDeclaration(v) if v.kind == VariableDeclarationKind::Let => Some(v),
+            _ => None,
+        })
+        .flat_map(|v| v.declarations.iter())
+        .filter_map(|d| d.id.get_identifier_name())
+        .map(|name| name.as_str())
+        .collect();
+    program.body.iter().any(|statement| match statement {
+        Statement::LabeledStatement(_) => true,
+        Statement::ExportDeclaration(export) => matches!(
+            &export.declaration,
+            Declaration::VariableDeclaration(v) if v.kind == VariableDeclarationKind::Let
+        ),
+        Statement::ExportNamedDeclaration(export) => export
+            .specifiers
+            .iter()
+            .any(|specifier| top_level_lets.contains(&specifier.local.name().as_str())),
+        _ => false,
+    })
+}
+
 /// Walk a full `.svelte` source and run every phase-enabled rule.
 ///
 /// Template parsing happens inline via `svn-parser`. Script parsing
@@ -222,6 +251,11 @@ pub fn walk_parsed(
     // always the one built under the FINAL runes mode, so the buffer
     // matches `ctx.runes`. Flushed below, between the options
     // warnings and the walk-time binding rules.
+    ctx.maybe_runes = !ctx.runes
+        && forced != Some(false)
+        && !source.contains("$$props")
+        && !source.contains("$$restProps")
+        && !instance_program.is_some_and(has_legacy_only_syntax);
     let script_rule_events = std::mem::take(&mut tree.script_rule_events);
     ctx.pending_template_events = std::mem::take(&mut tree.template_rule_events).into();
     let declaration_error = tree.declaration_error.take();
@@ -674,7 +708,14 @@ impl PathFrame {
             .iter()
             .filter(|n| match n {
                 Node::Comment(_) => false,
-                Node::Interpolation(i) => i.kind != svn_parser::InterpolationKind::AtConst,
+                // A `{@const}` or a declaration tag is no child the
+                // `animate:` placement rule counts.
+                Node::Interpolation(i) => !matches!(
+                    i.kind,
+                    svn_parser::InterpolationKind::AtConst
+                        | svn_parser::InterpolationKind::DeclConst
+                        | svn_parser::InterpolationKind::DeclLet
+                ),
                 Node::Text(t) => !t
                     .range
                     .slice(source)
@@ -1098,6 +1139,13 @@ fn walk_fragment_nodes(
                 }
                 if i.kind == svn_parser::InterpolationKind::AtConst {
                     crate::rules::block_rules::visit_const_tag(i, ctx);
+                }
+                if matches!(
+                    i.kind,
+                    svn_parser::InterpolationKind::DeclConst
+                        | svn_parser::InterpolationKind::DeclLet
+                ) {
+                    crate::rules::block_rules::visit_declaration_tag(i, ctx);
                 }
                 if matches!(
                     i.kind,

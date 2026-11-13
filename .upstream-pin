@@ -23,5 +23,5 @@ note = "svelte-check@4.7.8 + unreleased main: svelte2tsx hoists a script's leadi
 # manual review confirms: (1) no new warning codes dropped on the
 # floor, (2) message-text changes regenerated, (3) upstream-fixture
 # tier-A gate still green.
-sha = "8e7319063aa609cca2cbf8cdf1958e5392dd2fa0"
-note = "svelte@5.55.4 + post-5.55.4 main"
+sha = "23bb146306ff02cc5041bca0c5de9f8bd086e4a3"
+note = "svelte@5.57.3 (the release tag; the target is the newest release, not unreleased main)"

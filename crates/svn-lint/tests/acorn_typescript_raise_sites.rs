@@ -814,6 +814,14 @@ const CASES: &[(&str, Expected)] = &[
         )),
     ),
     (
+        "class A { static accessor x = 1 }",
+        Some((
+            "typescript_invalid_feature",
+            "TypeScript language features like accessor fields (related TSC proposal is not stage 4 yet) are not natively supported, and their use is generally discouraged. Outside of `<script>` tags, these features are not supported. For use within `<script>` tags, you will need to use a preprocessor to convert it to JavaScript before it gets passed to the Svelte compiler. If you are using `vitePreprocess`, make sure to specifically enable preprocessing script tags (`vitePreprocess({ script: true })`)",
+            29,
+        )),
+    ),
+    (
         "class A { accessor accessor }",
         Some((
             "typescript_invalid_feature",

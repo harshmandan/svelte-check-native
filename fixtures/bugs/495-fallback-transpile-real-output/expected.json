@@ -7,16 +7,16 @@
             "code": "typescript_invalid_feature"
         },
         {
-            "file": "src/ObjAccessorM.svelte",
+            "file": "src/ObjAccessor.svelte",
             "line": 1,
-            "column": 27,
-            "code": "js_parse_error"
+            "column": 37,
+            "code": "typescript_invalid_feature"
         },
         {
-            "file": "src/ObjAccessor.svelte",
-            "line": 0,
-            "column": 8,
-            "code": "js_parse_error"
+            "file": "src/ObjAccessorM.svelte",
+            "line": 1,
+            "column": 37,
+            "code": "typescript_invalid_feature"
         },
         {
             "file": "src/ReservedIdent.svelte",
@@ -37,16 +37,16 @@
             "code": 1005
         },
         {
-            "file": "src/StaticAccessorLater.svelte",
-            "line": 0,
-            "column": 8,
-            "code": "js_parse_error"
+            "file": "src/StaticAccessor.svelte",
+            "line": 1,
+            "column": 10,
+            "code": "typescript_invalid_feature"
         },
         {
-            "file": "src/StaticAccessor.svelte",
-            "line": 0,
-            "column": 8,
-            "code": "js_parse_error"
+            "file": "src/StaticAccessorLater.svelte",
+            "line": 4,
+            "column": 2,
+            "code": "typescript_invalid_feature"
         },
         {
             "file": "src/UnicodeIdent.svelte",

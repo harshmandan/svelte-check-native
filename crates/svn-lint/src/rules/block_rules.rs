@@ -123,6 +123,29 @@ pub fn visit_await(b: &AwaitBlock, ctx: &mut LintContext<'_>) {
 /// in runes mode, then no rest parameter (`SnippetBlock.js`).
 pub fn visit_snippet(b: &SnippetBlock, ctx: &mut LintContext<'_>) {
     visit_block_fragment_for_empty(&b.body, ctx);
+    // A snippet at the top level of the template may not take a name
+    // the instance script declares.
+    if ctx.template_path.is_empty()
+        && let Some(tag) = ctx.source.get(b.range.start as usize..b.range.end as usize)
+        && let Some(keyword) = tag.find("snippet")
+        && let Some(name_at) = tag[keyword + 7..].find(b.name.as_str())
+    {
+        let start = b.range.start + (keyword + 7 + name_at) as u32;
+        let range = svn_core::Range::new(start, start + b.name.len() as u32);
+        let clashes = ctx.scope_tree.as_ref().is_some_and(|tree| {
+            tree.scope(tree.instance_root)
+                .declarations
+                .get(b.name.as_str())
+                .is_some_and(|existing| tree.binding(*existing).range != range)
+        });
+        if clashes {
+            ctx.emit_error(
+                Code::declaration_duplicate,
+                messages::declaration_duplicate(b.name.as_str()),
+                range,
+            );
+        }
+    }
     if ctx.runes {
         validate_opening_tag(b.range.start, b'#', ctx);
     }
@@ -139,6 +162,61 @@ pub fn visit_snippet(b: &SnippetBlock, ctx: &mut LintContext<'_>) {
 /// placement — directly inside a block, a snippet, a component, a
 /// `<svelte:fragment>` / `<svelte:boundary>`, or an element filling a
 /// named slot.
+/// A `{const …}` / `{let …}` declaration tag (the compiler's
+/// `DeclarationTag` visitor): not in a legacy component, and at the top
+/// level of the template not a name the instance script declares.
+pub fn visit_declaration_tag(tag: &Interpolation, ctx: &mut LintContext<'_>) {
+    if !ctx.runes && !ctx.maybe_runes {
+        ctx.emit_error(
+            Code::declaration_tag_no_legacy_mode,
+            messages::declaration_tag_no_legacy_mode(),
+            tag.range,
+        );
+    }
+    if !ctx.template_path.is_empty() {
+        return;
+    }
+    let Some(text) = ctx
+        .source
+        .get(tag.expression_range.start as usize..tag.expression_range.end as usize)
+    else {
+        return;
+    };
+    let wrapped = format!("let {text};");
+    let offset = tag.expression_range.start as i64 - 4;
+    let alloc = oxc_allocator::Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+    let Some(oxc_ast::ast::Statement::VariableDeclaration(declaration)) =
+        parsed.program.body.first()
+    else {
+        return;
+    };
+    let duplicate = declaration
+        .declarations
+        .iter()
+        .flat_map(|d| d.id.get_binding_identifiers())
+        .find_map(|id| {
+            let range = svn_core::Range::new(
+                (i64::from(id.span.start) + offset) as u32,
+                (i64::from(id.span.end) + offset) as u32,
+            );
+            let tree = ctx.scope_tree.as_ref()?;
+            let existing = tree
+                .scope(tree.instance_root)
+                .declarations
+                .get(id.name.as_str())?;
+            // The tag's own name is not a clash with itself.
+            (tree.binding(*existing).range != range).then(|| (id.name.to_string(), range))
+        });
+    if let Some((name, range)) = duplicate {
+        ctx.emit_error(
+            Code::declaration_duplicate,
+            messages::declaration_duplicate(&name),
+            range,
+        );
+    }
+}
+
 pub fn visit_const_tag(tag: &Interpolation, ctx: &mut LintContext<'_>) {
     use crate::walk::{ComponentKind, PathFrame};
     if ctx.runes {

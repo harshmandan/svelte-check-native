@@ -1663,6 +1663,12 @@ fn map_diagnostic(
                     let ((mapped_line, mapped_col), (mapped_end_line, mapped_end_col)) =
                         if both_copied {
                             ((mapped_end_line, mapped_end_col), (mapped_line, mapped_col))
+                        } else if end_before_start && data.identity_map {
+                            // A Kit file's positions are moved back by the
+                            // annotations spliced ahead of them, and upstream
+                            // reports the two ends as they come out, also
+                            // when the end lands before the start.
+                            ((mapped_line, mapped_col), (mapped_end_line, mapped_end_col))
                         } else if end_before_start {
                             (
                                 (mapped_line, mapped_col),
@@ -2854,9 +2860,11 @@ mod tests {
     }
 
     #[test]
-    fn range_end_before_its_start_keeps_the_compiler_length() {
-        // Generated text anchored to the element start: the end resolves
-        // before the start, so the range keeps the compiler's length.
+    fn position_after_text_mapped_inside_a_statement_resolves_to_that_text() {
+        // A generated statement anchored to the element start holds a
+        // key mapped to its attribute. The end of a diagnostic on the
+        // key sits past the key but inside the statement; the closest
+        // mapping before it is the key's, not the statement's.
         let overlay = "new C({ \"a\": (v) });";
         let source = "<C a={v} />";
         let mut m = one_token_overlay(
@@ -2880,7 +2888,7 @@ mod tests {
         let layout = CacheLayout::for_workspace("/proj");
         let d = map_diagnostic(raw_at(9, 2322, "x", 3), &layout, &m, &HashSet::new(), true)
             .expect("mapped");
-        assert_eq!((d.line, d.column, d.end_line, d.end_column), (1, 4, 1, 7));
+        assert_eq!((d.line, d.column, d.end_line, d.end_column), (1, 4, 1, 4));
     }
 
     #[test]

@@ -599,7 +599,18 @@ fn emit_on_event_calls(
         buf.push_str(inner);
         crate::nodes::comment::write_leading_comments(buf, source, &ev.comments);
         let _ = write!(buf, "{inst_local}.$on(");
-        buf.append_with_source(&format!("\"{name}\""), ev.name_range);
+        // svelte2tsx inserts the opening quote, copies the name, and
+        // writes the closing quote over the character after it, so a
+        // diagnostic on the literal runs from the name's start to that
+        // character.
+        buf.append_with_source(
+            "\"",
+            svn_core::Range::new(ev.name_range.start, ev.name_range.start + 1),
+        );
+        buf.append_with_source(
+            &format!("{name}\""),
+            svn_core::Range::new(ev.name_range.start, ev.name_range.end + 1),
+        );
         // Reviewer follow-up #1: bare `<Child on:event>` (no value)
         // is event-bubble shorthand. Walker stores those with an
         // empty handler_range; emit them as

@@ -87,6 +87,26 @@ pub(crate) fn translate_position(
             overlay_col,
         ) {
             if let Some(entry) = find_tightest_token(&data.token_map, byte) {
+                // An entry that stands in for a source range is one
+                // mapping, at its start. Text mapped later inside it
+                // (an expression spliced into a generated statement) is
+                // a closer mapping for every position after that text,
+                // and a source-map lookup takes the closest one.
+                if !is_copied(&entry)
+                    && let Some(inner) = preceding_token(data, overlay_line, overlay_col)
+                    && inner.overlay_byte_start > entry.overlay_byte_start
+                {
+                    let source_byte = if is_copied(&inner) {
+                        inner.source_byte_end - 1
+                    } else {
+                        inner.source_byte_start
+                    };
+                    return Some(byte_to_position(
+                        &data.source_line_starts,
+                        &data.source_text,
+                        source_byte,
+                    ));
+                }
                 // Preserve the column offset within the span so a
                 // diagnostic pointing at the middle of the spliced
                 // token still lands at the corresponding position in

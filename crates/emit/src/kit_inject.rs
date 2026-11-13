@@ -702,7 +702,9 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
                     }
 
                     // Page-option export (`prerender`, `ssr`, etc.):
-                    // splice `: type` after the identifier (TS) or a
+                    // splice ` : type` after the identifier (TS; the
+                    // leading space is upstream's, and it counts when a
+                    // position is mapped back) or a
                     // JSDoc cast around the initializer (JS —
                     // upstream's addJsDocTypeToVariable).
                     if let Some(annot) = page_option_type(id.name.as_str()) {
@@ -711,7 +713,7 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
                         }
                         if is_ts {
                             let insert_at = id.span.end as usize;
-                            insertions.push((insert_at, format!(": {annot}")));
+                            insertions.push((insert_at, format!(" : {annot}")));
                         } else if let Some(init) = declarator.init.as_ref() {
                             let s = init.span();
                             insertions
@@ -1395,7 +1397,7 @@ export async function POST({ request }) { return new Response(''); }
         let source = "export const ssr = 'invalid';";
         let got = inject(&page_path(), source).unwrap();
         assert!(
-            got.contains("export const ssr: boolean = 'invalid'"),
+            got.contains("export const ssr : boolean = 'invalid'"),
             "got: {got}"
         );
     }
@@ -1404,26 +1406,26 @@ export async function POST({ request }) { return new Response(''); }
     fn injects_csr_boolean() {
         let source = "export const csr = false;";
         let got = inject(&page_path(), source).unwrap();
-        assert!(got.contains("csr: boolean = false"));
+        assert!(got.contains("csr : boolean = false"));
     }
 
     #[test]
     fn injects_prerender_union() {
         let source = "export const prerender = 'auto';";
         let got = inject(&page_path(), source).unwrap();
-        assert!(got.contains("prerender: boolean | 'auto' = 'auto'"));
+        assert!(got.contains("prerender : boolean | 'auto' = 'auto'"));
     }
 
     #[test]
     fn injects_trailing_slash_union() {
         let source = "export const trailingSlash = 'always';";
         let got = inject(&page_path(), source).unwrap();
-        assert!(got.contains("trailingSlash: 'never' | 'always' | 'ignore' = 'always'"));
+        assert!(got.contains("trailingSlash : 'never' | 'always' | 'ignore' = 'always'"));
     }
 
     #[test]
     fn leaves_typed_page_options_alone() {
-        let source = "export const ssr: boolean = true;";
+        let source = "export const ssr : boolean = true;";
         assert!(inject(&page_path(), source).is_none());
     }
 
@@ -1438,7 +1440,7 @@ export async function POST({ request }) { return new Response(''); }
     fn layout_also_accepts_page_options() {
         let source = "export const ssr = true;";
         let got = inject(&layout_path(), source).unwrap();
-        assert!(got.contains("ssr: boolean = true"));
+        assert!(got.contains("ssr : boolean = true"));
     }
 
     #[test]
@@ -1447,7 +1449,7 @@ export async function POST({ request }) { return new Response(''); }
         // route file, `+server` included.
         let source = "export const ssr = true;\nexport const entries = () => [];\n";
         let got = inject(&server_path(), source).unwrap();
-        assert!(got.contains("ssr: boolean = true"), "{got}");
+        assert!(got.contains("ssr : boolean = true"), "{got}");
         // The annotation lands where upstream inserts it: at the `=>`.
         assert!(
             got.contains("entries = () : ReturnType<import('./$types.js').EntryGenerator> => []"),

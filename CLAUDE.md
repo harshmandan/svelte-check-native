@@ -519,9 +519,7 @@ all three v5 fixtures closed).
 
 **End-to-end — `upstream_sanity`.** Reuses upstream's
 `test-sanity.js` unmodified via a node shim. Submodule bump =
-upstream test update applied for free. A handful of known-failing
-SvelteKit-ambient-typing cases remain (tracked in `notes/OPEN.md`
-when actionable); the bulk passes.
+upstream test update applied for free. All of its cases pass.
 
 **Discovery (not tests).** Real-world repos in `bench/` are _not_
 part of `cargo test`. They're used interactively to find bug classes

@@ -181,6 +181,14 @@ pub fn visit(se: &SvelteElement, ctx: &mut LintContext<'_>, ancestors: &[crate::
         crate::rules::component_rules::check_component_attributes(&se.attributes, ctx);
     }
     for attr in &se.attributes {
+        if matches!(parent, AttrParent::SvelteComponentLike) {
+            crate::rules::component_rules::let_directive_snippet_conflict(
+                attr,
+                &se.attributes,
+                &se.children,
+                ctx,
+            );
+        }
         visit_attribute(attr, &se.attributes, ctx, parent);
     }
 

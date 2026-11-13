@@ -848,6 +848,7 @@ impl TreeBuilder {
                 in_control_flow: false,
             },
             scope_stack: Vec::new(),
+            snippet_bodies: Vec::new(),
             control_flow_stack: Vec::new(),
         };
         svn_analyze::template_scope::walk_with_visitor(fragment, source, &mut visitor);
@@ -1425,6 +1426,9 @@ struct LintScopeVisitor<'a, 'src> {
     /// child scopes the visitor is INSIDE (let-directive, each,
     /// snippet, await branches).
     scope_stack: Vec<ScopeId>,
+    /// One entry per open `{#snippet}`: the scope holding its
+    /// parameters and, once entered, the scope of its body.
+    snippet_bodies: Vec<(ScopeId, Option<ScopeId>)>,
     /// Saved `in_control_flow` flags pushed by `enter_control_flow`.
     /// `leave_control_flow` pops and restores so that nested control-
     /// flow blocks return to their outer state correctly (an outer
@@ -1497,6 +1501,17 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
         self.builder.scopes[child.0 as usize].range = Some(scope_range);
         self.scope_stack.push(current);
         self.ctx.scope = child;
+        match kind {
+            ScopeKind::Snippet => self.snippet_bodies.push((child, None)),
+            ScopeKind::Block => {
+                if let Some((parameters, body @ None)) = self.snippet_bodies.last_mut()
+                    && *parameters == parent
+                {
+                    *body = Some(child);
+                }
+            }
+            _ => {}
+        }
 
         // Per-kind binding declaration. Convention for `Each`:
         // bindings[..] = context entries, bindings[last] = index when
@@ -1586,7 +1601,30 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
         }
     }
 
-    fn leave_scope(&mut self, _kind: svn_analyze::template_scope::ScopeKind) {
+    fn leave_scope(&mut self, kind: svn_analyze::template_scope::ScopeKind) {
+        // A snippet's parameters and what its body declares end up in
+        // one function, so a tag written directly in the body may not
+        // reuse a parameter's name. The compiler checks this after it
+        // has walked the body, and reports the first such declaration.
+        if matches!(kind, svn_analyze::template_scope::ScopeKind::Snippet)
+            && let Some((parameters, Some(body))) = self.snippet_bodies.pop()
+            && self.builder.declaration_error.is_none()
+        {
+            let parameters = &self.builder.scopes[parameters.0 as usize].declarations;
+            let clash = self.builder.scopes[body.0 as usize]
+                .declarations
+                .iter()
+                .filter(|(name, _)| parameters.contains_key(*name))
+                .map(|(name, id)| (*id, name.clone()))
+                .min_by_key(|(id, _)| id.0);
+            if let Some((id, name)) = clash {
+                self.builder.declaration_error = Some((
+                    Code::declaration_duplicate,
+                    crate::messages::declaration_duplicate(&name),
+                    self.builder.bindings[id.0 as usize].range,
+                ));
+            }
+        }
         if let Some(parent) = self.scope_stack.pop() {
             self.ctx.scope = parent;
         }
@@ -2849,6 +2887,20 @@ impl<'b> ScriptWalker<'b> {
                         Declaration::ClassDeclaration(cls) => self.visit_class_decl(cls),
                         _ => {}
                     }
+                    // `ExportNamedDeclaration.js`, after visiting the
+                    // declaration: first what each exported name is
+                    // (derived state, reassigned state), then `export
+                    // let` itself.
+                    if let Declaration::VariableDeclaration(v) = decl
+                        && !v.declare
+                    {
+                        let range = self.abs(end.span.start, end.span.end);
+                        for d in &v.declarations {
+                            for id in crate::scope_util::binding_idents_in_pattern(&d.id) {
+                                self.check_export(id.name.as_str(), range);
+                            }
+                        }
+                    }
                     // `ExportNamedDeclaration.js` (after visiting the
                     // declaration): `export let` is legacy syntax in a
                     // runes-mode instance script.
@@ -2865,16 +2917,6 @@ impl<'b> ScriptWalker<'b> {
                             crate::messages::legacy_export_invalid(),
                             range,
                         );
-                    }
-                    if let Declaration::VariableDeclaration(v) = decl
-                        && !v.declare
-                    {
-                        let range = self.abs(end.span.start, end.span.end);
-                        for d in &v.declarations {
-                            for id in crate::scope_util::binding_idents_in_pattern(&d.id) {
-                                self.check_export(id.name.as_str(), range);
-                            }
-                        }
                     }
                 }
             }

@@ -225,6 +225,13 @@ pub fn illegal_element_attribute(name: &str) -> String {
 }
 
 /// `let:` directive at invalid position
+/// Cannot use `let:` directives on a component that has a `children` snippet. Use snippet parameters instead (e.g. `{#snippet children({ %name% })}`)
+pub fn let_directive_snippet_conflict(name: &str) -> String {
+    format!(
+        "Cannot use `let:` directives on a component that has a `children` snippet. Use snippet parameters instead (e.g. `{{#snippet children({{ {name} }})}}`)\nhttps://svelte.dev/e/let_directive_snippet_conflict"
+    )
+}
+
 pub fn let_directive_invalid_placement() -> String {
     format!(
         "`let:` directive at invalid position\nhttps://svelte.dev/e/let_directive_invalid_placement"

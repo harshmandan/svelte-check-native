@@ -1,6 +1,8 @@
 //! Rules that fire on `<Component>` invocations.
 
-use svn_parser::ast::{Attribute, Component, DirectiveKind};
+use svn_parser::ast::{
+    AttrValuePart, Attribute, Component, DirectiveKind, DirectiveValue, Fragment, Node,
+};
 
 use crate::codes::Code;
 use crate::context::LintContext;
@@ -13,8 +15,72 @@ use crate::rules::element_rules::{
 pub fn visit(comp: &Component, ctx: &mut LintContext<'_>) {
     check_component_attributes(&comp.attributes, ctx);
     for attr in &comp.attributes {
+        let_directive_snippet_conflict(attr, &comp.attributes, &comp.children, ctx);
         visit_attribute(attr, &comp.attributes, ctx, AttrParent::Component);
     }
+}
+
+/// `let_directive_snippet_conflict` (`LetDirective.js`): a `let:`
+/// directive on a component that has a `children` snippet as a direct
+/// child. The snippet replaces the default slot content, so the
+/// directive would never be given a value. A component placed in a
+/// named slot (a `slot` attribute holding text) is exempt: there the
+/// directive belongs to that slot.
+pub(crate) fn let_directive_snippet_conflict(
+    attr: &Attribute,
+    attributes: &[Attribute],
+    children: &Fragment,
+    ctx: &mut LintContext<'_>,
+) {
+    let Attribute::Directive(directive) = attr else {
+        return;
+    };
+    if directive.kind != DirectiveKind::Let {
+        return;
+    }
+    // The compiler's `determine_slot`: the first `slot` attribute whose
+    // value is one piece of text, when that text is not empty.
+    let in_named_slot = attributes
+        .iter()
+        .find_map(|attribute| match attribute {
+            Attribute::Plain(plain) if plain.name == "slot" => match plain.value.as_ref() {
+                Some(value) => match value.parts.as_slice() {
+                    [AttrValuePart::Text { range }] => Some(!range.slice(ctx.source).is_empty()),
+                    [] if value.quoted => Some(false),
+                    _ => None,
+                },
+                None => None,
+            },
+            _ => None,
+        })
+        .unwrap_or(false);
+    if in_named_slot {
+        return;
+    }
+    let has_children_snippet = children
+        .nodes
+        .iter()
+        .any(|node| matches!(node, Node::SnippetBlock(snippet) if snippet.name == "children"));
+    if !has_children_snippet {
+        return;
+    }
+    // How the snippet parameter would be written: the name alone, or
+    // `name: pattern` when the directive renames or destructures it.
+    let expression = match &directive.value {
+        Some(DirectiveValue::Expression {
+            expression_range, ..
+        }) => Some(expression_range.slice(ctx.source).trim()),
+        _ => None,
+    };
+    let pattern = match expression {
+        Some(text) if text != directive.name.as_str() => format!("{}: {text}", directive.name),
+        _ => directive.name.to_string(),
+    };
+    ctx.emit_error(
+        Code::let_directive_snippet_conflict,
+        messages::let_directive_snippet_conflict(&pattern),
+        directive.range,
+    );
 }
 
 /// The compiler's first pass over a component's attributes

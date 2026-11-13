@@ -17,6 +17,9 @@
 //   { "warnings": [{file,line,column,code}] }
 //       → additionally assert the exact set of WARNINGs; may accompany
 //         "clean" or "errors" (when absent, warnings are ignored)
+//   { "ranges": true }
+//       → every expected entry also carries endLine / endColumn, and
+//         the end of each diagnostic is compared as well
 //   { "keep_svelte_kit": true }
 //       → do NOT wipe the fixture's `.svelte-kit/` before running.
 //         For fixtures that COMMIT a generated `.svelte-kit/types/`
@@ -206,7 +209,15 @@ function runFixture(name, fixtureDir) {
                     file: String(entry.filename || '').replace(/\\/g, '/'),
                     line: entry.start?.line ?? -1,
                     column: entry.start?.character ?? -1,
-                    code: entry.code
+                    code: entry.code,
+                    // A fixture that sets `"ranges": true` also states
+                    // where each diagnostic ends.
+                    ...(expected.ranges === true
+                        ? {
+                              endLine: entry.end?.line ?? -1,
+                              endColumn: entry.end?.character ?? -1
+                          }
+                        : {})
                 });
             }
         }

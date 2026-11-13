@@ -702,6 +702,7 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
                             svelte_element,
                             tag_literal,
                             tag_name,
+                            tag_start,
                         ),
                     )
                 {
@@ -754,9 +755,9 @@ fn is_bind_attribute(d: &svn_parser::Directive, tag_literal: bool, tag_name: &st
                 && tag_name != "svelte:body"))
 }
 
-/// The source byte a diagnostic on the `"bind:NAME"` key of the
-/// attribute at `index` maps to, when an attribute precedes it; `None`
-/// when it is the first (the key then maps to its own `=`).
+/// The source byte the opening quote of the `"bind:NAME"` key of the
+/// attribute at `index` maps to. (The rest of the key maps to the
+/// directive's own text, up to its `=`.)
 ///
 /// svelte2tsx writes the key's opening quote as inserted text, and its
 /// `transform` (`htmlxtojsx_v2/utils/node-utils.ts`) writes inserted
@@ -766,9 +767,15 @@ fn is_bind_attribute(d: &svn_parser::Directive, tag_literal: bool, tag_name: &st
 /// name's end, an unquoted value's end, a quoted value's last character
 /// before the closing quote, an expression's end. Directives that are
 /// not attributes of the element (`class:`, `style:`, `use:`,
-/// `bind:this`, transitions, `<svelte:element>`'s `this`) are skipped;
-/// when only they precede the key, it maps to the first attribute's
-/// start, where the blanked run before the key begins.
+/// `bind:this`, transitions, `<svelte:element>`'s `this`) are skipped.
+///
+/// With no such attribute before the key there are two cases. When
+/// something separates the key from the tag name beyond one character
+/// (more whitespace, a skipped directive), the quote maps to the
+/// character two past the tag name, where that separating run begins.
+/// When the directive follows the tag name directly, the quote sits
+/// right after the blanks `transform` leaves for the source it drops,
+/// and maps to the last of them — see [`last_blank_start`].
 fn bind_key_anchor(
     source: &str,
     attributes: &[svn_parser::Attribute],
@@ -776,9 +783,9 @@ fn bind_key_anchor(
     svelte_element: bool,
     tag_literal: bool,
     tag_name: &str,
+    tag_start: u32,
 ) -> Option<u32> {
     let before = attributes.get(..index)?;
-    let first = before.first()?;
     let trimmed_end = |r: svn_core::Range| {
         let text = r.slice(source);
         r.start + text.trim_end().len() as u32
@@ -855,13 +862,154 @@ fn bind_key_anchor(
                 }
             }
         };
-    Some(
-        before
-            .iter()
-            .rev()
-            .find_map(kept_end)
-            .unwrap_or(first.range().start),
-    )
+    if let Some(end) = before.iter().rev().find_map(kept_end) {
+        return Some(end);
+    }
+    // The name as written (`tag_name` is not that for
+    // `<svelte:element>`).
+    let written = source.get(tag_start as usize + 1..)?;
+    let name_end = tag_start
+        + 1
+        + written
+            .find(|c: char| c.is_whitespace() || c == '>' || c == '/')
+            .unwrap_or(written.len()) as u32;
+    if attributes.get(index)?.range().start > name_end + 1 {
+        return Some(name_end + 1);
+    }
+    last_blank_start(source, attributes.get(index..)?)
+}
+
+/// Where the last blank svelte2tsx leaves in a start tag comes from,
+/// given the tag's attributes from the first one on.
+///
+/// `transform` (`htmlxtojsx_v2/utils/node-utils.ts`) keeps the source
+/// ranges the attributes name and replaces each run of source between
+/// two kept ranges with one space, mapped to the run's first
+/// character. A kept range takes one more character with it (the `=`
+/// after a name, the `}` after an expression) unless another range
+/// starts there or it reaches the tag's `>`. Of what follows the last
+/// kept range, the first character is deleted and the rest becomes one
+/// more blank.
+fn last_blank_start(source: &str, attributes: &[svn_parser::Attribute]) -> Option<u32> {
+    use svn_parser::{AttrValuePart, Attribute, DirectiveKind, DirectiveValue};
+    let first = attributes.first()?;
+    let last = attributes.last()?;
+    let tag_end = last.range().end + source.get(last.range().end as usize..)?.find('>')? as u32;
+    let trimmed = |r: svn_core::Range| {
+        let text = r.slice(source);
+        let leading = (text.len() - text.trim_start().len()) as u32;
+        (r.start + leading, r.start + text.trim_end().len() as u32)
+    };
+    let mut kept: Vec<(u32, u32)> = Vec::new();
+    let keep_parts = |kept: &mut Vec<(u32, u32)>, parts: &[AttrValuePart]| {
+        for part in parts {
+            kept.push(match part {
+                AttrValuePart::Text { range } => (range.start, range.end),
+                AttrValuePart::Expression {
+                    expression_range, ..
+                } => trimmed(*expression_range),
+            });
+        }
+    };
+    for attribute in attributes {
+        let whole = (attribute.range().start, attribute.range().end);
+        match attribute {
+            Attribute::Plain(p) => match &p.value {
+                Some(value) if !value.parts.is_empty() => {
+                    kept.push((whole.0, whole.0 + p.name.len() as u32));
+                    keep_parts(&mut kept, &value.parts);
+                }
+                _ => kept.push(whole),
+            },
+            Attribute::Expression(e) => {
+                kept.push((whole.0, whole.0 + e.name.len() as u32));
+                kept.push(trimmed(e.expression_range));
+            }
+            Attribute::Shorthand(s) => {
+                let inner = source
+                    .get(whole.0 as usize + 1..whole.1 as usize)
+                    .unwrap_or("");
+                let start = whole.0 + 1 + (inner.len() - inner.trim_start().len()) as u32;
+                kept.push((start, start + s.name.len() as u32));
+            }
+            Attribute::Spread(sp) => kept.push(trimmed(sp.expression_range)),
+            Attribute::Attach(at) => match crate::nodes::attach_tag::expression_range(source, at) {
+                Some(r) => kept.push((r.start, r.end)),
+                None => kept.push(whole),
+            },
+            Attribute::Comment(_) => kept.push(whole),
+            Attribute::Directive(d) => {
+                // A directive that becomes an entry of the attribute
+                // literal keeps its name up to the `=`. Of the others
+                // only an expression is kept.
+                let in_literal = match d.kind {
+                    DirectiveKind::On | DirectiveKind::Let => true,
+                    DirectiveKind::Bind => d.name.as_str() != "this",
+                    _ => false,
+                };
+                let name_end = |value_start: u32| {
+                    source
+                        .get(whole.0 as usize..value_start as usize)
+                        .filter(|_| in_literal)
+                        .and_then(|head| head.rfind('='))
+                        .map(|eq| whole.0 + eq as u32)
+                };
+                match &d.value {
+                    Some(DirectiveValue::Expression {
+                        expression_range, ..
+                    }) => {
+                        if let Some(end) = name_end(expression_range.start) {
+                            kept.push((whole.0, end));
+                        }
+                        kept.push(trimmed(*expression_range));
+                    }
+                    Some(DirectiveValue::BindPair {
+                        getter_range,
+                        setter_range,
+                        ..
+                    }) => {
+                        if let Some(end) = name_end(getter_range.start) {
+                            kept.push((whole.0, end));
+                        }
+                        kept.push(trimmed(*getter_range));
+                        kept.push(trimmed(*setter_range));
+                    }
+                    Some(DirectiveValue::Quoted(v)) if in_literal && !v.parts.is_empty() => {
+                        if let Some(end) = v.parts.first().and_then(|part| {
+                            name_end(match part {
+                                AttrValuePart::Text { range } => range.start,
+                                AttrValuePart::Expression { range, .. } => range.start,
+                            })
+                        }) {
+                            kept.push((whole.0, end));
+                        }
+                        keep_parts(&mut kept, &v.parts);
+                    }
+                    _ => kept.push(whole),
+                }
+            }
+        }
+    }
+    kept.retain(|(start, end)| start < end);
+    let starts: Vec<u32> = kept.iter().map(|(start, _)| *start).collect();
+    for (_, end) in &mut kept {
+        if *end + 1 < tag_end && !starts.contains(end) {
+            *end += 1;
+        }
+    }
+    kept.sort_unstable();
+    let mut blank = None;
+    let mut dropped_from = first.range().start;
+    for (start, end) in kept {
+        if dropped_from < start {
+            blank = Some(dropped_from);
+        }
+        dropped_from = dropped_from.max(end);
+    }
+    if dropped_from + 1 < tag_end {
+        blank = Some(dropped_from + 1);
+    }
+    blank
 }
 
 /// The value side of a `"bind:NAME": …` attribute entry.
@@ -886,6 +1034,9 @@ enum BindValue<'a> {
 struct DomBindAttribute<'a> {
     key_text: &'a str,
     key_anchor: u32,
+    /// Where the directive's `=` is, when it has one: the key's closing
+    /// quote maps there.
+    key_equals: Option<u32>,
     value: BindValue<'a>,
 }
 
@@ -929,6 +1080,7 @@ fn dom_bind_attribute_parts<'a>(
             return Some(DomBindAttribute {
                 key_text,
                 key_anchor: d.range.start,
+                key_equals: None,
                 value: BindValue::Expr {
                     text: &key_text[5..],
                     range: svn_core::Range::new(start, end),
@@ -945,6 +1097,7 @@ fn dom_bind_attribute_parts<'a>(
             return Some(DomBindAttribute {
                 key_text: &head[..eq],
                 key_anchor: prev_anchor.unwrap_or(d.range.start + eq as u32),
+                key_equals: Some(d.range.start + eq as u32),
                 value: BindValue::GetSet {
                     getter: source.get(getter_range.start as usize..getter_range.end as usize)?,
                     getter_range: *getter_range,
@@ -966,6 +1119,7 @@ fn dom_bind_attribute_parts<'a>(
     Some(DomBindAttribute {
         key_text: &head[..eq],
         key_anchor: prev_anchor.unwrap_or(d.range.start + eq as u32),
+        key_equals: Some(d.range.start + eq as u32),
         value: BindValue::Expr {
             text,
             range: svn_core::Range::new(start, start + text.len() as u32),
@@ -977,10 +1131,26 @@ fn dom_bind_attribute_parts<'a>(
 /// attribute literal.
 fn emit_dom_bind_attribute(buf: &mut EmitBuffer, parts: DomBindAttribute<'_>, depth: usize) {
     buf.push_str(&"    ".repeat(depth));
-    buf.append_with_source(
-        &format!("\"{}\"", parts.key_text),
-        svn_core::Range::new(parts.key_anchor, parts.key_anchor + 1),
-    );
+    match parts.key_equals {
+        // svelte2tsx inserts the opening quote, copies the name, and
+        // writes the closing quote over the `=`. A diagnostic on the
+        // key therefore runs between wherever the opening quote landed
+        // and the `=`.
+        Some(equals) => {
+            buf.append_with_source(
+                "\"",
+                svn_core::Range::new(parts.key_anchor, parts.key_anchor + 1),
+            );
+            buf.append_with_source(
+                &format!("{}\"", parts.key_text),
+                svn_core::Range::new(equals - parts.key_text.len() as u32, equals + 1),
+            );
+        }
+        None => buf.append_with_source(
+            &format!("\"{}\"", parts.key_text),
+            svn_core::Range::new(parts.key_anchor, parts.key_anchor + 1),
+        ),
+    }
     buf.push_str(": (");
     match parts.value {
         BindValue::Expr { text, range } => buf.append_with_source(text, range),

@@ -149,6 +149,47 @@ pub(crate) fn translate_position(
 /// last character for text copied byte-for-byte, and the start for
 /// text that stands in for its source range.
 fn preceding_token_source_byte(data: &MapData, overlay_line: u32, overlay_col: u32) -> Option<u32> {
+    let entry = preceding_token(data, overlay_line, overlay_col)?;
+    Some(if is_copied(&entry) {
+        entry.source_byte_end - 1
+    } else {
+        entry.source_byte_start
+    })
+}
+
+/// Is the entry's generated text its source text, byte for byte?
+fn is_copied(entry: &TokenMapEntry) -> bool {
+    entry.overlay_byte_end - entry.overlay_byte_start
+        == entry.source_byte_end - entry.source_byte_start
+}
+
+/// Does a template position resolve through text copied from the
+/// source, as every position of a real source map does? The other
+/// kind of entry stands in for a source range and maps every position
+/// in it to one anchor.
+pub(crate) fn maps_through_copied_text(
+    data: &MapData,
+    overlay_line: u32,
+    overlay_col: u32,
+) -> bool {
+    let Some(byte) = position_to_byte(
+        &data.overlay_line_starts,
+        data.overlay_text.get(),
+        overlay_line,
+        overlay_col,
+    ) else {
+        return false;
+    };
+    if let Some(entry) = find_tightest_token(&data.token_map, byte) {
+        return is_copied(&entry);
+    }
+    translate_line(&data.line_map, overlay_line).is_none()
+        && preceding_token(data, overlay_line, overlay_col).is_some_and(|e| is_copied(&e))
+}
+
+/// The entry for the user text generated closest before a position on
+/// its overlay line.
+fn preceding_token(data: &MapData, overlay_line: u32, overlay_col: u32) -> Option<TokenMapEntry> {
     if data.token_map.is_empty() || overlay_line == 0 {
         return None;
     }
@@ -180,14 +221,7 @@ fn preceding_token_source_byte(data: &MapData, overlay_line: u32, overlay_col: u
             best = Some(*entry);
         }
     }
-    let entry = best?;
-    let copied = entry.overlay_byte_end - entry.overlay_byte_start
-        == entry.source_byte_end - entry.source_byte_start;
-    Some(if copied {
-        entry.source_byte_end - 1
-    } else {
-        entry.source_byte_start
-    })
+    best
 }
 
 /// Map a kit overlay position back to the user's file the way

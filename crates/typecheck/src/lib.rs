@@ -1640,15 +1640,36 @@ fn map_diagnostic(
                             col,
                         )
                     };
-                    // Our overlay anchors some generated text to the start
-                    // of the element it belongs to, so an end inside it can
-                    // resolve before the start. Such a range keeps the
-                    // compiler's length on the start's line instead.
-                    let (mapped_end_line, mapped_end_col) =
-                        if (mapped_end_line, mapped_end_col) < (mapped_line, mapped_col) {
-                            (mapped_line, mapped_col.saturating_add(span))
+                    // Generated text can sit ahead of the source it stands
+                    // for, so an end may resolve before its start. Upstream
+                    // turns such a range around
+                    // (`swapRangeStartEndIfNecessary`), and so do we when
+                    // both ends resolve through copied source text, the
+                    // way upstream's source map resolves them.
+                    //
+                    // Our overlay also anchors some generated text to the
+                    // start of the element it belongs to, which upstream's
+                    // does not. A range reversed by such an anchor keeps
+                    // the compiler's length on the start's line instead.
+                    let end_before_start =
+                        (mapped_end_line, mapped_end_col) < (mapped_line, mapped_col);
+                    let both_copied = end_before_start
+                        && position::maps_through_copied_text(data, raw.line, raw.column)
+                        && position::maps_through_copied_text(
+                            data,
+                            raw.line,
+                            raw.column.saturating_add(span),
+                        );
+                    let ((mapped_line, mapped_col), (mapped_end_line, mapped_end_col)) =
+                        if both_copied {
+                            ((mapped_end_line, mapped_end_col), (mapped_line, mapped_col))
+                        } else if end_before_start {
+                            (
+                                (mapped_line, mapped_col),
+                                (mapped_line, mapped_col.saturating_add(span)),
+                            )
                         } else {
-                            (mapped_end_line, mapped_end_col)
+                            ((mapped_line, mapped_col), (mapped_end_line, mapped_end_col))
                         };
                     // A missing-prop error arrives as an empty range inside a
                     // component's start tag (at the text following the

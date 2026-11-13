@@ -1,0 +1,136 @@
+{
+    "ranges": true,
+    "errors": [
+        {
+            "file": "Page.svelte",
+            "line": 6,
+            "column": 18,
+            "code": 2322,
+            "endLine": 6,
+            "endColumn": 19
+        },
+        {
+            "file": "Page.svelte",
+            "line": 7,
+            "column": 18,
+            "code": 2322,
+            "endLine": 7,
+            "endColumn": 19
+        },
+        {
+            "file": "Page.svelte",
+            "line": 8,
+            "column": 18,
+            "code": 2322,
+            "endLine": 8,
+            "endColumn": 19
+        },
+        {
+            "file": "Page.svelte",
+            "line": 9,
+            "column": 18,
+            "code": 2322,
+            "endLine": 9,
+            "endColumn": 29
+        },
+        {
+            "file": "Page.svelte",
+            "line": 10,
+            "column": 18,
+            "code": 2322,
+            "endLine": 10,
+            "endColumn": 23
+        },
+        {
+            "file": "Page.svelte",
+            "line": 11,
+            "column": 18,
+            "code": 2322,
+            "endLine": 11,
+            "endColumn": 22
+        },
+        {
+            "file": "Page.svelte",
+            "line": 12,
+            "column": 18,
+            "code": 2322,
+            "endLine": 12,
+            "endColumn": 22
+        },
+        {
+            "file": "Page.svelte",
+            "line": 13,
+            "column": 18,
+            "code": 2322,
+            "endLine": 13,
+            "endColumn": 23
+        },
+        {
+            "file": "Page.svelte",
+            "line": 14,
+            "column": 9,
+            "code": 2322,
+            "endLine": 14,
+            "endColumn": 20
+        },
+        {
+            "file": "Page.svelte",
+            "line": 16,
+            "column": 0,
+            "code": 2322,
+            "endLine": 16,
+            "endColumn": 11
+        },
+        {
+            "file": "Page.svelte",
+            "line": 19,
+            "column": 21,
+            "code": 2322,
+            "endLine": 19,
+            "endColumn": 28
+        },
+        {
+            "file": "Page.svelte",
+            "line": 20,
+            "column": 21,
+            "code": 2322,
+            "endLine": 20,
+            "endColumn": 22
+        },
+        {
+            "file": "Page.svelte",
+            "line": 21,
+            "column": 21,
+            "code": 2322,
+            "endLine": 21,
+            "endColumn": 43
+        },
+        {
+            "file": "Page.svelte",
+            "line": 22,
+            "column": 17,
+            "code": 2322,
+            "endLine": 22,
+            "endColumn": 28
+        },
+        {
+            "file": "Page.svelte",
+            "line": 23,
+            "column": 9,
+            "code": 2322,
+            "endLine": 23,
+            "endColumn": 33
+        }
+    ],
+    "warnings": [
+        {
+            "file": "Page.svelte",
+            "line": 13,
+            "column": 0,
+            "code": "element_invalid_self_closing_tag",
+            "endLine": 13,
+            "endColumn": 25
+        }
+    ],
+    "_note": "A type error on a `\"bind:NAME\"` attribute key covers the range svelte-check derives from its source map. The key's closing quote is written over the directive's `=`, so one end of the range is the `=`. The opening quote is inserted text: after another attribute it maps to where that attribute's kept text ends; when the directive follows the tag name directly it maps to the last blank svelte2tsx leaves for dropped source in the tag (the `{` before the value, the space after a get/set comma, a later attribute's opening quote, trailing whitespace); when more than one character separates it from the tag name it maps to the second character after the name. Whichever end comes first in the source starts the range. Our key used to map both ends to one point."
+}

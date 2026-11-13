@@ -965,14 +965,15 @@ fn last_blank_start(source: &str, attributes: &[svn_parser::Attribute]) -> Optio
                     }
                     Some(DirectiveValue::BindPair {
                         getter_range,
-                        setter_range,
+                        getter_node_range,
+                        setter_node_range,
                         ..
                     }) => {
                         if let Some(end) = name_end(getter_range.start) {
                             kept.push((whole.0, end));
                         }
-                        kept.push(trimmed(*getter_range));
-                        kept.push(trimmed(*setter_range));
+                        kept.push((getter_node_range.start, getter_node_range.end));
+                        kept.push((setter_node_range.start, setter_node_range.end));
                     }
                     Some(DirectiveValue::Quoted(v)) if in_literal && !v.parts.is_empty() => {
                         if let Some(end) = v.parts.first().and_then(|part| {

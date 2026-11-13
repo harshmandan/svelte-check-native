@@ -1519,12 +1519,13 @@ fn acorn_wording(
                 .filter(|rest| rest.ends_with("in regular expression literal"))
             {
                 let _ = flag;
-                // The regular expression's start comes with the next
-                // report.
+                // The regular expression's start comes with a later
+                // report: the one whose span starts at the `/` and
+                // holds this flag.
                 let start = all
                     .iter()
                     .filter_map(|d| d.labels.first().map(|l| l.span()))
-                    .find(|span| span.end == e && byte(span.start) == Some(b'/'))?
+                    .find(|span| span.start < s && span.end >= e && byte(span.start) == Some(b'/'))?
                     .start;
                 return Some(
                     Candidate::at(start + 1, "Invalid regular expression flag").in_token(start),

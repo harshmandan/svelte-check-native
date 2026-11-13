@@ -521,12 +521,13 @@ fn parse_directive_value(
             // exactly a two-element SequenceExpression — mirror that
             // with an oxc probe parse.
             if matches!(kind, DirectiveKind::Bind)
-                && let Some((comma_pos, setter_end)) =
-                    bind_pair_split(scanner.source(), expr_start, end)
+                && let Some(pair) = bind_pair_split(scanner.source(), expr_start, end)
             {
                 return Some(DirectiveValue::BindPair {
-                    getter_range: Range::new(expr_start, comma_pos),
-                    setter_range: Range::new(comma_pos + 1, setter_end),
+                    getter_range: Range::new(expr_start, pair.comma),
+                    setter_range: Range::new(pair.comma + 1, pair.setter_end),
+                    getter_node_range: pair.getter_node,
+                    setter_node_range: pair.setter_node,
                     range: Range::new(start, end + 1),
                 });
             }
@@ -551,12 +552,13 @@ fn parse_directive_value(
             {
                 let (expr_start, end) = (expression_range.start, expression_range.end);
                 if matches!(kind, DirectiveKind::Bind)
-                    && let Some((comma_pos, setter_end)) =
-                        bind_pair_split(scanner.source(), expr_start, end)
+                    && let Some(pair) = bind_pair_split(scanner.source(), expr_start, end)
                 {
                     return Some(DirectiveValue::BindPair {
-                        getter_range: Range::new(expr_start, comma_pos),
-                        setter_range: Range::new(comma_pos + 1, setter_end),
+                        getter_range: Range::new(expr_start, pair.comma),
+                        setter_range: Range::new(pair.comma + 1, pair.setter_end),
+                        getter_node_range: pair.getter_node,
+                        setter_node_range: pair.setter_node,
                         range: quoted.range,
                     });
                 }
@@ -814,9 +816,19 @@ fn parse_quoted_value(
     })
 }
 
-/// Byte offset of the comma splitting a `bind:x={get, set}` function
-/// pair and of the setter's end, or `None` when the value is a single
-/// expression.
+/// Where a `bind:x={get, set}` function pair splits.
+struct BindPairSplit {
+    /// The comma between the two expressions.
+    comma: u32,
+    /// The end of the setter as written, closing parentheses included.
+    setter_end: u32,
+    /// The two expressions without the parentheses around them.
+    getter_node: Range,
+    setter_node: Range,
+}
+
+/// The split of a `bind:x={get, set}` function pair, or `None` when
+/// the value is a single expression.
 ///
 /// Decided the way upstream does: parse the whole value (acorn there,
 /// oxc here, TS mode) — a pair is exactly a two-element
@@ -824,7 +836,7 @@ fn parse_quoted_value(
 /// as a single CallExpression and never splits; a generic call inside a
 /// pair half (`() => pick<A, B>(x), (v) => sink(v)`) still yields the
 /// two-arrow sequence with the split at the real pair comma.
-fn bind_pair_split(src: &str, start: u32, end: u32) -> Option<(u32, u32)> {
+fn bind_pair_split(src: &str, start: u32, end: u32) -> Option<BindPairSplit> {
     use oxc_ast::ast::{Expression, Statement};
 
     let text = &src[start as usize..end as usize];
@@ -862,7 +874,21 @@ fn bind_pair_split(src: &str, start: u32, end: u32) -> Option<(u32, u32)> {
     let gap_end = oxc_span::GetSpan::span(&seq.expressions[1]).start as usize;
     let comma_in_probe = probe[gap_start..gap_end].find(',')? + gap_start;
     let setter_end = oxc_span::GetSpan::span(&seq.expressions[1]).end;
-    Some((start + comma_in_probe as u32 - 1, start + setter_end - 1))
+    // acorn keeps no node for parentheses; oxc does.
+    let node = |expression: &Expression<'_>| {
+        let mut inner = expression;
+        while let Expression::ParenthesizedExpression(paren) = inner {
+            inner = &paren.expression;
+        }
+        let span = oxc_span::GetSpan::span(inner);
+        Range::new(start + span.start - 1, start + span.end - 1)
+    };
+    Some(BindPairSplit {
+        comma: start + comma_in_probe as u32 - 1,
+        setter_end: start + setter_end - 1,
+        getter_node: node(&seq.expressions[0]),
+        setter_node: node(&seq.expressions[1]),
+    })
 }
 
 #[cfg(test)]
@@ -880,6 +906,27 @@ mod tests {
         let (attrs, errors) = parse(src);
         assert!(errors.is_empty(), "expected no errors, got {errors:?}");
         attrs
+    }
+
+    #[test]
+    fn bind_pair_records_the_expressions_without_their_parentheses() {
+        // acorn's nodes span the expressions alone; svelte2tsx keeps
+        // exactly those ranges and drops the parentheses.
+        let src = "bind:x={ (get) , ((set)) }";
+        let attrs = parse_ok(src);
+        let [Attribute::Directive(d)] = attrs.as_slice() else {
+            panic!("expected one directive, got {attrs:?}");
+        };
+        let Some(DirectiveValue::BindPair {
+            getter_node_range,
+            setter_node_range,
+            ..
+        }) = &d.value
+        else {
+            panic!("expected a pair, got {:?}", d.value);
+        };
+        assert_eq!(getter_node_range.slice(src), "get");
+        assert_eq!(setter_node_range.slice(src), "set");
     }
 
     #[test]

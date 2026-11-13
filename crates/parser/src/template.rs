@@ -1151,15 +1151,17 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
 
         // Consume `>` or `/>`.
         let Some((self_closing, open_tag_end)) = self.finish_opening_tag() else {
-            // The tag cannot be read to its end. A block or `@` tag in
-            // an attribute value is why, and the compiler names it:
-            // keep the tag so that error is not lost with it.
+            // The tag cannot be read to its end. Where an attribute
+            // value is why (a block or `@` tag in it, an expression
+            // acorn cannot read), the compiler names that: keep the
+            // tag so the error is not lost with it.
             return open_error
                 .filter(|error| {
                     matches!(
                         error.kind,
                         TagReadErrorKind::BlockInvalidPlacement { .. }
                             | TagReadErrorKind::TagInvalidPlacement { .. }
+                            | TagReadErrorKind::JsParse(_)
                     )
                 })
                 .map(|error| {

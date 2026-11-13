@@ -508,6 +508,11 @@ pub enum DirectiveValue {
     BindPair {
         getter_range: Range,
         setter_range: Range,
+        /// The getter and the setter as acorn's nodes span them: the
+        /// expression alone, without the parentheses, whitespace or
+        /// comments around it.
+        getter_node_range: Range,
+        setter_node_range: Range,
         range: Range,
     },
     /// `style:left="100px"` or `transition:fade="literal"` — quoted string

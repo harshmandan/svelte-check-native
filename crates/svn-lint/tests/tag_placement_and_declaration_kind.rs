@@ -160,6 +160,10 @@ const CASES: &[(&str, Expected)] = &[
         Some(("js_parse_error", "Unexpected token", 11, 11)),
     ),
     (
+        "<textarea>{/if}</textarea>",
+        Some(("js_parse_error", "Invalid regular expression flag", 12, 12)),
+    ),
+    (
         "<textarea>x{#}</textarea>",
         Some((
             "block_invalid_placement",

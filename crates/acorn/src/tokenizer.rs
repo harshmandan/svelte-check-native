@@ -210,6 +210,19 @@ impl Parser {
     }
 
     fn read_token(&mut self, code: i32) -> PResult<()> {
+        // acorn-typescript: where an expression may start, `<` is one
+        // token by itself (it opens type parameters or an assertion),
+        // never `<<` or `<=`.
+        if self.ts
+            && !self.in_type
+            && code == 60
+            && self.expr_allowed
+            && self.code_at(self.pos + 1) != 33
+        {
+            self.pos += 1;
+            self.finish_token(Tok::Relational, "<".to_string());
+            return Ok(());
+        }
         if is_identifier_start(code) || code == 92 {
             return self.read_word();
         }
@@ -290,7 +303,11 @@ impl Parser {
         let prev = self.ty;
         self.ty = ty;
         self.value = value;
-        self.update_context(prev);
+        // acorn-typescript reads ahead without the tokens' effect on
+        // the context.
+        if !self.is_lookahead {
+            self.update_context(prev);
+        }
     }
 
     fn finish_punctuation(&mut self, ty: Tok) {
@@ -298,7 +315,7 @@ impl Parser {
         self.finish_token(ty, String::new());
     }
 
-    fn finish_op(&mut self, ty: Tok, size: usize) {
+    pub(crate) fn finish_op(&mut self, ty: Tok, size: usize) {
         let text = self.slice(self.pos, self.pos + size);
         self.pos += size;
         self.finish_token(ty, text);
@@ -386,7 +403,7 @@ impl Parser {
         self.finish_op(Tok::PlusMin, 1);
     }
 
-    fn read_token_lt_gt(&mut self, code: i32) {
+    pub(crate) fn read_token_lt_gt(&mut self, code: i32) {
         let next = self.code_at(self.pos + 1);
         let mut size = 1;
         if next == code {
@@ -457,6 +474,19 @@ impl Parser {
     }
 
     fn get_token_from_code(&mut self, code: i32) -> PResult<()> {
+        if self.ts {
+            if self.in_type {
+                // In a type every `<` and `>` stands alone.
+                if code == 62 || code == 60 {
+                    self.finish_op(Tok::Relational, 1);
+                    return Ok(());
+                }
+            } else if code == 64 {
+                self.pos += 1;
+                self.finish_token(Tok::At, String::new());
+                return Ok(());
+            }
+        }
         match code {
             46 => return self.read_token_dot(),
             40 => self.finish_punctuation(Tok::ParenL),
@@ -950,7 +980,9 @@ impl Parser {
 
     fn read_word(&mut self) -> PResult<()> {
         let word = self.read_word1()?;
-        let ty = Tok::of_keyword(&word).unwrap_or(Tok::Name);
+        let ty = Tok::of_keyword(&word)
+            .or_else(|| self.ts.then(|| Tok::of_ts_word(&word)).flatten())
+            .unwrap_or(Tok::Name);
         self.finish_token(ty, word);
         Ok(())
     }

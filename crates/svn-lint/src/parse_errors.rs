@@ -139,15 +139,17 @@ impl Finder<'_> {
         // statement in the text the compiler builds around it.
         if !self.ts {
             let result = match read.shape {
-                AcornReadShape::Expression => {
-                    svn_acorn::parse_expression_at(self.source, read.range.start)
-                }
+                AcornReadShape::Expression => svn_acorn::parse_expression_at(
+                    self.source,
+                    read.range.start,
+                    svn_acorn::Language::JavaScript,
+                ),
                 shape => {
                     let (wrapped, origin) = read.wrapped(self.source);
                     let result = if shape == AcornReadShape::Statement {
-                        svn_acorn::parse_statement_at(&wrapped, 0)
+                        svn_acorn::parse_statement_at(&wrapped, 0, svn_acorn::Language::JavaScript)
                     } else {
-                        svn_acorn::parse_expression_at(&wrapped, 0)
+                        svn_acorn::parse_expression_at(&wrapped, 0, svn_acorn::Language::JavaScript)
                     };
                     result.map_err(|mut error| {
                         error.pos += origin;

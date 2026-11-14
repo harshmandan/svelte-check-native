@@ -22,6 +22,10 @@ mod state;
 mod statement;
 mod token;
 mod tokenizer;
+mod ts;
+mod ts_expression;
+mod ts_statement;
+mod ts_types;
 
 use state::{ForInit, Parser, Stop};
 
@@ -31,6 +35,10 @@ use state::{ForInit, Parser, Stop};
 pub struct SyntaxError {
     pub message: String,
     pub pos: u32,
+    /// acorn-typescript places a few errors at a column number that it
+    /// takes for an offset. Where set, the error points at the offset
+    /// that equals the column of `pos` in the text the compiler parsed.
+    pub column_of: bool,
 }
 
 /// A text as UTF-16 code units, with the byte offset of each.
@@ -71,12 +79,14 @@ impl Units {
             Stop::Error(raised) => SyntaxError {
                 message: raised.message,
                 pos: self.byte(raised.pos),
+                column_of: raised.column_of,
             },
             // Never leaves the tokenizer, which reads the template
             // again as an invalid one.
             Stop::InvalidTemplateEscape => SyntaxError {
                 message: "Unexpected token".to_string(),
                 pos: 0,
+                column_of: false,
             },
         }
     }
@@ -94,8 +104,18 @@ pub enum Reading {
     Module,
 }
 
-fn parser_for(text: &Units, pos: usize) -> Parser {
-    Parser::new(text.units.clone(), pos)
+/// Which parser the compiler uses: acorn for a JavaScript component,
+/// acorn with the acorn-typescript plugin for one with `lang="ts"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Language {
+    JavaScript,
+    TypeScript,
+}
+
+fn parser_for(text: &Units, pos: usize, language: Language) -> Parser {
+    let mut parser = Parser::new(text.units.clone(), pos);
+    parser.ts = language == Language::TypeScript;
+    parser
 }
 
 /// `acorn.parse(source)`: the error acorn throws for the program, if
@@ -103,9 +123,9 @@ fn parser_for(text: &Units, pos: usize) -> Parser {
 ///
 /// A component's script never starts at offset zero of what the
 /// compiler hands acorn, so a `#!` line is no comment there.
-pub fn parse(source: &str, reading: Reading) -> Result<(), SyntaxError> {
+pub fn parse(source: &str, reading: Reading, language: Language) -> Result<(), SyntaxError> {
     let text = Units::new(source);
-    let mut parser = parser_for(&text, 0);
+    let mut parser = parser_for(&text, 0, language);
     parser.forget_undefined_exports = reading == Reading::Script;
     if reading == Reading::Module && source.starts_with("#!") {
         parser.skip_line_comment(2);
@@ -121,9 +141,9 @@ pub fn parse(source: &str, reading: Reading) -> Result<(), SyntaxError> {
 ///
 /// acorn reads the longest expression it can and one token past it, so
 /// an error in that next token is an error here too.
-pub fn parse_expression_at(source: &str, pos: u32) -> Result<u32, SyntaxError> {
+pub fn parse_expression_at(source: &str, pos: u32, language: Language) -> Result<u32, SyntaxError> {
     let text = Units::new(source);
-    let mut parser = parser_for(&text, text.unit(pos));
+    let mut parser = parser_for(&text, text.unit(pos), language);
     parser.preserve_parens = true;
     parser
         .next_token()
@@ -134,9 +154,9 @@ pub fn parse_expression_at(source: &str, pos: u32) -> Result<u32, SyntaxError> {
 
 /// The compiler's `parse_statement_at`: one statement read at `pos` as
 /// a module's top-level statement. Returns where it ends.
-pub fn parse_statement_at(source: &str, pos: u32) -> Result<u32, SyntaxError> {
+pub fn parse_statement_at(source: &str, pos: u32, language: Language) -> Result<u32, SyntaxError> {
     let text = Units::new(source);
-    let mut parser = parser_for(&text, text.unit(pos));
+    let mut parser = parser_for(&text, text.unit(pos), language);
     parser
         .next_token()
         .and_then(|()| parser.parse_statement(None, true))

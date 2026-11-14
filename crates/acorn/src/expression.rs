@@ -2,10 +2,11 @@
 
 use crate::identifier::{is_keyword, is_reserved, is_reserved_strict};
 use crate::state::{
-    Bind, DestructuringErrors, ForInit, Node, PResult, Parser, SCOPE_ARROW, SCOPE_DIRECT_SUPER,
-    SCOPE_SUPER, SCOPE_VAR, Ty, function_flags, with_stack,
+    Bind, DestructuringErrors, ForInit, Lit, Node, PResult, Parser, SCOPE_ARROW,
+    SCOPE_DIRECT_SUPER, SCOPE_SUPER, SCOPE_VAR, Ty, function_flags, with_stack,
 };
 use crate::token::{Ctx, Tok};
+use crate::ts_expression::{BodyOf, SubscriptStart};
 
 fn is_local_variable_access(node: &Node) -> bool {
     node.is(Ty::Identifier)
@@ -79,8 +80,26 @@ impl Parser {
         for_init: ForInit,
         errors: Option<&mut DestructuringErrors>,
     ) -> PResult<Node> {
+        self.parse_maybe_assign_item(for_init, errors, false)
+    }
+
+    /// `parseMaybeAssign`. `paren_item` is acorn's `afterLeftParse`
+    /// hook, which only ever is `parseParenItem`: the expression is an
+    /// item of what may be an arrow function's parameter list.
+    pub(crate) fn parse_maybe_assign_item(
+        &mut self,
+        for_init: ForInit,
+        errors: Option<&mut DestructuringErrors>,
+        paren_item: bool,
+    ) -> PResult<Node> {
         self.descend()?;
-        let result = with_stack(|| self.parse_maybe_assign_inner(for_init, errors));
+        let result = with_stack(|| {
+            if self.ts {
+                self.ts_parse_maybe_assign(for_init, errors, paren_item)
+            } else {
+                self.parse_maybe_assign_inner(for_init, errors)
+            }
+        });
         self.ascend();
         result
     }
@@ -161,11 +180,14 @@ impl Parser {
         Ok(left)
     }
 
-    fn parse_maybe_conditional(
+    pub(crate) fn parse_maybe_conditional(
         &mut self,
         for_init: ForInit,
         mut errors: Option<&mut DestructuringErrors>,
     ) -> PResult<Node> {
+        if self.ts {
+            return self.ts_parse_maybe_conditional(for_init, errors);
+        }
         let start_pos = self.start;
         let expr = self.parse_expr_ops(for_init, errors.as_deref_mut())?;
         if self.has_expression_errors(errors.as_deref()) {
@@ -183,7 +205,7 @@ impl Parser {
         Ok(expr)
     }
 
-    fn parse_expr_ops(
+    pub(crate) fn parse_expr_ops(
         &mut self,
         for_init: ForInit,
         mut errors: Option<&mut DestructuringErrors>,
@@ -208,6 +230,15 @@ impl Parser {
         for_init: ForInit,
     ) -> PResult<Node> {
         loop {
+            if self.ts {
+                match self.ts_parse_as_or_satisfies(left, left_start, min_prec)? {
+                    Ok(node) => {
+                        left = node;
+                        continue;
+                    }
+                    Err(back) => left = back,
+                }
+            }
             let Some(mut prec) = self.ty.binop() else {
                 return Ok(left);
             };
@@ -263,8 +294,13 @@ impl Parser {
         if self.unary_depth > 8 * crate::state::MAX_DEPTH {
             return self.raise(self.start, "Not enough stack space to parse input");
         }
-        let result =
-            with_stack(|| self.parse_maybe_unary_inner(errors, saw_unary, inc_dec, for_init));
+        let result = with_stack(|| {
+            if self.ts && self.ts_match_left_relational() {
+                self.ts_parse_type_assertion()
+            } else {
+                self.parse_maybe_unary_inner(errors, saw_unary, inc_dec, for_init)
+            }
+        });
         self.unary_depth -= 1;
         result
     }
@@ -300,7 +336,19 @@ impl Parser {
             } else {
                 saw_unary = true;
             }
-            expr = self.finish_node(node, Ty::Other);
+            let mut node = node;
+            if !update {
+                node.name = operator;
+                node.a = Some(Box::new(argument));
+            }
+            expr = self.finish_node(
+                node,
+                if update {
+                    Ty::Other
+                } else {
+                    Ty::UnaryExpression
+                },
+            );
         } else if !saw_unary && self.ty == Tok::PrivateId {
             if for_init.is_set() || self.private_name_stack.is_empty() {
                 return self.unexpected();
@@ -381,7 +429,7 @@ impl Parser {
         Ok(result)
     }
 
-    fn parse_subscripts(
+    pub(crate) fn parse_subscripts(
         &mut self,
         mut base: Node,
         start_pos: usize,
@@ -423,13 +471,31 @@ impl Parser {
 
     fn parse_subscript(
         &mut self,
-        base: Node,
+        mut base: Node,
         start_pos: usize,
         no_calls: bool,
         maybe_async_arrow: bool,
-        optional_chained: bool,
+        mut optional_chained: bool,
         for_init: ForInit,
     ) -> PResult<Node> {
+        if self.ts {
+            match self.ts_parse_subscript_start(
+                base,
+                start_pos,
+                no_calls,
+                optional_chained,
+                for_init,
+            )? {
+                SubscriptStart::Done(node) => return Ok(node),
+                SubscriptStart::Continue {
+                    base: same,
+                    optional_chained: chained,
+                } => {
+                    base = same;
+                    optional_chained = chained;
+                }
+            }
+        }
         let optional = self.eat(Tok::QuestionDot)?;
         if no_calls && optional {
             return self.raise(
@@ -467,12 +533,21 @@ impl Parser {
             self.yield_pos = 0;
             self.await_pos = 0;
             self.await_ident_pos = 0;
+            // acorn-typescript: the arguments may be the parameters of
+            // an `async` arrow function.
+            let old_maybe_in_arrow_parameters = self.maybe_in_arrow_parameters;
+            if self.ts {
+                self.maybe_in_arrow_parameters = true;
+            }
             let arguments = self.parse_expr_list(Tok::ParenR, true, false, Some(&mut errors))?;
-            if maybe_async_arrow
+            let is_async_arrow = maybe_async_arrow
                 && !optional
-                && !self.can_insert_semicolon()
-                && self.eat(Tok::Arrow)?
-            {
+                && if self.ts {
+                    self.ts_should_parse_async_arrow()?
+                } else {
+                    !self.can_insert_semicolon() && self.eat(Tok::Arrow)?
+                };
+            if is_async_arrow {
                 self.check_pattern_errors(Some(&errors), false)?;
                 self.check_yield_await_in_default_params()?;
                 if self.await_ident_pos > 0 {
@@ -485,9 +560,12 @@ impl Parser {
                 self.await_pos = old_await_pos;
                 self.await_ident_pos = old_await_ident_pos;
                 let node = self.start_node_at(start_pos);
-                return self.parse_arrow_expression(node, arguments, true, for_init);
+                let arrow = self.parse_arrow_expression(node, arguments, true, for_init)?;
+                self.maybe_in_arrow_parameters = old_maybe_in_arrow_parameters;
+                return Ok(arrow);
             }
             self.throw_expression_errors(Some(&errors))?;
+            self.maybe_in_arrow_parameters = old_maybe_in_arrow_parameters;
             if old_yield_pos != 0 {
                 self.yield_pos = old_yield_pos;
             }
@@ -529,6 +607,11 @@ impl Parser {
             self.read_regexp()?;
         }
 
+        if self.ts && self.ty == Tok::At {
+            self.parse_decorators(false)?;
+            return self.parse_expr_atom(None, ForInit::No, false);
+        }
+
         let can_be_arrow = self.potential_arrow_at == self.start as i64;
         match self.ty {
             Tok::KwSuper => {
@@ -553,7 +636,9 @@ impl Parser {
                 self.next()?;
                 Ok(self.finish_node(node, Ty::Other))
             }
-            Tok::Name => {
+            // In TypeScript any word acorn-typescript has a type for is
+            // a name here too.
+            ty if ty == Tok::Name || (self.ts && ty.is_ts_word()) => {
                 let start_pos = self.start;
                 let contains_esc = self.contains_esc;
                 let mut id = self.parse_ident(false)?;
@@ -626,11 +711,13 @@ impl Parser {
                 let node = self.start_node();
                 self.parse_class(node, crate::statement::ClassPosition::Expression)
             }
+            Tok::KwNew if self.ts => self.ts_parse_new(),
             Tok::KwNew => self.parse_new(),
             Tok::BackQuote => {
-                let node = self.start_node();
-                self.parse_template(false)?;
-                Ok(self.finish_node(node, Ty::Other))
+                let mut node = self.start_node();
+                let substitutions = self.parse_template(false)?;
+                node.list = vec![None; substitutions];
+                Ok(self.finish_node(node, Ty::TemplateLiteral))
             }
             Tok::KwImport => self.parse_expr_import(for_new),
             _ => self.unexpected(),
@@ -653,6 +740,9 @@ impl Parser {
     }
 
     fn parse_dynamic_import(&mut self, node: Node) -> PResult<Node> {
+        if self.ts {
+            return self.ts_parse_dynamic_import(node);
+        }
         self.next()?;
         self.parse_maybe_assign(ForInit::No, None)?;
         if !self.eat(Tok::ParenR)? {
@@ -692,9 +782,15 @@ impl Parser {
     /// A number, string or regular expression literal.
     pub(crate) fn parse_literal(&mut self) -> PResult<Node> {
         let mut node = self.start_node();
-        if self.ty == Tok::String {
-            node.string = Some(self.value.clone());
-        }
+        node.lit = match self.ty {
+            Tok::String => {
+                node.string = Some(self.value.clone());
+                Lit::String
+            }
+            Tok::Num if self.end > 0 && self.code_at(self.end - 1) == 110 => Lit::BigInt,
+            Tok::Num => Lit::Number,
+            _ => Lit::Other,
+        };
         self.next()?;
         Ok(self.finish_node(node, Ty::Literal))
     }
@@ -712,6 +808,11 @@ impl Parser {
         for_init: ForInit,
     ) -> PResult<Node> {
         let start_pos = self.start;
+        // acorn-typescript: what follows may be parameters.
+        let old_maybe_in_arrow_parameters = self.maybe_in_arrow_parameters;
+        if self.ts {
+            self.maybe_in_arrow_parameters = true;
+        }
         self.next()?;
 
         let inner_start = self.start;
@@ -735,21 +836,35 @@ impl Parser {
                 break;
             } else if self.ty == Tok::Ellipsis {
                 spread_start = Some(self.start);
-                list.push(Some(self.parse_rest_binding()?));
+                let mut rest = self.parse_rest_binding()?;
+                if self.ts {
+                    rest = self.ts_parse_paren_item(rest)?;
+                }
+                list.push(Some(rest));
                 if self.ty == Tok::Comma {
-                    return self.raise(self.start, "Comma is not permitted after the rest element");
+                    self.raise_comma_after_rest(self.start)?;
                 }
                 break;
             } else {
-                list.push(Some(
-                    self.parse_maybe_assign(ForInit::No, Some(&mut errors))?,
-                ));
+                let paren_item = self.ts;
+                list.push(Some(self.parse_maybe_assign_item(
+                    ForInit::No,
+                    Some(&mut errors),
+                    paren_item,
+                )?));
             }
         }
         let inner_end = self.last_tok_end;
         self.expect(Tok::ParenR)?;
+        self.maybe_in_arrow_parameters = old_maybe_in_arrow_parameters;
 
-        if can_be_arrow && !self.can_insert_semicolon() && self.eat(Tok::Arrow)? {
+        let should_parse_arrow = can_be_arrow
+            && if self.ts {
+                self.ts_should_parse_arrow(&list)?
+            } else {
+                !self.can_insert_semicolon()
+            };
+        if should_parse_arrow && self.eat(Tok::Arrow)? {
             self.check_pattern_errors(Some(&errors), false)?;
             self.check_yield_await_in_default_params()?;
             self.yield_pos = old_yield_pos;
@@ -844,19 +959,26 @@ impl Parser {
         Ok(self.ty == Tok::BackQuote)
     }
 
-    pub(crate) fn parse_template(&mut self, is_tagged: bool) -> PResult<()> {
+    pub(crate) fn parse_template(&mut self, is_tagged: bool) -> PResult<usize> {
         self.next()?;
+        let mut substitutions = 0;
         let mut tail = self.parse_template_element(is_tagged)?;
         while !tail {
             if self.ty == Tok::Eof {
                 return self.raise(self.pos, "Unterminated template literal");
             }
             self.expect(Tok::DollarBraceL)?;
-            self.parse_expression(ForInit::No, None)?;
+            if self.ts && self.in_type {
+                self.ts_parse_type()?;
+            } else {
+                self.parse_expression(ForInit::No, None)?;
+            }
+            substitutions += 1;
             self.expect(Tok::BraceR)?;
             tail = self.parse_template_element(is_tagged)?;
         }
-        self.next()
+        self.next()?;
+        Ok(substitutions)
     }
 
     fn is_async_prop(&self, prop: &Node) -> bool {
@@ -909,6 +1031,29 @@ impl Parser {
     fn parse_property(
         &mut self,
         is_pattern: bool,
+        errors: Option<&mut DestructuringErrors>,
+    ) -> PResult<Node> {
+        if self.ts && !is_pattern {
+            let mut decorated = false;
+            while self.ty == Tok::At {
+                self.parse_decorator()?;
+                decorated = true;
+            }
+            let property = self.parse_property_base(is_pattern, errors)?;
+            if decorated && property.is(Ty::SpreadElement) {
+                return self.raise(
+                    property.start as usize,
+                    "Decorators can't be used with SpreadElement",
+                );
+            }
+            return Ok(property);
+        }
+        self.parse_property_base(is_pattern, errors)
+    }
+
+    fn parse_property_base(
+        &mut self,
+        is_pattern: bool,
         mut errors: Option<&mut DestructuringErrors>,
     ) -> PResult<Node> {
         let mut prop = self.start_node();
@@ -916,7 +1061,7 @@ impl Parser {
             if is_pattern {
                 prop.a = Some(Box::new(self.parse_ident(false)?));
                 if self.ty == Tok::Comma {
-                    return self.raise(self.start, "Comma is not permitted after the rest element");
+                    self.raise_comma_after_rest(self.start)?;
                 }
                 return Ok(self.finish_node(prop, Ty::RestElement));
             }
@@ -962,6 +1107,9 @@ impl Parser {
     }
 
     fn parse_getter_setter(&mut self, prop: &mut Node) -> PResult<()> {
+        if self.ts {
+            return self.ts_parse_getter_setter(prop);
+        }
         let kind = prop.first().name.clone();
         self.parse_property_name(prop)?;
         let value = self.parse_method(false, false, false)?;
@@ -998,6 +1146,21 @@ impl Parser {
         errors: Option<&mut DestructuringErrors>,
         contains_esc: bool,
     ) -> PResult<()> {
+        if self.ts && self.ts_match_left_relational() {
+            // A method with type parameters.
+            if is_pattern {
+                return self.unexpected();
+            }
+            prop.name = "init".to_string();
+            prop.method = true;
+            self.ts_try_parse_type_parameters(crate::ts_types::TypeParameterModifiers::Const)?;
+            prop.b = Some(Box::new(self.parse_method(
+                is_generator,
+                is_async,
+                false,
+            )?));
+            return Ok(());
+        }
         if (is_generator || is_async) && self.ty == Tok::Colon {
             return self.unexpected();
         }
@@ -1088,6 +1251,9 @@ impl Parser {
         is_async: bool,
         allow_direct_super: bool,
     ) -> PResult<Node> {
+        if self.ts {
+            return self.ts_parse_method(is_generator, is_async, allow_direct_super, false, None);
+        }
         let mut node = self.start_node();
         let old_yield_pos = self.yield_pos;
         let old_await_pos = self.await_pos;
@@ -1107,9 +1273,9 @@ impl Parser {
         );
 
         self.expect(Tok::ParenL)?;
-        node.list = self.parse_binding_list(Tok::ParenR, false, true)?;
+        node.list = self.parse_binding_list(Tok::ParenR, false, true, None)?;
         self.check_yield_await_in_default_params()?;
-        self.parse_function_body(&mut node, false, true, ForInit::No)?;
+        self.parse_function_body(&mut node, false, true, ForInit::No, BodyOf::Other)?;
 
         self.yield_pos = old_yield_pos;
         self.await_pos = old_await_pos;
@@ -1126,22 +1292,29 @@ impl Parser {
         is_async: bool,
         for_init: ForInit,
     ) -> PResult<Node> {
+        if self.ts && self.ty == Tok::Colon {
+            self.ts_parse_type_annotation(true)?;
+        }
         let old_yield_pos = self.yield_pos;
         let old_await_pos = self.await_pos;
         let old_await_ident_pos = self.await_ident_pos;
+        let old_maybe_in_arrow_parameters = self.maybe_in_arrow_parameters;
 
         self.enter_scope(function_flags(is_async, false) | SCOPE_ARROW);
         self.yield_pos = 0;
         self.await_pos = 0;
         self.await_ident_pos = 0;
 
+        self.maybe_in_arrow_parameters = true;
         self.to_assignable_list(&mut params, true)?;
+        self.maybe_in_arrow_parameters = false;
         node.list = params;
-        self.parse_function_body(&mut node, true, false, for_init)?;
+        self.parse_function_body(&mut node, true, false, for_init, BodyOf::Other)?;
 
         self.yield_pos = old_yield_pos;
         self.await_pos = old_await_pos;
         self.await_ident_pos = old_await_ident_pos;
+        self.maybe_in_arrow_parameters = old_maybe_in_arrow_parameters;
         Ok(self.finish_node(node, Ty::ArrowFunctionExpression))
     }
 
@@ -1153,7 +1326,12 @@ impl Parser {
         is_arrow: bool,
         is_method: bool,
         for_init: ForInit,
+        body_of: BodyOf,
     ) -> PResult<()> {
+        if self.ts && !self.ts_before_function_body(node, body_of)? {
+            return Ok(());
+        }
+        node.has_body = true;
         let is_expression = is_arrow && self.ty != Tok::BraceL;
         let old_strict = self.strict;
         let mut use_strict = false;
@@ -1229,6 +1407,9 @@ impl Parser {
                 None
             } else if self.ty == Tok::Ellipsis {
                 let spread = self.parse_spread(errors.as_deref_mut())?;
+                if self.ts && self.maybe_in_arrow_parameters && self.ty == Tok::Colon {
+                    self.ts_parse_type_annotation(true)?;
+                }
                 if self.ty == Tok::Comma
                     && let Some(errors) = errors.as_deref_mut()
                     && errors.trailing_comma < 0
@@ -1237,7 +1418,14 @@ impl Parser {
                 }
                 Some(spread)
             } else {
-                Some(self.parse_maybe_assign(ForInit::No, errors.as_deref_mut())?)
+                // acorn-typescript reads every item as a possible
+                // arrow function parameter.
+                let paren_item = self.ts;
+                Some(self.parse_maybe_assign_item(
+                    ForInit::No,
+                    errors.as_deref_mut(),
+                    paren_item,
+                )?)
             };
             elements.push(element);
         }
@@ -1301,6 +1489,16 @@ impl Parser {
 
     fn parse_ident_node(&mut self) -> PResult<Node> {
         let mut node = self.start_node();
+        // acorn-typescript takes any word's text as the name and
+        // leaves the token's type alone, except for the `class` and
+        // `function` that acorn has a context to close for.
+        let closes_context = matches!(self.ty.keyword(), Some("class" | "function"))
+            && (self.last_tok_end != self.last_tok_start + 1
+                || self.code_at(self.last_tok_start) != 46);
+        if self.ts && self.ty.is_keyword_or_identifier() && !closes_context {
+            node.name = self.value.clone();
+            return Ok(node);
+        }
         if self.ty == Tok::Name {
             node.name = self.value.clone();
         } else if let Some(keyword) = self.ty.keyword() {
@@ -1345,7 +1543,7 @@ impl Parser {
         Ok(node)
     }
 
-    fn parse_yield(&mut self, for_init: ForInit) -> PResult<Node> {
+    pub(crate) fn parse_yield(&mut self, for_init: ForInit) -> PResult<Node> {
         if self.yield_pos == 0 {
             self.yield_pos = self.start;
         }
@@ -1353,7 +1551,9 @@ impl Parser {
         self.next()?;
         let bare = self.ty == Tok::Semi
             || self.can_insert_semicolon()
-            || (self.ty != Tok::Star && !self.ty.starts_expr());
+            || (self.ty != Tok::Star
+                && !self.ty.starts_expr()
+                && !(self.ts && self.ts_match_left_relational()));
         if !bare {
             self.eat(Tok::Star)?;
             self.parse_maybe_assign(for_init, None)?;

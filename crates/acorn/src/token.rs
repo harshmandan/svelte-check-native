@@ -82,9 +82,96 @@ pub(crate) enum Tok {
     KwTypeof,
     KwVoid,
     KwDelete,
+    /// `@`, before a decorator. TypeScript only.
+    At,
+    // Words acorn-typescript gives a token type of their own. They are
+    // names everywhere a name may stand, but they are not `Name`: what
+    // acorn itself asks of a `Name` token does not hold for them.
+    TsAssert,
+    TsAsserts,
+    TsGlobal,
+    TsKeyof,
+    TsReadonly,
+    TsUnique,
+    TsAbstract,
+    TsDeclare,
+    TsEnum,
+    TsModule,
+    TsNamespace,
+    TsInterface,
+    TsType,
 }
 
 impl Tok {
+    /// The token type acorn-typescript gives the word, if it has one.
+    pub(crate) fn of_ts_word(word: &str) -> Option<Tok> {
+        Some(match word {
+            "assert" => Tok::TsAssert,
+            "asserts" => Tok::TsAsserts,
+            "global" => Tok::TsGlobal,
+            "keyof" => Tok::TsKeyof,
+            "readonly" => Tok::TsReadonly,
+            "unique" => Tok::TsUnique,
+            "abstract" => Tok::TsAbstract,
+            "declare" => Tok::TsDeclare,
+            "enum" => Tok::TsEnum,
+            "module" => Tok::TsModule,
+            "namespace" => Tok::TsNamespace,
+            "interface" => Tok::TsInterface,
+            "type" => Tok::TsType,
+            _ => return None,
+        })
+    }
+
+    /// One of acorn-typescript's own word types.
+    pub(crate) fn is_ts_word(self) -> bool {
+        matches!(
+            self,
+            Tok::TsAssert
+                | Tok::TsAsserts
+                | Tok::TsGlobal
+                | Tok::TsKeyof
+                | Tok::TsReadonly
+                | Tok::TsUnique
+                | Tok::TsAbstract
+                | Tok::TsDeclare
+                | Tok::TsEnum
+                | Tok::TsModule
+                | Tok::TsNamespace
+                | Tok::TsInterface
+                | Tok::TsType
+        )
+    }
+
+    /// `tokenIsIdentifier`: a name, in TypeScript's eyes.
+    pub(crate) fn is_identifier(self) -> bool {
+        self == Tok::Name || self.is_ts_word()
+    }
+
+    /// `tokenIsKeywordOrIdentifier`.
+    pub(crate) fn is_keyword_or_identifier(self) -> bool {
+        self.is_identifier() || self.keyword().is_some()
+    }
+
+    /// `tokenIsLiteralPropertyName`.
+    pub(crate) fn is_literal_property_name(self) -> bool {
+        self.is_keyword_or_identifier() || self == Tok::String || self == Tok::Num
+    }
+
+    /// `tokenIsTSDeclarationStart`.
+    pub(crate) fn is_ts_declaration_start(self) -> bool {
+        matches!(
+            self,
+            Tok::TsAbstract
+                | Tok::TsDeclare
+                | Tok::TsEnum
+                | Tok::TsModule
+                | Tok::TsNamespace
+                | Tok::TsInterface
+                | Tok::TsType
+        )
+    }
+
     /// The type of the keyword `word`.
     pub(crate) fn of_keyword(word: &str) -> Option<Tok> {
         Some(match word {
@@ -245,7 +332,7 @@ impl Tok {
                 | Tok::KwTypeof
                 | Tok::KwVoid
                 | Tok::KwDelete
-        )
+        ) || self.is_ts_word()
     }
 
     pub(crate) fn is_loop(self) -> bool {

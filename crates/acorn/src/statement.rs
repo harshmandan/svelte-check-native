@@ -8,9 +8,9 @@ use crate::state::{
 };
 use crate::token::Tok;
 
-const FUNC_STATEMENT: u8 = 1;
-const FUNC_HANGING_STATEMENT: u8 = 2;
-const FUNC_NULLABLE_ID: u8 = 4;
+pub(crate) const FUNC_STATEMENT: u8 = 1;
+pub(crate) const FUNC_HANGING_STATEMENT: u8 = 2;
+pub(crate) const FUNC_NULLABLE_ID: u8 = 4;
 
 /// Where a class stands, which decides whether it needs a name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,7 +21,7 @@ pub(crate) enum ClassPosition {
     NullableId,
 }
 
-fn check_key_name(node: &Node, name: &str) -> bool {
+pub(crate) fn check_key_name(node: &Node, name: &str) -> bool {
     let key = node.first();
     !node.computed
         && ((key.is(Ty::Identifier) && key.name == name)
@@ -30,7 +30,10 @@ fn check_key_name(node: &Node, name: &str) -> bool {
 
 /// Whether a private name is declared twice in a class body. A getter
 /// and a setter of the same staticness share a name.
-fn is_private_name_conflicted(names: &mut Vec<(String, &'static str)>, element: &Node) -> bool {
+pub(crate) fn is_private_name_conflicted(
+    names: &mut Vec<(String, &'static str)>,
+    element: &Node,
+) -> bool {
     let name = &element.first().name;
     let next =
         if element.is(Ty::MethodDefinition) && (element.name == "get" || element.name == "set") {
@@ -133,7 +136,9 @@ impl Parser {
         let result = with_stack(|| self.parse_statement_inner(context, top_level));
         self.ascend_statement();
         if result.is_ok() && self.forget_undefined_exports {
-            self.undefined_exports.clear();
+            if !self.undefined_exports.is_empty() {
+                self.undefined_exports = std::rc::Rc::default();
+            }
         }
         result
     }
@@ -143,6 +148,11 @@ impl Parser {
         context: Option<StatementContext>,
         top_level: bool,
     ) -> PResult<Node> {
+        if self.ts
+            && let Some(node) = self.ts_parse_statement_start()?
+        {
+            return Ok(node);
+        }
         let mut start_type = self.ty;
         let node = self.start_node();
         let mut kind: Option<String> = None;
@@ -191,7 +201,7 @@ impl Parser {
                 if context.is_some() && kind != "var" {
                     return self.unexpected();
                 }
-                self.parse_var_statement(node, &kind)
+                self.parse_var_statement(node, &kind, false)
             }
             Tok::KwWhile => self.parse_while_statement(node),
             Tok::KwWith => self.parse_with_statement(node),
@@ -217,7 +227,13 @@ impl Parser {
                     );
                 }
                 if start_type == Tok::KwImport {
-                    self.parse_import(node)
+                    if self.ts {
+                        self.ts_parse_import(node)
+                    } else {
+                        self.parse_import(node)
+                    }
+                } else if self.ts {
+                    self.ts_parse_export(node)
                 } else {
                     self.parse_export(node)
                 }
@@ -490,6 +506,9 @@ impl Parser {
             },
             None,
         )?;
+        if self.ts {
+            self.ts_try_parse_type_annotation()?;
+        }
         self.expect(Tok::ParenR)
     }
 
@@ -520,9 +539,17 @@ impl Parser {
         Ok(self.finish_node(node, Ty::Other))
     }
 
-    fn parse_var_statement(&mut self, mut node: Node, kind: &str) -> PResult<Node> {
+    pub(crate) fn parse_var_statement(
+        &mut self,
+        mut node: Node,
+        kind: &str,
+        allow_missing_initializer: bool,
+    ) -> PResult<Node> {
+        if self.ts {
+            return self.ts_parse_var_statement(node, kind, allow_missing_initializer);
+        }
         self.next()?;
-        self.parse_var(&mut node, false, kind, false)?;
+        self.parse_var(&mut node, false, kind, allow_missing_initializer)?;
         self.semicolon()?;
         Ok(self.finish_node(node, Ty::VariableDeclaration))
     }
@@ -596,7 +623,13 @@ impl Parser {
         Ok(self.finish_node(node, Ty::Other))
     }
 
-    fn parse_expression_statement(&mut self, node: Node, _expr: Node) -> PResult<Node> {
+    fn parse_expression_statement(&mut self, mut node: Node, expr: Node) -> PResult<Node> {
+        if self.ts && expr.is(Ty::Identifier) {
+            match self.ts_parse_expression_statement(node, &expr.name)? {
+                Ok(declaration) => return Ok(declaration),
+                Err(back) => node = back,
+            }
+        }
         self.semicolon()?;
         Ok(self.finish_node(node, Ty::Other))
     }
@@ -679,7 +712,7 @@ impl Parser {
     }
 
     /// The declarators of a `var`, `let` or `const`, into `node`.
-    fn parse_var(
+    pub(crate) fn parse_var(
         &mut self,
         node: &mut Node,
         is_for: bool,
@@ -689,7 +722,7 @@ impl Parser {
         node.name = kind.to_string();
         loop {
             let mut decl = self.start_node();
-            let id = self.parse_binding_atom()?;
+            let mut id = self.parse_binding_atom()?;
             self.check_lval_pattern(
                 &id,
                 if kind == "var" {
@@ -699,6 +732,9 @@ impl Parser {
                 },
                 None,
             )?;
+            if self.ts {
+                self.ts_after_var_id(&mut id)?;
+            }
             let id_is_name = id.is(Ty::Identifier);
             decl.a = Some(Box::new(id));
             let in_or_of = self.ty == Tok::KwIn || self.is_contextual("of");
@@ -733,6 +769,15 @@ impl Parser {
         is_async: bool,
         for_init: ForInit,
     ) -> PResult<Node> {
+        if self.ts {
+            return self.ts_parse_function(
+                node,
+                statement,
+                allow_expression_body,
+                is_async,
+                for_init,
+            );
+        }
         if self.ty == Tok::Star && statement & FUNC_HANGING_STATEMENT != 0 {
             return self.unexpected();
         }
@@ -774,9 +819,15 @@ impl Parser {
         }
 
         self.expect(Tok::ParenL)?;
-        node.list = self.parse_binding_list(Tok::ParenR, false, true)?;
+        node.list = self.parse_binding_list(Tok::ParenR, false, true, None)?;
         self.check_yield_await_in_default_params()?;
-        self.parse_function_body(&mut node, allow_expression_body, false, for_init)?;
+        self.parse_function_body(
+            &mut node,
+            allow_expression_body,
+            false,
+            for_init,
+            crate::ts_expression::BodyOf::Other,
+        )?;
 
         self.yield_pos = old_yield_pos;
         self.await_pos = old_await_pos;
@@ -793,6 +844,9 @@ impl Parser {
 
     /// A class, from `class`.
     pub(crate) fn parse_class(&mut self, mut node: Node, position: ClassPosition) -> PResult<Node> {
+        if self.ts {
+            return self.ts_parse_class(node, position);
+        }
         self.next()?;
 
         // A class is strict code throughout.
@@ -941,14 +995,17 @@ impl Parser {
         }
     }
 
-    fn is_class_element_name_start(&self) -> bool {
+    pub(crate) fn is_class_element_name_start(&self) -> bool {
+        if self.ts && self.ty.is_identifier() {
+            return true;
+        }
         matches!(
             self.ty,
             Tok::Name | Tok::PrivateId | Tok::Num | Tok::String | Tok::BracketL
         ) || self.ty.keyword().is_some()
     }
 
-    fn parse_class_element_name(&mut self, element: &mut Node) -> PResult<()> {
+    pub(crate) fn parse_class_element_name(&mut self, element: &mut Node) -> PResult<()> {
         if self.ty == Tok::PrivateId {
             if self.value == "constructor" {
                 return self.raise(
@@ -1003,7 +1060,7 @@ impl Parser {
         Ok(self.finish_node(method, Ty::MethodDefinition))
     }
 
-    fn parse_class_field(&mut self, field: Node) -> PResult<Node> {
+    pub(crate) fn parse_class_field(&mut self, field: Node) -> PResult<Node> {
         if check_key_name(&field, "constructor") {
             return self.raise(
                 field.first().start as usize,
@@ -1026,7 +1083,7 @@ impl Parser {
         Ok(self.finish_node(field, Ty::PropertyDefinition))
     }
 
-    fn parse_class_static_block(&mut self) -> PResult<()> {
+    pub(crate) fn parse_class_static_block(&mut self) -> PResult<()> {
         let old_labels = std::mem::take(&mut self.labels);
         self.enter_scope(SCOPE_CLASS_STATIC_BLOCK | SCOPE_SUPER);
         while self.ty != Tok::BraceR {
@@ -1040,7 +1097,7 @@ impl Parser {
 
     /// Leaves a class body: a private name used in it and declared
     /// neither there nor in an enclosing class is an error.
-    fn exit_class_body(&mut self) -> PResult<()> {
+    pub(crate) fn exit_class_body(&mut self) -> PResult<()> {
         let Some(PrivateNames { declared, used }) = self.private_name_stack.pop() else {
             return Ok(());
         };
@@ -1127,7 +1184,7 @@ impl Parser {
         Ok(self.finish_node(node, Ty::Other))
     }
 
-    fn parse_export_default_declaration(&mut self) -> PResult<()> {
+    pub(crate) fn parse_export_default_declaration(&mut self) -> PResult<()> {
         let is_async = self.ty != Tok::KwFunction && self.is_async_function();
         if self.ty == Tok::KwFunction || is_async {
             let node = self.start_node();
@@ -1153,10 +1210,14 @@ impl Parser {
     }
 
     fn check_export(&mut self, name: &str, pos: usize) -> PResult<()> {
+        // acorn-typescript keeps the names and never looks at them.
+        if self.ts {
+            return Ok(());
+        }
         if self.exports.iter().any(|n| n == name) {
             return self.raise(pos, format!("Duplicate export '{name}'"));
         }
-        self.exports.push(name.to_string());
+        crate::state::add_name(&mut self.exports, name);
         Ok(())
     }
 
@@ -1175,7 +1236,10 @@ impl Parser {
         }
     }
 
-    fn should_parse_export_statement(&self) -> bool {
+    pub(crate) fn should_parse_export_statement(&self) -> bool {
+        if self.ts && (self.ty.is_ts_declaration_start() || self.ty == Tok::At) {
+            return true;
+        }
         matches!(
             self.ty,
             Tok::KwVar | Tok::KwConst | Tok::KwClass | Tok::KwFunction
@@ -1308,7 +1372,7 @@ impl Parser {
     }
 
     /// The name an import or export goes by: a word, or a string.
-    fn parse_module_export_name(&mut self) -> PResult<Node> {
+    pub(crate) fn parse_module_export_name(&mut self) -> PResult<Node> {
         if self.ty == Tok::String {
             let lone_surrogate = self.value_lone_surrogate;
             let literal = self.parse_literal()?;

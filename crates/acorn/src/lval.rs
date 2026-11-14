@@ -17,6 +17,24 @@ impl Parser {
         is_binding: bool,
         errors: Option<&DestructuringErrors>,
     ) -> PResult<()> {
+        if self.ts {
+            // acorn's own callers drop what acorn-typescript returns:
+            // a wrapper it would unwrap stays where it is.
+            return self
+                .ts_to_assignable(node, is_binding, errors, false)
+                .map(|_| ());
+        }
+        self.to_assignable_base(node, is_binding, errors)
+    }
+
+    // Named as in acorn, which converts the node in place.
+    #[allow(clippy::wrong_self_convention)]
+    pub(crate) fn to_assignable_base(
+        &mut self,
+        node: &mut Node,
+        is_binding: bool,
+        errors: Option<&DestructuringErrors>,
+    ) -> PResult<()> {
         match node.ty {
             Ty::Identifier => {
                 if self.in_async() && node.name == "await" {
@@ -102,6 +120,14 @@ impl Parser {
         list: &mut [Option<Node>],
         is_binding: bool,
     ) -> PResult<()> {
+        if self.ts {
+            // A `(a: T)` item becomes the parameter it annotates.
+            for element in list.iter_mut().flatten() {
+                if element.is(Ty::TsTypeCastExpression) {
+                    *element = Self::type_cast_to_parameter(element.clone());
+                }
+            }
+        }
         for element in list.iter_mut().flatten() {
             self.to_assignable(element, is_binding, None)?;
         }
@@ -126,11 +152,14 @@ impl Parser {
     }
 
     pub(crate) fn parse_binding_atom(&mut self) -> PResult<Node> {
+        if self.ts && self.ty == Tok::KwThis {
+            return self.parse_ident(true);
+        }
         match self.ty {
             Tok::BracketL => {
                 let mut node = self.start_node();
                 self.next()?;
-                node.list = self.parse_binding_list(Tok::BracketR, true, true)?;
+                node.list = self.parse_binding_list(Tok::BracketR, true, true, None)?;
                 Ok(self.finish_node(node, Ty::ArrayPattern))
             }
             Tok::BraceL => self.parse_obj(true, None),
@@ -143,6 +172,7 @@ impl Parser {
         close: Tok,
         allow_empty: bool,
         allow_trailing_comma: bool,
+        allow_modifiers: Option<bool>,
     ) -> PResult<Vec<Option<Node>>> {
         let mut elements = Vec::new();
         let mut first = true;
@@ -157,23 +187,74 @@ impl Parser {
             } else if allow_trailing_comma && self.after_trailing_comma(close, false)? {
                 break;
             } else if self.ty == Tok::Ellipsis {
-                let rest = self.parse_rest_binding()?;
+                let mut rest = self.parse_rest_binding()?;
+                self.parse_binding_list_item(&mut rest)?;
                 elements.push(Some(rest));
                 if self.ty == Tok::Comma {
-                    return self.raise(self.start, "Comma is not permitted after the rest element");
+                    self.raise_comma_after_rest(self.start)?;
                 }
                 self.expect(close)?;
                 break;
             } else {
-                elements.push(Some(self.parse_maybe_default(self.start, None)?));
+                elements.push(Some(self.parse_assignable_list_item(allow_modifiers)?));
             }
         }
         Ok(elements)
     }
 
+    /// One parameter or pattern element. `allow_modifiers` is set for a
+    /// method's parameters, which may be parameter properties.
+    fn parse_assignable_list_item(&mut self, allow_modifiers: Option<bool>) -> PResult<Node> {
+        if self.ts {
+            return self.ts_parse_assignable_list_item(allow_modifiers);
+        }
+        self.parse_maybe_default(self.start, None)
+    }
+
+    /// What may follow a parameter's pattern: in TypeScript `?` and a
+    /// type annotation.
+    pub(crate) fn parse_binding_list_item(&mut self, param: &mut Node) -> PResult<()> {
+        if !self.ts {
+            return Ok(());
+        }
+        if self.eat(Tok::Question)? {
+            if !param.is(Ty::Identifier) && !self.is_ambient_context && !self.in_type {
+                return self.raise(
+                    param.start as usize,
+                    "A binding pattern parameter cannot be optional in an implementation signature.",
+                );
+            }
+            param.optional = true;
+        }
+        if let Some(annotation) = self.ts_try_parse_type_annotation()? {
+            param.annotation = Some(annotation.start);
+        }
+        param.end = self.last_tok_end as u32;
+        Ok(())
+    }
+
     /// A binding with an optional default. `left` is the binding when
     /// the caller has read it already.
     pub(crate) fn parse_maybe_default(
+        &mut self,
+        start_pos: usize,
+        left: Option<Node>,
+    ) -> PResult<Node> {
+        let node = self.parse_maybe_default_base(start_pos, left)?;
+        if self.ts
+            && node.is(Ty::AssignmentPattern)
+            && let Some(annotation) = node.annotation
+            && node.second().start < annotation
+        {
+            return self.raise(
+                annotation as usize,
+                "Type annotations must come before default assignments, e.g. instead of `age = 25: number` use `age: number = 25`.",
+            );
+        }
+        Ok(node)
+    }
+
+    pub(crate) fn parse_maybe_default_base(
         &mut self,
         start_pos: usize,
         left: Option<Node>,
@@ -200,6 +281,11 @@ impl Parser {
         binding: Bind,
         mut clashes: Option<&mut Vec<String>>,
     ) -> PResult<()> {
+        // acorn-typescript looks through its wrappers to what they wrap.
+        let mut expr = expr;
+        while self.ts && expr.is_ts_wrapper() {
+            expr = expr.first();
+        }
         let is_bind = binding != Bind::None;
         match expr.ty {
             Ty::Identifier => {
@@ -282,6 +368,9 @@ impl Parser {
         binding: Bind,
         clashes: Option<&mut Vec<String>>,
     ) -> PResult<()> {
+        if expr.is(Ty::TsParameterProperty) {
+            return self.check_lval_inner_pattern(expr.first(), binding, clashes);
+        }
         match expr.ty {
             Ty::Property => self.check_lval_inner_pattern(expr.second(), binding, clashes),
             Ty::AssignmentPattern | Ty::RestElement => {

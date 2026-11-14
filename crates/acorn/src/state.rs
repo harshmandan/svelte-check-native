@@ -11,6 +11,9 @@ use crate::token::{Ctx, Tok};
 pub(crate) struct Raised {
     pub pos: u32,
     pub message: String,
+    /// acorn-typescript raised at a column number where it meant a
+    /// position: the error points at offset "column of `pos`".
+    pub column_of: bool,
 }
 
 /// Why parsing stopped.
@@ -35,6 +38,11 @@ pub(crate) const SCOPE_DIRECT_SUPER: u32 = 128;
 pub(crate) const SCOPE_CLASS_STATIC_BLOCK: u32 = 256;
 pub(crate) const SCOPE_CLASS_FIELD_INIT: u32 = 512;
 pub(crate) const SCOPE_SWITCH: u32 = 1024;
+/// acorn-typescript's scopes: the body of a namespace or module, and
+/// the namespace itself. It gives the latter the class-static-block
+/// flag too, with all that follows from that.
+pub(crate) const TS_SCOPE_OTHER: u32 = 1 << 20;
+pub(crate) const TS_SCOPE_TS_MODULE: u32 = 1 << 21;
 pub(crate) const SCOPE_VAR: u32 = SCOPE_TOP | SCOPE_FUNCTION | SCOPE_CLASS_STATIC_BLOCK;
 
 pub(crate) fn function_flags(is_async: bool, generator: bool) -> u32 {
@@ -54,13 +62,36 @@ pub(crate) enum Bind {
     SimpleCatch,
     /// A function's own name, bound inside the function.
     Outside,
+    // acorn-typescript's.
+    TsType,
+    TsInterface,
+    /// A namespace, or an ambient function: visible to `export` only.
+    TsExportOnly,
+    TsEnum,
+    TsConstEnum,
 }
 
+/// A list of names that a snapshot of the parser shares until one
+/// side changes it. acorn-typescript tries a reading and takes it back
+/// often; copying every scope each time would cost far more than the
+/// parse.
+pub(crate) type Names = std::rc::Rc<Vec<String>>;
+
+pub(crate) fn add_name(names: &mut Names, name: &str) {
+    std::rc::Rc::make_mut(names).push(name.to_string());
+}
+
+#[derive(Clone)]
 pub(crate) struct Scope {
     pub flags: u32,
-    pub var: Vec<String>,
-    pub lexical: Vec<String>,
-    pub functions: Vec<String>,
+    pub var: Names,
+    pub lexical: Names,
+    pub functions: Names,
+    /// acorn-typescript's: type aliases and interfaces, enums, and
+    /// what only an `export` may name.
+    pub types: Names,
+    pub enums: Names,
+    pub export_only_bindings: Names,
 }
 
 /// The node types the parser tells apart. Everything it only builds
@@ -93,6 +124,50 @@ pub(crate) enum Ty {
     PropertyDefinition,
     StaticBlock,
     ExportSpecifier,
+    Other,
+    // acorn-typescript's. An expression wrapper keeps the expression
+    // in `a`.
+    TsNonNullExpression,
+    TsAsExpression,
+    TsSatisfiesExpression,
+    TsTypeAssertion,
+    /// `(a: T)` read as a parenthesized item: `a` the expression, the
+    /// annotation's start in `annotation`.
+    TsTypeCastExpression,
+    /// A constructor parameter with a modifier: the parameter in `a`.
+    TsParameterProperty,
+    TsInstantiationExpression,
+    TsTypeParameterDeclaration,
+    TsDeclareFunction,
+    TsDeclareMethod,
+    TsInterfaceDeclaration,
+    TsTypeAliasDeclaration,
+    TsEnumDeclaration,
+    TsModuleDeclaration,
+    TsIndexSignature,
+    TemplateLiteral,
+    UnaryExpression,
+    ImportExpression,
+    ClassExpression,
+    // Types, as far as the parser tells them apart.
+    TsType,
+    TsTupleType,
+    TsArrayType,
+    TsThisType,
+    TsTypePredicate,
+    TsTypeReference,
+    TsRestType,
+    TsOptionalType,
+    TsNamedTupleMember,
+}
+
+/// What kind of literal a `Literal` is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Lit {
+    None,
+    Number,
+    BigInt,
+    String,
     Other,
 }
 
@@ -128,6 +203,19 @@ pub(crate) struct Node {
     pub shorthand: bool,
     pub is_static: bool,
     pub optional: bool,
+    /// Set once `finish_node` has given the node its type.
+    pub finished: bool,
+    pub lit: Lit,
+    /// acorn-typescript's: the modifiers on a class member or
+    /// parameter (`modified[name]` in its code), the access modifier
+    /// among them, where a type annotation starts, whether a function
+    /// has a body, whether a type reference has type arguments, and
+    /// whether a template has substitutions.
+    pub modifiers: Vec<String>,
+    pub accessibility: Option<String>,
+    pub annotation: Option<u32>,
+    pub has_body: bool,
+    pub has_type_arguments: bool,
     pub a: Option<Box<Node>>,
     pub b: Option<Box<Node>>,
     pub list: Vec<Option<Node>>,
@@ -146,6 +234,13 @@ impl Node {
             shorthand: false,
             is_static: false,
             optional: false,
+            finished: false,
+            lit: Lit::None,
+            modifiers: Vec::new(),
+            accessibility: None,
+            annotation: None,
+            has_body: false,
+            has_type_arguments: false,
             a: None,
             b: None,
             list: Vec::new(),
@@ -154,6 +249,23 @@ impl Node {
 
     pub(crate) fn is(&self, ty: Ty) -> bool {
         self.ty == ty
+    }
+
+    /// `modified[name]` in acorn-typescript.
+    pub(crate) fn has_modifier(&self, name: &str) -> bool {
+        self.modifiers.iter().any(|m| m == name)
+    }
+
+    /// One of the wrappers TypeScript puts around an expression
+    /// without changing what it refers to.
+    pub(crate) fn is_ts_wrapper(&self) -> bool {
+        matches!(
+            self.ty,
+            Ty::TsNonNullExpression
+                | Ty::TsAsExpression
+                | Ty::TsSatisfiesExpression
+                | Ty::TsTypeAssertion
+        )
     }
 
     /// The node in `a`, which the node's type always fills.
@@ -197,6 +309,7 @@ pub(crate) enum LabelKind {
     Switch,
 }
 
+#[derive(Clone)]
 pub(crate) struct Label {
     pub kind: Option<LabelKind>,
     pub name: Option<String>,
@@ -204,6 +317,7 @@ pub(crate) struct Label {
 }
 
 /// The private names of one class body.
+#[derive(Clone)]
 pub(crate) struct PrivateNames {
     /// Declared names, with what declared them (`"true"`, `"iget"`, …).
     pub declared: Vec<(String, &'static str)>,
@@ -236,9 +350,18 @@ pub(crate) enum StatementContext {
     Other,
 }
 
+/// Which of TypeScript's `import` / `export` forms is being read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OuterKind {
+    Unset,
+    Value,
+    Type,
+}
+
+#[derive(Clone)]
 pub(crate) struct Parser {
     /// The input as UTF-16 code units, the way JavaScript indexes it.
-    pub input: Vec<u16>,
+    pub input: std::rc::Rc<[u16]>,
     pub pos: usize,
     pub ty: Tok,
     /// The current token's word, string value or operator.
@@ -264,9 +387,9 @@ pub(crate) struct Parser {
     pub labels: Vec<Label>,
     /// Names exported before any declaration of them was seen, in the
     /// order met.
-    pub undefined_exports: Vec<(String, u32)>,
+    pub undefined_exports: std::rc::Rc<Vec<(String, u32)>>,
     /// The names the module exports so far.
-    pub exports: Vec<String>,
+    pub exports: Names,
     pub scope_stack: Vec<Scope>,
     pub private_name_stack: Vec<PrivateNames>,
     /// How deep expressions are nested, and statements. acorn's stack
@@ -282,6 +405,21 @@ pub(crate) struct Parser {
     /// elsewhere: the compiler empties the list of undeclared exports
     /// after every statement.
     pub forget_undefined_exports: bool,
+    /// Read TypeScript, as acorn-typescript does. The fields below are
+    /// its state.
+    pub ts: bool,
+    /// Reading ahead: tokens are read without their effect on the
+    /// tokenizer's context.
+    pub is_lookahead: bool,
+    pub is_ambient_context: bool,
+    pub in_abstract_class: bool,
+    pub in_type: bool,
+    pub in_disallow_conditional_types_context: bool,
+    pub maybe_in_arrow_parameters: bool,
+    pub import_or_export_outer_kind: OuterKind,
+    /// How many decorators wait for the class they belong to, one count
+    /// per nesting of decorator expressions.
+    pub decorator_stack: Vec<u32>,
 }
 
 /// Deeper nesting than this is reported the way acorn reports running
@@ -299,7 +437,7 @@ pub(crate) fn with_stack<T>(f: impl FnOnce() -> T) -> T {
 impl Parser {
     pub(crate) fn new(input: Vec<u16>, start_pos: usize) -> Parser {
         let mut parser = Parser {
-            input,
+            input: input.into(),
             pos: start_pos,
             ty: Tok::Eof,
             value: String::new(),
@@ -320,8 +458,8 @@ impl Parser {
             await_pos: 0,
             await_ident_pos: 0,
             labels: Vec::new(),
-            undefined_exports: Vec::new(),
-            exports: Vec::new(),
+            undefined_exports: std::rc::Rc::default(),
+            exports: Names::default(),
             scope_stack: Vec::new(),
             private_name_stack: Vec::new(),
             depth: 0,
@@ -329,6 +467,15 @@ impl Parser {
             unary_depth: 0,
             preserve_parens: false,
             forget_undefined_exports: false,
+            ts: false,
+            is_lookahead: false,
+            is_ambient_context: false,
+            in_abstract_class: false,
+            in_type: false,
+            in_disallow_conditional_types_context: false,
+            maybe_in_arrow_parameters: false,
+            import_or_export_outer_kind: OuterKind::Unset,
+            decorator_stack: vec![0],
         };
         parser.enter_scope(SCOPE_TOP);
         parser
@@ -340,6 +487,21 @@ impl Parser {
         Err(Stop::Error(Raised {
             pos: pos as u32,
             message: message.into(),
+            column_of: false,
+        }))
+    }
+
+    /// acorn-typescript's `this.raise(loc.column, message)`: the error
+    /// is placed at the column number of `pos`, taken for an offset.
+    pub(crate) fn raise_at_column_of<T>(
+        &self,
+        pos: usize,
+        message: impl Into<String>,
+    ) -> PResult<T> {
+        Err(Stop::Error(Raised {
+            pos: pos as u32,
+            message: message.into(),
+            column_of: true,
         }))
     }
 
@@ -437,11 +599,21 @@ impl Parser {
     // --- scope.js ---
 
     pub(crate) fn enter_scope(&mut self, flags: u32) {
+        // acorn-typescript gives a namespace's scope the flag of a
+        // class static block as well.
+        let flags = if flags == TS_SCOPE_TS_MODULE {
+            flags | SCOPE_CLASS_STATIC_BLOCK
+        } else {
+            flags
+        };
         self.scope_stack.push(Scope {
             flags,
-            var: Vec::new(),
-            lexical: Vec::new(),
-            functions: Vec::new(),
+            var: Names::default(),
+            lexical: Names::default(),
+            functions: Names::default(),
+            types: Names::default(),
+            enums: Names::default(),
+            export_only_bindings: Names::default(),
         });
     }
 
@@ -458,19 +630,26 @@ impl Parser {
     }
 
     pub(crate) fn declare_name(&mut self, name: &str, binding: Bind, pos: u32) -> PResult<()> {
+        if self.ts {
+            return self.ts_declare_name(name, binding, pos);
+        }
+        self.declare_name_base(name, binding, pos)
+    }
+
+    pub(crate) fn declare_name_base(&mut self, name: &str, binding: Bind, pos: u32) -> PResult<()> {
         let mut redeclared = false;
         let has = |list: &[String]| list.iter().any(|n| n == name);
         match binding {
             Bind::Lexical => {
                 let scope = self.current_scope_mut();
                 redeclared = has(&scope.lexical) || has(&scope.functions) || has(&scope.var);
-                scope.lexical.push(name.to_string());
+                add_name(&mut scope.lexical, name);
                 if scope.flags & SCOPE_TOP != 0 {
-                    self.undefined_exports.retain(|(n, _)| n != name);
+                    self.forget_undefined_export(name);
                 }
             }
             Bind::SimpleCatch => {
-                self.current_scope_mut().lexical.push(name.to_string());
+                add_name(&mut self.current_scope_mut().lexical, name);
             }
             Bind::Function => {
                 let as_var = self.treat_functions_as_var();
@@ -480,7 +659,7 @@ impl Parser {
                 } else {
                     has(&scope.lexical) || has(&scope.var)
                 };
-                scope.functions.push(name.to_string());
+                add_name(&mut scope.functions, name);
             }
             _ => {
                 for i in (0..self.scope_stack.len()).rev() {
@@ -493,10 +672,10 @@ impl Parser {
                         redeclared = true;
                         break;
                     }
-                    scope.var.push(name.to_string());
+                    add_name(&mut scope.var, name);
                     let flags = scope.flags;
                     if flags & SCOPE_TOP != 0 {
-                        self.undefined_exports.retain(|(n, _)| n != name);
+                        self.forget_undefined_export(name);
                     }
                     if flags & SCOPE_VAR != 0 {
                         break;
@@ -513,13 +692,24 @@ impl Parser {
         Ok(())
     }
 
+    /// `delete this.undefinedExports[name]`.
+    pub(crate) fn forget_undefined_export(&mut self, name: &str) {
+        if self.undefined_exports.iter().any(|(n, _)| n == name) {
+            std::rc::Rc::make_mut(&mut self.undefined_exports).retain(|(n, _)| n != name);
+        }
+    }
+
     pub(crate) fn check_local_export(&mut self, name: &str, start: u32) {
+        if self.ts && self.ts_exportable_without_binding(name) {
+            return;
+        }
         let top = &self.scope_stack[0];
         let declared = top.lexical.iter().any(|n| n == name) || top.var.iter().any(|n| n == name);
         if !declared {
-            match self.undefined_exports.iter_mut().find(|(n, _)| n == name) {
+            let undefined = std::rc::Rc::make_mut(&mut self.undefined_exports);
+            match undefined.iter_mut().find(|(n, _)| n == name) {
                 Some(entry) => entry.1 = start,
-                None => self.undefined_exports.push((name.to_string(), start)),
+                None => undefined.push((name.to_string(), start)),
             }
         }
     }
@@ -608,8 +798,15 @@ impl Parser {
     }
 
     pub(crate) fn finish_node(&self, mut node: Node, ty: Ty) -> Node {
+        // acorn-typescript leaves a node that has its type alone: a
+        // function without a body stays the declaration it was found
+        // to be.
+        if self.ts && node.finished {
+            return node;
+        }
         node.ty = ty;
         node.end = self.last_tok_end as u32;
+        node.finished = true;
         node
     }
 
@@ -715,6 +912,16 @@ impl Parser {
     }
 
     pub(crate) fn eat_contextual(&mut self, name: &str) -> PResult<bool> {
+        // One of acorn-typescript's own words is no `Name` token.
+        if self.ts
+            && let Some(ty) = Tok::of_ts_word(name)
+        {
+            if self.ts_is_contextual(ty) {
+                self.next()?;
+                return Ok(true);
+            }
+            return Ok(false);
+        }
         if !self.is_contextual(name) {
             return Ok(false);
         }
@@ -760,7 +967,7 @@ impl Parser {
     }
 
     pub(crate) fn check_pattern_errors(
-        &self,
+        &mut self,
         errors: Option<&DestructuringErrors>,
         is_assign: bool,
     ) -> PResult<()> {
@@ -768,10 +975,7 @@ impl Parser {
             return Ok(());
         };
         if errors.trailing_comma > -1 {
-            return self.raise(
-                errors.trailing_comma as usize,
-                "Comma is not permitted after the rest element",
-            );
+            self.raise_comma_after_rest(errors.trailing_comma as usize)?;
         }
         let parens = if is_assign {
             errors.parenthesized_assign
@@ -830,6 +1034,10 @@ impl Parser {
     }
 
     pub(crate) fn is_simple_assign_target(expr: &Node) -> bool {
+        let mut expr = expr;
+        while expr.is_ts_wrapper() {
+            expr = expr.first();
+        }
         if expr.is(Ty::ParenthesizedExpression) {
             return Self::is_simple_assign_target(expr.first());
         }

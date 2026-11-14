@@ -515,6 +515,13 @@ pub(crate) struct Parser {
 /// Node 24 does for nested arrays.
 pub(crate) const MAX_DEPTH: u32 = 984;
 
+/// [`MAX_DEPTH`] for acorn-typescript, whose every nested expression
+/// takes more of the stack: in Node 24.19 nested arrays, parentheses,
+/// object literals and arrows run out at two thirds to three quarters of
+/// acorn's depth. Statements and binary operator chains reach as far as
+/// acorn's.
+pub(crate) const MAX_DEPTH_TS: u32 = 760;
+
 /// What `depth` counts in: one nested expression costs this much, one
 /// more link of a `?:` or `=` chain costs one. acorn spends about a
 /// quarter of the stack on a link that it spends on a nested array.
@@ -526,6 +533,9 @@ pub(crate) const MAX_STATEMENT_DEPTH: u32 = 2800;
 
 /// How long a run of prefix operators acorn reads in Node 24.
 pub(crate) const MAX_UNARY_DEPTH: u32 = 3870;
+
+/// [`MAX_UNARY_DEPTH`] for acorn-typescript, cut as [`MAX_DEPTH_TS`] is.
+pub(crate) const MAX_UNARY_DEPTH_TS: u32 = 2950;
 
 /// How many binary operators in a row acorn reads in Node 24: it
 /// calls itself once for each.
@@ -681,7 +691,8 @@ impl Parser {
         };
         self.depth += cost;
         self.depth_costs.push(cost);
-        if self.depth > MAX_DEPTH * DEPTH_UNIT {
+        let max = if self.ts { MAX_DEPTH_TS } else { MAX_DEPTH };
+        if self.depth > max * DEPTH_UNIT {
             return self.stack_exhausted();
         }
         Ok(())

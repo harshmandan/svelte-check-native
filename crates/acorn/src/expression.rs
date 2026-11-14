@@ -298,7 +298,12 @@ impl Parser {
         // Nesting is counted where the enclosing expression is read; a
         // run of prefix operators nests without one.
         self.unary_depth += 1;
-        if self.unary_depth > crate::state::MAX_UNARY_DEPTH {
+        let max = if self.ts {
+            crate::state::MAX_UNARY_DEPTH_TS
+        } else {
+            crate::state::MAX_UNARY_DEPTH
+        };
+        if self.unary_depth > max {
             return self.stack_exhausted();
         }
         let result = with_stack(|| {

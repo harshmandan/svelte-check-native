@@ -1540,7 +1540,9 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         let mut i = pos + LIT.len();
         match bytes.get(i) {
             Some(b'>') => Some((i + 1) as u32),
-            Some(b) if b.is_ascii_whitespace() => {
+            // `\s` is JavaScript's: ASCII white space and the Unicode
+            // spaces. `[^>]*` takes the rest of a wide one.
+            Some(_) if is_svelte_whitespace_at(bytes, i) => {
                 i += 1;
                 while i < end && bytes[i] != b'>' {
                     i += 1;

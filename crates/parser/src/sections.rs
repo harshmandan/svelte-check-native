@@ -28,7 +28,7 @@ use crate::document::{
     Document, ScriptAttr, ScriptContext, ScriptLang, ScriptSection, StyleSection, Template,
 };
 use crate::error::ParseError;
-use crate::scanner::Scanner;
+use crate::scanner::{Scanner, is_svelte_whitespace_at, skip_svelte_whitespace_at};
 
 /// Parse the top-level section layout of a Svelte source file.
 ///
@@ -266,7 +266,7 @@ fn parse_opaque_section<'src>(
     scanner.set_pos(close_pos);
     scanner.advance(close_tag_literal.len() as u32);
     // Swallow any whitespace and the closing `>`.
-    scanner.skip_ascii_whitespace();
+    scanner.skip_svelte_whitespace();
     if scanner.peek_byte() == Some(b'>') {
         scanner.advance_byte();
     }
@@ -298,10 +298,7 @@ fn find_close_tag(scanner: &Scanner<'_>, close_literal: &str) -> Option<u32> {
     while i + needle.len() <= bytes.len() {
         let window = &bytes[i..i + needle.len()];
         if window == needle {
-            let mut j = i + needle.len();
-            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                j += 1;
-            }
+            let j = skip_svelte_whitespace_at(bytes, i + needle.len());
             if bytes.get(j) == Some(&b'>') {
                 return Some(i as u32);
             }
@@ -321,7 +318,7 @@ fn parse_tag_attributes(
     let start = scanner.pos();
 
     loop {
-        scanner.skip_ascii_whitespace();
+        scanner.skip_svelte_whitespace();
         match scanner.peek_byte() {
             None => {
                 // EOF in opening tag.
@@ -335,7 +332,7 @@ fn parse_tag_attributes(
             }
             Some(b'/') => {
                 scanner.advance_byte();
-                scanner.skip_ascii_whitespace();
+                scanner.skip_svelte_whitespace();
                 if scanner.peek_byte() == Some(b'>') {
                     scanner.advance_byte();
                     return Ok((attrs, true, scanner.pos()));
@@ -363,10 +360,12 @@ fn parse_one_attr(scanner: &mut Scanner<'_>) -> Result<ScriptAttr, ParseError> {
 
     // Read name: everything up to whitespace, `=`, `>`, `/`.
     while let Some(b) = scanner.peek_byte() {
-        if b.is_ascii_whitespace() || matches!(b, b'=' | b'>' | b'/') {
+        if is_svelte_whitespace_at(scanner.source().as_bytes(), scanner.pos() as usize)
+            || matches!(b, b'=' | b'>' | b'/')
+        {
             break;
         }
-        scanner.advance_byte();
+        scanner.advance_char();
     }
     if scanner.pos() == name_start {
         return Err(ParseError::MalformedOpenTag {
@@ -377,10 +376,10 @@ fn parse_one_attr(scanner: &mut Scanner<'_>) -> Result<ScriptAttr, ParseError> {
 
     // Optional `= value`.
     let saved_before_ws = scanner.pos();
-    scanner.skip_ascii_whitespace();
+    scanner.skip_svelte_whitespace();
     let value = if scanner.peek_byte() == Some(b'=') {
         scanner.advance_byte();
-        scanner.skip_ascii_whitespace();
+        scanner.skip_svelte_whitespace();
         Some(parse_attr_value(scanner)?)
     } else {
         scanner.set_pos(saved_before_ws);
@@ -417,7 +416,9 @@ fn parse_attr_value(scanner: &mut Scanner<'_>) -> Result<String, ParseError> {
             // Unquoted value — read until whitespace or `>` or `/`.
             let value_start = scanner.pos();
             while let Some(b) = scanner.peek_byte() {
-                if b.is_ascii_whitespace() || matches!(b, b'>' | b'/') {
+                if is_svelte_whitespace_at(scanner.source().as_bytes(), scanner.pos() as usize)
+                    || matches!(b, b'>' | b'/')
+                {
                     break;
                 }
                 scanner.advance_char();

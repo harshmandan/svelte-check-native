@@ -15,6 +15,8 @@
 //! that style. The compiler's `preprocess` looks for scripts alone, so
 //! the same text opens a script there.
 
+use crate::scanner::{is_svelte_whitespace_at, skip_svelte_whitespace_at};
+
 /// The script blocks the compiler's `preprocess` expression matches:
 /// source spans, opening `<` through the closing `>`, in source order.
 pub fn script_tag_expression_spans(source: &str) -> Vec<(usize, usize)> {
@@ -70,21 +72,19 @@ fn block_end(source: &str, at: usize, open: &str, close: &str) -> Option<usize> 
 
 /// Match `(?:\s+NAME=(?:"…"|'…'|[^>\s]+)|\s+NAME)*\s*>` at `pos`, where
 /// NAME is `[^=>'"/\s]+`; the offset after the `>`.
+/// `\s` is JavaScript's: ASCII white space and the Unicode spaces.
 fn open_tag_end(bytes: &[u8], mut pos: usize) -> Option<usize> {
-    let is_space = |b: u8| b.is_ascii_whitespace();
+    let is_space = |i: usize| is_svelte_whitespace_at(bytes, i);
     loop {
         let save = pos;
-        let mut j = pos;
-        while j < bytes.len() && is_space(bytes[j]) {
-            j += 1;
-        }
+        let mut j = skip_svelte_whitespace_at(bytes, pos);
         if j == pos {
             break;
         }
         let name_start = j;
         while j < bytes.len()
             && !matches!(bytes[j], b'=' | b'>' | b'\'' | b'"' | b'/')
-            && !is_space(bytes[j])
+            && !is_space(j)
         {
             j += 1;
         }
@@ -101,7 +101,7 @@ fn open_tag_end(bytes: &[u8], mut pos: usize) -> Option<usize> {
                     .map(|p| value_start + 1 + p + 1),
                 _ => {
                     let mut k = value_start;
-                    while k < bytes.len() && bytes[k] != b'>' && !is_space(bytes[k]) {
+                    while k < bytes.len() && bytes[k] != b'>' && !is_space(k) {
                         k += 1;
                     }
                     (k > value_start).then_some(k)
@@ -112,9 +112,7 @@ fn open_tag_end(bytes: &[u8], mut pos: usize) -> Option<usize> {
         }
         pos = j;
     }
-    while pos < bytes.len() && is_space(bytes[pos]) {
-        pos += 1;
-    }
+    pos = skip_svelte_whitespace_at(bytes, pos);
     (bytes.get(pos) == Some(&b'>')).then_some(pos + 1)
 }
 

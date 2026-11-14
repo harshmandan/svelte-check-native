@@ -7,6 +7,8 @@
 
 use svn_core::Range;
 
+use crate::scanner::is_svelte_whitespace;
+
 /// A parsed Svelte file.
 ///
 /// Borrows from the source string (`&'src`). The structural parser records
@@ -191,10 +193,10 @@ fn script_tag_attrs(text: &str, at: usize) -> Option<&str> {
     }
     let mut pos = 0;
     loop {
-        let ws = rest[pos..].len() - rest[pos..].trim_start().len();
+        let ws = rest[pos..].len() - rest[pos..].trim_start_matches(is_svelte_whitespace).len();
         let name_start = pos + ws;
         let name_len = rest[name_start..]
-            .find(|c: char| matches!(c, '=' | '>' | '\'' | '"' | '/') || c.is_whitespace())
+            .find(|c: char| matches!(c, '=' | '>' | '\'' | '"' | '/') || is_svelte_whitespace(c))
             .unwrap_or(rest.len() - name_start);
         if ws == 0 || name_len == 0 {
             break;
@@ -206,7 +208,7 @@ fn script_tag_attrs(text: &str, at: usize) -> Option<&str> {
                 Some(q @ ('"' | '\'')) => value[1..].find(q).map(|i| i + 2),
                 Some(_) => {
                     let n = value
-                        .find(|c: char| c == '>' || c.is_whitespace())
+                        .find(|c: char| c == '>' || is_svelte_whitespace(c))
                         .unwrap_or(value.len());
                     (n > 0).then_some(n)
                 }
@@ -218,7 +220,7 @@ fn script_tag_attrs(text: &str, at: usize) -> Option<&str> {
         }
         pos = end;
     }
-    let closing = rest[pos..].trim_start();
+    let closing = rest[pos..].trim_start_matches(is_svelte_whitespace);
     closing.starts_with('>').then(|| &rest[..pos])
 }
 
@@ -232,17 +234,17 @@ fn lang_value(attrs: &str) -> Option<&str> {
         if attrs[..at].chars().next_back().is_some_and(is_word_char) {
             continue;
         }
-        let after = attrs[at + 4..].trim_start();
+        let after = attrs[at + 4..].trim_start_matches(is_svelte_whitespace);
         let Some(after) = after.strip_prefix('=') else {
             continue;
         };
-        let value = after.trim_start();
+        let value = after.trim_start_matches(is_svelte_whitespace);
         let found = match value.chars().next() {
             Some(q @ ('"' | '\'')) => value[1..].find(q).map(|i| &value[1..=i]),
             Some(_) => {
                 let n = value
                     .find(|c: char| {
-                        c.is_whitespace() || matches!(c, '"' | '\'' | '=' | '<' | '>' | '`')
+                        is_svelte_whitespace(c) || matches!(c, '"' | '\'' | '=' | '<' | '>' | '`')
                     })
                     .unwrap_or(value.len());
                 (n > 0).then(|| &value[..n])

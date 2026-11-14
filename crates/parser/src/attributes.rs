@@ -37,6 +37,15 @@ use crate::error::ParseError;
 use crate::mustache::find_mustache_end;
 use crate::scanner::{Scanner, is_svelte_whitespace_at, unicode_identifier_len};
 
+/// Whether the scanner sits on white space as the compiler's
+/// `is_whitespace` defines it: ASCII space, `\t` through `\r`, and the
+/// Unicode spaces of JavaScript's `\s` (NBSP, U+2000-200A, U+3000, …).
+/// The compiler skips it inside a tag, around `=` and inside `{ }`, and
+/// ends an unquoted value at it.
+fn at_whitespace(scanner: &Scanner<'_>) -> bool {
+    is_svelte_whitespace_at(scanner.source().as_bytes(), scanner.pos() as usize)
+}
+
 /// Parse zero or more attributes, stopping before `>` or `/>`.
 ///
 /// On return, the scanner points at the `>` or `/` of the tag close.
@@ -197,7 +206,7 @@ fn parse_brace_attribute(
     let content_start = scanner.pos();
     let mut cursor = Scanner::new(scanner.source());
     cursor.set_pos(content_start);
-    cursor.skip_ascii_whitespace();
+    cursor.skip_svelte_whitespace();
 
     if cursor.starts_with("...") {
         // Spread: `{...expr}`.
@@ -232,7 +241,7 @@ fn parse_brace_attribute(
                 break;
             }
         }
-        cursor.skip_ascii_whitespace();
+        cursor.skip_svelte_whitespace();
         let expr_start = cursor.pos();
         let end = match find_mustache_end(scanner.source(), expr_start) {
             Some(e) => e,
@@ -262,7 +271,7 @@ fn parse_brace_attribute(
     };
     cursor.set_pos(name_end);
 
-    cursor.skip_ascii_whitespace();
+    cursor.skip_svelte_whitespace();
     if cursor.peek_byte() != Some(b'}') || name_end == name_start {
         // Not a plain `{name}` — reuse the mustache scanner to find the end
         // and report an "unsupported attribute form" (e.g. inline
@@ -350,10 +359,7 @@ fn parse_named_attribute(
             continue;
         }
         if bracket_depth > 0 {
-            if matches!(
-                b,
-                b' ' | b'\t' | b'\n' | b'\r' | b'=' | b'>' | b'<' | b'"' | b'\''
-            ) {
+            if matches!(b, b' ' | 0x09..=0x0d | b'=' | b'>' | b'<' | b'"' | b'\'') {
                 break;
             }
             if b == b'[' {
@@ -364,7 +370,7 @@ fn parse_named_attribute(
             scanner.advance_byte();
         } else if matches!(
             b,
-            b' ' | b'\t' | b'\n' | b'\r' | b'=' | b'/' | b'>' | b'<' | b'"' | b'\''
+            b' ' | 0x09..=0x0d | b'=' | b'/' | b'>' | b'<' | b'"' | b'\''
         ) {
             break;
         } else if b == b'[' {
@@ -397,10 +403,10 @@ fn parse_named_attribute(
     // whether a value follows; only commit when we actually see `=`.
     let name_sym: SmolStr = name.into();
     let after_name = scanner.pos();
-    scanner.skip_ascii_whitespace();
+    scanner.skip_svelte_whitespace();
     let value = if scanner.peek_byte() == Some(b'=') {
         scanner.advance_byte();
-        scanner.skip_ascii_whitespace();
+        scanner.skip_svelte_whitespace();
         Some(parse_attr_value(scanner, errors)?)
     } else {
         // Boolean attribute — restore the scanner to just after the
@@ -466,10 +472,10 @@ fn parse_directive(
     }
 
     let after_name = scanner.pos();
-    scanner.skip_ascii_whitespace();
+    scanner.skip_svelte_whitespace();
     let value = if scanner.peek_byte() == Some(b'=') {
         scanner.advance_byte();
-        scanner.skip_ascii_whitespace();
+        scanner.skip_svelte_whitespace();
         Some(parse_directive_value(scanner, kind, errors)?)
     } else {
         // Boolean directive — restore so the attr loop sees trailing
@@ -579,8 +585,7 @@ fn parse_directive_value(
             let start = scanner.pos();
             let text_start = start;
             while let Some(b) = scanner.peek_byte() {
-                if b.is_ascii_whitespace() || matches!(b, b'>' | b'"' | b'\'' | b'=' | b'<' | b'`')
-                {
+                if at_whitespace(scanner) || matches!(b, b'>' | b'"' | b'\'' | b'=' | b'<' | b'`') {
                     break;
                 }
                 // A bare `/` is part of an unquoted value; only `/>` ends it.
@@ -625,7 +630,7 @@ fn parse_attr_value(scanner: &mut Scanner<'_>, errors: &mut Vec<ParseError>) -> 
                 None => true,
                 Some(b'/') => scanner.peek_byte_at(1) == Some(b'>'),
                 Some(b) => {
-                    b.is_ascii_whitespace() || matches!(b, b'>' | b'"' | b'\'' | b'=' | b'<' | b'`')
+                    at_whitespace(scanner) || matches!(b, b'>' | b'"' | b'\'' | b'=' | b'<' | b'`')
                 }
             };
             if !ends_value {
@@ -677,7 +682,7 @@ fn parse_unquoted_value(scanner: &mut Scanner<'_>) -> Option<AttrValue> {
     let mut parts: Vec<AttrValuePart> = Vec::new();
     let mut chunk_start = start;
     while let Some(b) = scanner.peek_byte() {
-        if b.is_ascii_whitespace() || matches!(b, b'>' | b'"' | b'\'' | b'=' | b'<' | b'`') {
+        if at_whitespace(scanner) || matches!(b, b'>' | b'"' | b'\'' | b'=' | b'<' | b'`') {
             break;
         }
         // A bare `/` is part of an unquoted value (`href=/foo`,

@@ -269,9 +269,11 @@ fn script_lang_attribute(tag: &str) -> Option<&str> {
         .or_else(|| lang_after_attributes(attributes))
 }
 
-/// What JavaScript's `\s` matches.
+/// What JavaScript's `\s` matches: the compiler's white space, U+FEFF
+/// included and U+0085 not (Rust's `char::is_whitespace` has it the
+/// other way round).
 fn is_regex_space(c: char) -> bool {
-    c.is_whitespace() || c == '\u{feff}'
+    is_compiler_whitespace(c)
 }
 
 /// `(["'])?([^"' >]+)\1[^>]*>` at the start of `text`: the value.

@@ -563,7 +563,12 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
     let svelte_element = !tag_literal;
     let parent_is_element = !(tag_literal && tag_name.starts_with("svelte:"));
     let should_lowercase = parent_is_element && !is_custom_element;
+    // The line break after a comma sequence value's separator, until the
+    // next attribute that writes anything (see
+    // [`map_line_break_after_separator`]).
+    let mut line_break: Option<u32> = None;
     for attr in attributes {
+        settle_line_break(buf, &mut line_break);
         match attr {
             svn_parser::Attribute::Plain(p) => {
                 if should_skip(p.name.as_str(), p.value.as_ref(), svelte_element) {
@@ -573,14 +578,17 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
                     buf.push_str("\n");
                     any = true;
                 }
-                emit_plain(
+                if emit_plain(
                     buf,
                     source,
                     p,
                     depth + 1,
                     should_lowercase,
                     parent_is_element,
-                );
+                ) {
+                    settle_line_break(buf, &mut line_break);
+                    line_break = Some(buf.len() as u32 - 1);
+                }
             }
             svn_parser::Attribute::Expression(e) => {
                 if should_skip(e.name.as_str(), None, svelte_element) {
@@ -590,7 +598,10 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
                     buf.push_str("\n");
                     any = true;
                 }
-                emit_expression(buf, source, e, depth + 1, should_lowercase);
+                if emit_expression(buf, source, e, depth + 1, should_lowercase) {
+                    settle_line_break(buf, &mut line_break);
+                    line_break = Some(buf.len() as u32 - 1);
+                }
             }
             svn_parser::Attribute::Shorthand(s) => {
                 if should_skip(s.name.as_str(), None, svelte_element) {
@@ -618,6 +629,11 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
                     if !any {
                         buf.push_str("\n");
                         any = true;
+                    }
+                    // svelte2tsx writes the comment itself next, from
+                    // its source text.
+                    if let Some(at) = line_break.take() {
+                        map_line_break_after_separator(buf, at, Some(c.range.start));
                     }
                     buf.push_str(&"    ".repeat(depth + 1));
                     buf.push_str(text);
@@ -714,6 +730,7 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
             }
         }
     }
+    settle_line_break(buf, &mut line_break);
     // Snippet-as-prop entries (boundary's `failed` / `pending`).
     // Emitted as `NAME: (params) => { body; return
     // __svn_snippet_return(); },` inside the createElement attrs so
@@ -1168,6 +1185,48 @@ fn emit_dom_bind_attribute(buf: &mut EmitBuffer, parts: DomBindAttribute<'_>, de
         }
     }
     buf.push_str("),\n");
+}
+
+/// Maps a pending line break (see [`map_line_break_after_separator`])
+/// once an attribute has been written after it.
+fn settle_line_break(buf: &mut EmitBuffer, line_break: &mut Option<u32>) {
+    if let Some(at) = *line_break
+        && buf.len() > at as usize + 1
+    {
+        map_line_break_after_separator(buf, at, None);
+        *line_break = None;
+    }
+}
+
+/// Maps the line break at `at`, which ends an attribute whose comma
+/// sequence value wrote its own separator, to where the next attribute
+/// starts in the source.
+///
+/// svelte2tsx writes the next attribute right after that separator, and
+/// the bare sequence leaves TypeScript's `':' expected` on it, so the
+/// error's range ends at the next attribute's first character: the
+/// source text that attribute's own text starts with (its name, or a
+/// spread's `...`), or `next` when given. Text it starts with that has
+/// no source of its own (a `data-` attribute's wrapper call) leaves the
+/// line break unmapped, and the range ends at the separator, as
+/// svelte2tsx's ends there too.
+fn map_line_break_after_separator(buf: &mut EmitBuffer, at: u32, next: Option<u32>) {
+    let next = next.or_else(|| {
+        let after = buf.as_str().get(at as usize + 1..)?;
+        let first = at + 1 + (after.len() - after.trim_start().len()) as u32;
+        buf.token_map()
+            .iter()
+            .find(|t| t.overlay_byte_start == first && t.overlay_byte_end > first)
+            .map(|t| t.source_byte_start)
+    });
+    if let Some(source_start) = next {
+        buf.push_token_map(crate::TokenMapEntry {
+            overlay_byte_start: at,
+            overlay_byte_end: at + 1,
+            source_byte_start: source_start,
+            source_byte_end: source_start + 1,
+        });
+    }
 }
 
 /// Emit a `"on:NAME": handler` entry into the open `createElement`

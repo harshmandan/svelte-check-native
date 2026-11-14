@@ -39,7 +39,16 @@ pub(crate) fn emit_spread(
     let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
     let start = s.expression_range.start + leading_ws;
     let end = start + trimmed.len() as u32;
-    let _ = write!(buf, "{inner}...");
+    buf.push_str(&inner);
+    write_spread_dots(buf, s.range);
     buf.append_with_source(trimmed, svn_core::Range::new(start, end));
     let _ = writeln!(buf, ",");
+}
+
+/// Writes the `...` of a spread whose source is `range` (`{...x}`),
+/// mapped to the source text after the opening brace: svelte2tsx writes
+/// a spread as that text, so a position on the `...` maps there.
+pub(crate) fn write_spread_dots(buf: &mut EmitBuffer, range: svn_core::Range) {
+    let start = range.start + 1;
+    buf.append_with_source("...", svn_core::Range::new(start, start + 3));
 }

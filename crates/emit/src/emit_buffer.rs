@@ -179,6 +179,11 @@ impl EmitBuffer {
         self.token_map.push(entry);
     }
 
+    /// The token-map entries recorded so far.
+    pub fn token_map(&self) -> &[TokenMapEntry] {
+        &self.token_map
+    }
+
     /// Direct access to the underlying `String` for sites not yet
     /// ported to the new API. Intentionally offered so migration
     /// can happen incrementally — appends here don't go through

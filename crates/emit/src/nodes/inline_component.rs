@@ -887,7 +887,8 @@ fn write_prop_shape_value(
             let expr = source
                 .get(expr_range.start as usize..expr_range.end as usize)
                 .unwrap_or("");
-            buf.push_str("...(");
+            crate::nodes::spread::write_spread_dots(buf, attr_range);
+            buf.push('(');
             buf.append_with_source(expr, *expr_range);
             buf.push_str(")");
         }

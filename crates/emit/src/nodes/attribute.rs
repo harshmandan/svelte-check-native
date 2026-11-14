@@ -267,6 +267,9 @@ pub(crate) fn write_attribute_key(
     buf.append_with_source("\":", close);
 }
 
+/// Writes a plain attribute as one line of an element's attrs object.
+/// Returns whether its value was a comma sequence, whose separator ends
+/// the line (see [`write_value`]).
 pub(crate) fn emit_plain(
     buf: &mut EmitBuffer,
     source: &str,
@@ -274,7 +277,7 @@ pub(crate) fn emit_plain(
     depth: usize,
     should_lowercase: bool,
     parent_is_element: bool,
-) {
+) -> bool {
     let indent = "    ".repeat(depth);
     let name = p.name.as_str();
     let name_range = svn_core::Range::new(p.range.start, p.range.start + name.len() as u32);
@@ -299,6 +302,7 @@ pub(crate) fn emit_plain(
             buf.push_str(key_prefix);
             write_attribute_key(buf, &key_name, name_range, false);
             let _ = writeln!(buf, " {value}{line_suffix}");
+            false
         }
         Some(v) => {
             // numberOnlyAttributes: a plain number text on an element is
@@ -315,11 +319,11 @@ pub(crate) fn emit_plain(
                     buf.push_str(key_prefix);
                     write_attribute_key(buf, &key_name, name_range, true);
                     let _ = writeln!(buf, " {content}{line_suffix}");
-                    return;
+                    return false;
                 }
             }
             if plain_value_is_dropped(source, v) {
-                return;
+                return false;
             }
             buf.push_str(&indent);
             buf.push_str(key_prefix);
@@ -328,6 +332,7 @@ pub(crate) fn emit_plain(
             let after_value = emit_plain_value(buf, source, v);
             write_value_suffix(buf, line_suffix, after_value);
             buf.push('\n');
+            after_value.is_some()
         }
     }
 }
@@ -438,21 +443,24 @@ pub(crate) fn emit_plain_value(
     None
 }
 
+/// Writes an `{expr}` attribute as one line of an element's attrs
+/// object. Returns whether its value was a comma sequence, whose
+/// separator ends the line (see [`write_value`]).
 pub(crate) fn emit_expression(
     buf: &mut EmitBuffer,
     source: &str,
     e: &svn_parser::ExpressionAttr,
     depth: usize,
     should_lowercase: bool,
-) {
+) -> bool {
     let indent = "    ".repeat(depth);
     let Some(expr) = source.get(e.expression_range.start as usize..e.expression_range.end as usize)
     else {
-        return;
+        return false;
     };
     let trimmed = expr.trim();
     if trimmed.is_empty() {
-        return;
+        return false;
     }
     let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
     let start = e.expression_range.start + leading_ws;
@@ -483,6 +491,7 @@ pub(crate) fn emit_expression(
     };
     write_value_suffix(buf, line_suffix, after_sequence.or_else(brace));
     buf.push('\n');
+    after_sequence.is_some()
 }
 
 /// Writes an attribute value, whose text `expr` starts at `start` in

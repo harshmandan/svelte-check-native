@@ -66,6 +66,199 @@ return { props: {} as Record<string, never>, exports: {}, bindings: "", slots: {
 const ElementBare__SvelteComponent_ = __sveltets_2_isomorphic_component(__sveltets_2_with_any_event($$render()));
 /*Ωignore_startΩ*/type ElementBare__SvelteComponent_ = InstanceType<typeof ElementBare__SvelteComponent_>;
 /*Ωignore_endΩ*/export default ElementBare__SvelteComponent_;
+// === ElementBeforeAttach.svelte ===
+///<reference types="svelte" />
+;function $$render() {
+
+    let s = 1;
+    let r = {};
+    let id = "x";
+    function f(node: HTMLElement) {}
+;
+async () => {
+ { svelteHTML.createElement("div", {  "title":s, 2,[Symbol("@attach")]:f,}); }
+};
+return { props: {} as Record<string, never>, exports: {}, bindings: "", slots: {}, events: {} }}
+const ElementBeforeAttach__SvelteComponent_ = __sveltets_2_isomorphic_component(__sveltets_2_with_any_event($$render()));
+/*Ωignore_startΩ*/type ElementBeforeAttach__SvelteComponent_ = InstanceType<typeof ElementBeforeAttach__SvelteComponent_>;
+/*Ωignore_endΩ*/export default ElementBeforeAttach__SvelteComponent_;
+// === ElementBeforeAttribute.svelte ===
+///<reference types="svelte" />
+;function $$render() {
+
+    let s = 1;
+    let r = {};
+    let id = "x";
+    function f(node: HTMLElement) {}
+;
+async () => {
+ { svelteHTML.createElement("div", {   "title":s, 2,"id":`x`,}); }
+};
+return { props: {} as Record<string, never>, exports: {}, bindings: "", slots: {}, events: {} }}
+const ElementBeforeAttribute__SvelteComponent_ = __sveltets_2_isomorphic_component(__sveltets_2_with_any_event($$render()));
+/*Ωignore_startΩ*/type ElementBeforeAttribute__SvelteComponent_ = InstanceType<typeof ElementBeforeAttribute__SvelteComponent_>;
+/*Ωignore_endΩ*/export default ElementBeforeAttribute__SvelteComponent_;
+// === ElementBeforeAttributeOnNextLine.svelte ===
+///<reference types="svelte" />
+;function $$render() {
+
+    let s = 1;
+    let r = {};
+    let id = "x";
+    function f(node: HTMLElement) {}
+;
+async () => {
+ { svelteHTML.createElement("div", {   "title":s, 2,"id":`x`,}); }
+};
+return { props: {} as Record<string, never>, exports: {}, bindings: "", slots: {}, events: {} }}
+const ElementBeforeAttributeOnNextLine__SvelteComponent_ = __sveltets_2_isomorphic_component(__sveltets_2_with_any_event($$render()));
+/*Ωignore_startΩ*/type ElementBeforeAttributeOnNextLine__SvelteComponent_ = InstanceType<typeof ElementBeforeAttributeOnNextLine__SvelteComponent_>;
+/*Ωignore_endΩ*/export default ElementBeforeAttributeOnNextLine__SvelteComponent_;
+// === ElementBeforeBooleanAttribute.svelte ===
+///<reference types="svelte" />
+;function $$render() {
+
+    let s = 1;
+    let r = {};
+    let id = "x";
+    function f(node: HTMLElement) {}
+;
+async () => {
+ { svelteHTML.createElement("div", {  "title":s, 2,"hidden":true,}); }
+};
+return { props: {} as Record<string, never>, exports: {}, bindings: "", slots: {}, events: {} }}
+const ElementBeforeBooleanAttribute__SvelteComponent_ = __sveltets_2_isomorphic_component(__sveltets_2_with_any_event($$render()));
+/*Ωignore_startΩ*/type ElementBeforeBooleanAttribute__SvelteComponent_ = InstanceType<typeof ElementBeforeBooleanAttribute__SvelteComponent_>;
+/*Ωignore_endΩ*/export default ElementBeforeBooleanAttribute__SvelteComponent_;
+// === ElementBeforeComment.svelte ===
+///<reference types="svelte" />
+;function $$render() {
+
+    let s = 1;
+    let r = {};
+    let id = "x";
+    function f(node: HTMLElement) {}
+;
+async () => {
+ { svelteHTML.createElement("div", {   "title":s, 2,/* c */
+"id":`x`,}); }
+};
+return { props: {} as Record<string, never>, exports: {}, bindings: "", slots: {}, events: {} }}
+const ElementBeforeComment__SvelteComponent_ = __sveltets_2_isomorphic_component(__sveltets_2_with_any_event($$render()));
+/*Ωignore_startΩ*/type ElementBeforeComment__SvelteComponent_ = InstanceType<typeof ElementBeforeComment__SvelteComponent_>;
+/*Ωignore_endΩ*/export default ElementBeforeComment__SvelteComponent_;
+// === ElementBeforeDataAttribute.svelte ===
+///<reference types="svelte" />
+;function $$render() {
+
+    let s = 1;
+    let r = {};
+    let id = "x";
+    function f(node: HTMLElement) {}
+;
+async () => {
+ { svelteHTML.createElement("div", {   "title":s, 2,...__sveltets_2_empty({"data-y":`1`}),}); }
+};
+return { props: {} as Record<string, never>, exports: {}, bindings: "", slots: {}, events: {} }}
+const ElementBeforeDataAttribute__SvelteComponent_ = __sveltets_2_isomorphic_component(__sveltets_2_with_any_event($$render()));
+/*Ωignore_startΩ*/type ElementBeforeDataAttribute__SvelteComponent_ = InstanceType<typeof ElementBeforeDataAttribute__SvelteComponent_>;
+/*Ωignore_endΩ*/export default ElementBeforeDataAttribute__SvelteComponent_;
+// === ElementBeforeDirectiveThenAttribute.svelte ===
+///<reference types="svelte" />
+;function $$render() {
+
+    let s = 1;
+    let r = {};
+    let id = "x";
+    function f(node: HTMLElement) {}
+;
+async () => {
+ { svelteHTML.createElement("div", {    "title":s, 2,"id":`x`,});true; }
+};
+return { props: {} as Record<string, never>, exports: {}, bindings: "", slots: {}, events: {} }}
+const ElementBeforeDirectiveThenAttribute__SvelteComponent_ = __sveltets_2_isomorphic_component(__sveltets_2_with_any_event($$render()));
+/*Ωignore_startΩ*/type ElementBeforeDirectiveThenAttribute__SvelteComponent_ = InstanceType<typeof ElementBeforeDirectiveThenAttribute__SvelteComponent_>;
+/*Ωignore_endΩ*/export default ElementBeforeDirectiveThenAttribute__SvelteComponent_;
+// === ElementBeforeEventHandler.svelte ===
+///<reference types="svelte" />
+;function $$render() {
+
+    let s = 1;
+    let r = {};
+    let id = "x";
+    function f(node: HTMLElement) {}
+;
+async () => {
+ { svelteHTML.createElement("button", {   "title":s, 2,"on:click":() => {},}); }
+};
+return { props: {} as Record<string, never>, exports: {}, bindings: "", slots: {}, events: {} }}
+const ElementBeforeEventHandler__SvelteComponent_ = __sveltets_2_isomorphic_component(__sveltets_2_with_any_event($$render()));
+/*Ωignore_startΩ*/type ElementBeforeEventHandler__SvelteComponent_ = InstanceType<typeof ElementBeforeEventHandler__SvelteComponent_>;
+/*Ωignore_endΩ*/export default ElementBeforeEventHandler__SvelteComponent_;
+// === ElementBeforeSequence.svelte ===
+///<reference types="svelte" />
+;function $$render() {
+
+    let s = 1;
+    let r = {};
+    let id = "x";
+    function f(node: HTMLElement) {}
+;
+async () => {
+  { svelteHTML.createElement("div", {   "title":s, 2,"id":s, 3,}); }
+};
+return { props: {} as Record<string, never>, exports: {}, bindings: "", slots: {}, events: {} }}
+const ElementBeforeSequence__SvelteComponent_ = __sveltets_2_isomorphic_component(__sveltets_2_with_any_event($$render()));
+/*Ωignore_startΩ*/type ElementBeforeSequence__SvelteComponent_ = InstanceType<typeof ElementBeforeSequence__SvelteComponent_>;
+/*Ωignore_endΩ*/export default ElementBeforeSequence__SvelteComponent_;
+// === ElementBeforeShorthand.svelte ===
+///<reference types="svelte" />
+;function $$render() {
+
+    let s = 1;
+    let r = {};
+    let id = "x";
+    function f(node: HTMLElement) {}
+;
+async () => {
+ { svelteHTML.createElement("div", {  "title":s, 2,id,}); }
+};
+return { props: {} as Record<string, never>, exports: {}, bindings: "", slots: {}, events: {} }}
+const ElementBeforeShorthand__SvelteComponent_ = __sveltets_2_isomorphic_component(__sveltets_2_with_any_event($$render()));
+/*Ωignore_startΩ*/type ElementBeforeShorthand__SvelteComponent_ = InstanceType<typeof ElementBeforeShorthand__SvelteComponent_>;
+/*Ωignore_endΩ*/export default ElementBeforeShorthand__SvelteComponent_;
+// === ElementBeforeSpacedSpread.svelte ===
+///<reference types="svelte" />
+;function $$render() {
+
+    let s = 1;
+    let r = {};
+    let id = "x";
+    function f(node: HTMLElement) {}
+;
+async () => {
+ { svelteHTML.createElement("div", {  "title":s, 2, ...r ,}); }
+};
+return { props: {} as Record<string, never>, exports: {}, bindings: "", slots: {}, events: {} }}
+const ElementBeforeSpacedSpread__SvelteComponent_ = __sveltets_2_isomorphic_component(__sveltets_2_with_any_event($$render()));
+/*Ωignore_startΩ*/type ElementBeforeSpacedSpread__SvelteComponent_ = InstanceType<typeof ElementBeforeSpacedSpread__SvelteComponent_>;
+/*Ωignore_endΩ*/export default ElementBeforeSpacedSpread__SvelteComponent_;
+// === ElementBeforeSpread.svelte ===
+///<reference types="svelte" />
+;function $$render() {
+
+    let s = 1;
+    let r = {};
+    let id = "x";
+    function f(node: HTMLElement) {}
+;
+async () => {
+ { svelteHTML.createElement("div", {  "title":s, 2,...r,}); }
+};
+return { props: {} as Record<string, never>, exports: {}, bindings: "", slots: {}, events: {} }}
+const ElementBeforeSpread__SvelteComponent_ = __sveltets_2_isomorphic_component(__sveltets_2_with_any_event($$render()));
+/*Ωignore_startΩ*/type ElementBeforeSpread__SvelteComponent_ = InstanceType<typeof ElementBeforeSpread__SvelteComponent_>;
+/*Ωignore_endΩ*/export default ElementBeforeSpread__SvelteComponent_;
 // === ElementParenthesized.svelte ===
 ///<reference types="svelte" />
 ;function $$render() {
@@ -92,6 +285,22 @@ return { props: {} as Record<string, never>, exports: {}, bindings: "", slots: {
 const ElementQuoted__SvelteComponent_ = __sveltets_2_isomorphic_component(__sveltets_2_with_any_event($$render()));
 /*Ωignore_startΩ*/type ElementQuoted__SvelteComponent_ = InstanceType<typeof ElementQuoted__SvelteComponent_>;
 /*Ωignore_endΩ*/export default ElementQuoted__SvelteComponent_;
+// === ElementQuotedBeforeAttribute.svelte ===
+///<reference types="svelte" />
+;function $$render() {
+
+    let s = 1;
+    let r = {};
+    let id = "x";
+    function f(node: HTMLElement) {}
+;
+async () => {
+ { svelteHTML.createElement("div", {   "title":s, 2,"id":`x`,}); }
+};
+return { props: {} as Record<string, never>, exports: {}, bindings: "", slots: {}, events: {} }}
+const ElementQuotedBeforeAttribute__SvelteComponent_ = __sveltets_2_isomorphic_component(__sveltets_2_with_any_event($$render()));
+/*Ωignore_startΩ*/type ElementQuotedBeforeAttribute__SvelteComponent_ = InstanceType<typeof ElementQuotedBeforeAttribute__SvelteComponent_>;
+/*Ωignore_endΩ*/export default ElementQuotedBeforeAttribute__SvelteComponent_;
 // === PropAfterProp.svelte ===
 ///<reference types="svelte" />
 ;
@@ -124,6 +333,24 @@ return { props: {} as Record<string, never>, exports: {}, bindings: "", slots: {
 const PropBare__SvelteComponent_ = __sveltets_2_isomorphic_component(__sveltets_2_with_any_event($$render()));
 /*Ωignore_startΩ*/type PropBare__SvelteComponent_ = InstanceType<typeof PropBare__SvelteComponent_>;
 /*Ωignore_endΩ*/export default PropBare__SvelteComponent_;
+// === PropBeforeEventHandler.svelte ===
+///<reference types="svelte" />
+;
+import Child from "./Child.svelte";
+function $$render() {
+
+    
+    let s = 1;
+    let r = {};
+    let b = 1;
+;
+async () => {
+ { const $$_dlihC0C = __sveltets_2_ensureComponent(Child); const $$_dlihC0 = new $$_dlihC0C({ target: __sveltets_2_any(), props: {    "a":s, 2,}});$$_dlihC0.$on("click", () => {});}
+};
+return { props: {} as Record<string, never>, exports: {}, bindings: "", slots: {}, events: {} }}
+const PropBeforeEventHandler__SvelteComponent_ = __sveltets_2_isomorphic_component(__sveltets_2_with_any_event($$render()));
+/*Ωignore_startΩ*/type PropBeforeEventHandler__SvelteComponent_ = InstanceType<typeof PropBeforeEventHandler__SvelteComponent_>;
+/*Ωignore_endΩ*/export default PropBeforeEventHandler__SvelteComponent_;
 // === PropBeforeProp.svelte ===
 ///<reference types="svelte" />
 ;
@@ -156,6 +383,60 @@ return { props: {} as Record<string, never>, exports: {}, bindings: "", slots: {
 const PropBeforePropWithSnippet__SvelteComponent_ = __sveltets_2_isomorphic_component(__sveltets_2_with_any_event($$render()));
 /*Ωignore_startΩ*/type PropBeforePropWithSnippet__SvelteComponent_ = InstanceType<typeof PropBeforePropWithSnippet__SvelteComponent_>;
 /*Ωignore_endΩ*/export default PropBeforePropWithSnippet__SvelteComponent_;
+// === PropBeforeShorthand.svelte ===
+///<reference types="svelte" />
+;
+import Child from "./Child.svelte";
+function $$render() {
+
+    
+    let s = 1;
+    let r = {};
+    let b = 1;
+;
+async () => {
+ { const $$_dlihC0C = __sveltets_2_ensureComponent(Child); new $$_dlihC0C({ target: __sveltets_2_any(), props: {   "a":s, 2,b,}});}
+};
+return { props: {} as Record<string, never>, exports: {}, bindings: "", slots: {}, events: {} }}
+const PropBeforeShorthand__SvelteComponent_ = __sveltets_2_isomorphic_component(__sveltets_2_with_any_event($$render()));
+/*Ωignore_startΩ*/type PropBeforeShorthand__SvelteComponent_ = InstanceType<typeof PropBeforeShorthand__SvelteComponent_>;
+/*Ωignore_endΩ*/export default PropBeforeShorthand__SvelteComponent_;
+// === PropBeforeSpacedSpread.svelte ===
+///<reference types="svelte" />
+;
+import Child from "./Child.svelte";
+function $$render() {
+
+    
+    let s = 1;
+    let r = {};
+    let b = 1;
+;
+async () => {
+ { const $$_dlihC0C = __sveltets_2_ensureComponent(Child); new $$_dlihC0C({ target: __sveltets_2_any(), props: {   "a":s, 2, ...r ,}});}
+};
+return { props: {} as Record<string, never>, exports: {}, bindings: "", slots: {}, events: {} }}
+const PropBeforeSpacedSpread__SvelteComponent_ = __sveltets_2_isomorphic_component(__sveltets_2_with_any_event($$render()));
+/*Ωignore_startΩ*/type PropBeforeSpacedSpread__SvelteComponent_ = InstanceType<typeof PropBeforeSpacedSpread__SvelteComponent_>;
+/*Ωignore_endΩ*/export default PropBeforeSpacedSpread__SvelteComponent_;
+// === PropBeforeSpread.svelte ===
+///<reference types="svelte" />
+;
+import Child from "./Child.svelte";
+function $$render() {
+
+    
+    let s = 1;
+    let r = {};
+    let b = 1;
+;
+async () => {
+ { const $$_dlihC0C = __sveltets_2_ensureComponent(Child); new $$_dlihC0C({ target: __sveltets_2_any(), props: {   "a":s, 2,...r,}});}
+};
+return { props: {} as Record<string, never>, exports: {}, bindings: "", slots: {}, events: {} }}
+const PropBeforeSpread__SvelteComponent_ = __sveltets_2_isomorphic_component(__sveltets_2_with_any_event($$render()));
+/*Ωignore_startΩ*/type PropBeforeSpread__SvelteComponent_ = InstanceType<typeof PropBeforeSpread__SvelteComponent_>;
+/*Ωignore_endΩ*/export default PropBeforeSpread__SvelteComponent_;
 // === PropQuoted.svelte ===
 ///<reference types="svelte" />
 ;

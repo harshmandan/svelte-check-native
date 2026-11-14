@@ -21,8 +21,12 @@
 //!   2. `bun` on `PATH`
 //!   3. `node` on `PATH`
 //!
-//! And for `svelte/compiler` in the user's `node_modules` chain, walking
-//! up from the workspace.
+//! And for `svelte/compiler` the way svelte-check loads it for each
+//! component: node's resolution upwards from the component's own
+//! directory, then from where this program is installed (svelte-check
+//! falls back to its own install, which carries `svelte` as a peer).
+//! Components that resolve different `svelte` installs are compiled by
+//! different workers.
 //!
 //! ### Protocol
 //!
@@ -111,16 +115,10 @@ pub struct Worker {
 }
 
 impl Worker {
-    /// Spawn the bridge subprocess. `workspace` is used to locate the
-    /// user's `svelte/compiler` install.
-    pub fn spawn(workspace: &Path) -> Result<Self, BridgeError> {
-        Self::spawn_on(workspace, pick_runtime()?)
-    }
-
-    /// [`Self::spawn`] on the JS runtime at `runtime`.
-    fn spawn_on(workspace: &Path, runtime: PathBuf) -> Result<Self, BridgeError> {
-        let svelte_pkg = locate_svelte(workspace)
-            .ok_or_else(|| BridgeError::SvelteNotFound(workspace.to_path_buf()))?;
+    /// Spawn the bridge subprocess on the `svelte` package `svelte_pkg`
+    /// (the directory holding its `package.json`). `workspace` is where
+    /// the Svelte config is looked for.
+    fn spawn_on(svelte_pkg: &Path, workspace: &Path, runtime: &Path) -> Result<Self, BridgeError> {
         let bridge_path = write_bridge_to_temp()?;
 
         // The bridge does `import { compile } from 'svelte/compiler'`.
@@ -138,7 +136,7 @@ impl Worker {
             .parent()
             .and_then(Path::parent)
             .map(Path::to_path_buf)
-            .ok_or_else(|| BridgeError::SvelteNotFound(workspace.to_path_buf()))?;
+            .ok_or_else(|| BridgeError::SvelteNotFound(svelte_pkg.to_path_buf()))?;
         let workspace_for_cwd = svelte_parent_node_modules
             .parent()
             .map(Path::to_path_buf)
@@ -165,7 +163,7 @@ impl Worker {
         // svelte.config.js) does not produce.
         let svelte_config = locate_svelte_config(workspace);
 
-        let mut cmd = Command::new(&runtime);
+        let mut cmd = Command::new(runtime);
         cmd.arg(&bridge_path);
         cmd.arg(&svelte_compiler_resolved);
         // Empty string means "no config" — keeps argv positional rather
@@ -446,14 +444,54 @@ fn which_in(path_var: &std::ffi::OsStr, pathext: &std::ffi::OsStr, name: &str) -
     None
 }
 
-/// Walk up from `start` looking for `node_modules/svelte/compiler/index.js`
-/// (or `.mjs`). Returns the path to the package directory (containing
-/// `package.json`) on success.
+/// Walk up from `start` looking for `node_modules/svelte/package.json`,
+/// as node resolves a package from a directory. Returns the package
+/// directory on success.
 fn locate_svelte(start: &Path) -> Option<PathBuf> {
     svn_core::walk_up_dirs(start, |dir| {
         let pkg = dir.join(svn_core::NODE_MODULES_DIR).join("svelte");
         (pkg.is_dir() && pkg.join("package.json").is_file()).then_some(pkg)
     })
+}
+
+/// The `svelte` package svelte-check would load the compiler of `file`
+/// from: resolved from the file's directory, else from svelte-check's
+/// own install. Ours is wherever this executable lives (by its real
+/// path, as node gives a module's directory): a package manager places
+/// a peer like `svelte` in a `node_modules` above it.
+fn locate_svelte_for(file: &Path) -> Option<PathBuf> {
+    file.parent().and_then(locate_svelte).or_else(|| {
+        let exe = std::env::current_exe().ok()?;
+        let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+        locate_svelte(exe.parent()?)
+    })
+}
+
+/// The `svelte` package for each of `files` (see [`locate_svelte_for`]),
+/// with the indexes of the files that resolve to it, in first-seen
+/// order. Fails when a file resolves none.
+fn group_by_svelte<'a>(
+    files: impl Iterator<Item = &'a Path>,
+) -> Result<Vec<(PathBuf, Vec<usize>)>, BridgeError> {
+    let mut by_dir: std::collections::HashMap<&Path, PathBuf> = std::collections::HashMap::new();
+    let mut groups: Vec<(PathBuf, Vec<usize>)> = Vec::new();
+    for (i, file) in files.enumerate() {
+        let dir = file.parent().unwrap_or(file);
+        let pkg = match by_dir.get(dir) {
+            Some(pkg) => pkg.clone(),
+            None => {
+                let pkg = locate_svelte_for(file)
+                    .ok_or_else(|| BridgeError::SvelteNotFound(dir.to_path_buf()))?;
+                by_dir.insert(dir, pkg.clone());
+                pkg
+            }
+        };
+        match groups.iter_mut().find(|(p, _)| *p == pkg) {
+            Some((_, members)) => members.push(i),
+            None => groups.push((pkg, vec![i])),
+        }
+    }
+    Ok(groups)
 }
 
 /// Walk up from `start` looking for the user's svelte.config.{js,mjs,cjs}.
@@ -510,16 +548,18 @@ fn write_script_to_temp(name: &str, text: &str) -> std::io::Result<PathBuf> {
 
 /// Process a batch of files through one or more worker subprocesses.
 ///
-/// On large batches the work is split across N workers running in
-/// parallel threads — each owns its own `Worker` (its own JS subprocess)
-/// and processes a contiguous slice of `inputs`. Results are merged in
-/// input order so the output is deterministic.
+/// Files are compiled by the `svelte` their own directory resolves (see
+/// [`locate_svelte_for`]). On large batches each install's files are
+/// split across N workers running in parallel threads — each owns its
+/// own `Worker` (its own JS subprocess) and processes a contiguous slice
+/// of them. Results are merged in input order so the output is
+/// deterministic.
 ///
 /// Worker count is chosen by [`pick_worker_count`] from input size and
 /// `std::thread::available_parallelism`. Single-file or very-small
-/// batches stay on the original single-worker path because the cost of
-/// spawning extra `bun` / `node` processes (and re-importing
-/// `svelte/compiler` in each one) outweighs the parallelism benefit.
+/// batches stay on one worker because the cost of spawning extra `bun`
+/// / `node` processes (and re-importing `svelte/compiler` in each one)
+/// outweighs the parallelism benefit.
 ///
 /// Consumes `inputs` so the caller's `PathBuf`s move through the worker
 /// into the result without re-cloning. Failures on individual files
@@ -531,14 +571,28 @@ pub fn compile_batch(
     if inputs.is_empty() {
         return Ok(Vec::new());
     }
-    let n_workers = pick_worker_count(inputs.len());
-    if n_workers <= 1 {
-        return compile_chunk(workspace, inputs);
-    }
+    let runtime = pick_runtime()?;
+    let groups = group_by_svelte(inputs.iter().map(|(p, _)| p.as_path()))?;
+    let n_inputs = inputs.len();
+    let mut slots: Vec<Option<(PathBuf, String)>> = inputs.into_iter().map(Some).collect();
 
-    // Split into n_workers contiguous chunks, preserving input order so
-    // the merged result reads back in the caller's original order.
-    let chunks = split_into_chunks(inputs, n_workers);
+    // Each install's files are split into contiguous chunks, keeping
+    // their indexes so the merged result reads back in the caller's
+    // original order.
+    type Job = (PathBuf, Vec<(usize, (PathBuf, String))>);
+    let mut jobs: Vec<Job> = Vec::new();
+    for (pkg, members) in groups {
+        let files: Vec<(usize, (PathBuf, String))> = members
+            .into_iter()
+            .filter_map(|i| Some((i, slots[i].take()?)))
+            .collect();
+        let n_workers = pick_worker_count(files.len());
+        for chunk in split_into_chunks(files, n_workers) {
+            if !chunk.is_empty() {
+                jobs.push((pkg.clone(), chunk));
+            }
+        }
+    }
 
     // Each chunk runs on its own thread, owning its own Worker. We
     // spawn workers from inside the thread (not on the main thread)
@@ -546,25 +600,42 @@ pub fn compile_batch(
     // hot startup path is the `import svelte/compiler` inside each
     // bridge.mjs, which is single-threaded JS but runs concurrently
     // across processes.
-    type ChunkResult = Result<Vec<(PathBuf, Vec<CompilerDiagnostic>)>, BridgeError>;
-    let mut handles: Vec<JoinHandle<ChunkResult>> = Vec::with_capacity(chunks.len());
-    for chunk in chunks {
-        let workspace = workspace.to_path_buf();
-        let h = thread::Builder::new()
-            .name("svn-bridge-worker".into())
-            .spawn(move || compile_chunk(&workspace, chunk))
-            .map_err(BridgeError::Io)?;
-        handles.push(h);
-    }
+    type ChunkResult = Result<Vec<(usize, (PathBuf, Vec<CompilerDiagnostic>))>, BridgeError>;
+    let results: Vec<ChunkResult> = thread::scope(|scope| {
+        let handles: Vec<_> = jobs
+            .into_iter()
+            .map(|(pkg, chunk)| {
+                let runtime = &runtime;
+                thread::Builder::new()
+                    .name("svn-bridge-worker".into())
+                    .spawn_scoped(scope, move || {
+                        let (indexes, files): (Vec<usize>, Vec<(PathBuf, String)>) =
+                            chunk.into_iter().unzip();
+                        let out = compile_chunk(&pkg, workspace, runtime, files)?;
+                        Ok(indexes.into_iter().zip(out).collect())
+                    })
+                    .map_err(BridgeError::Io)
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| {
+                // join() returns Err if the worker thread panicked; treat
+                // as SubprocessDied since we have no diagnostics to fall
+                // back on.
+                h?.join().map_err(|_| BridgeError::SubprocessDied)?
+            })
+            .collect()
+    });
 
-    let mut out: Vec<(PathBuf, Vec<CompilerDiagnostic>)> = Vec::new();
-    for h in handles {
-        // join() returns Err if the worker thread panicked; treat as
-        // SubprocessDied since we have no diagnostics to fall back on.
-        let chunk_result = h.join().map_err(|_| BridgeError::SubprocessDied)?;
-        out.extend(chunk_result?);
+    let mut ordered: Vec<Option<(PathBuf, Vec<CompilerDiagnostic>)>> =
+        (0..n_inputs).map(|_| None).collect();
+    for result in results {
+        for (i, answer) in result? {
+            ordered[i] = Some(answer);
+        }
     }
-    Ok(out)
+    Ok(ordered.into_iter().flatten().collect())
 }
 
 /// [`Rejection`] for each file. One worker: callers pass the few files
@@ -578,7 +649,7 @@ pub fn rejections(
         return Ok(Vec::new());
     }
     let runtime = pick_runtime()?;
-    let mut out = rejections_on(workspace, inputs, runtime.clone())?;
+    let mut out = rejections_on(workspace, inputs, &runtime)?;
 
     // A JavaScript exception's message is the engine's own wording, and
     // svelte-check runs on Node: the same broken read is "Cannot read
@@ -601,7 +672,7 @@ pub fn rejections(
             .filter(|(path, _)| out.iter().any(|(p, r)| p == path && broke(r)))
             .cloned()
             .collect();
-        if let Ok(answers) = rejections_on(workspace, &again, node) {
+        if let Ok(answers) = rejections_on(workspace, &again, &node) {
             for (path, answer) in answers {
                 if let Some(slot) = out.iter_mut().find(|(p, _)| *p == path) {
                     slot.1 = answer;
@@ -616,26 +687,31 @@ pub fn rejections(
 fn rejections_on(
     workspace: &Path,
     inputs: &[(PathBuf, String)],
-    runtime: PathBuf,
+    runtime: &Path,
 ) -> Result<Vec<(PathBuf, Rejection)>, BridgeError> {
-    let mut worker = Worker::spawn_on(workspace, runtime)?;
     let mut out = Vec::with_capacity(inputs.len());
-    for (path, source) in inputs {
-        match worker.rejection(path, source) {
-            Ok(rejection) => out.push((path.clone(), rejection)),
-            Err(BridgeError::SubprocessDied) => return Err(BridgeError::SubprocessDied),
-            Err(_) => {}
+    for (pkg, members) in group_by_svelte(inputs.iter().map(|(p, _)| p.as_path()))? {
+        let mut worker = Worker::spawn_on(&pkg, workspace, runtime)?;
+        for (path, source) in members.into_iter().map(|i| &inputs[i]) {
+            match worker.rejection(path, source) {
+                Ok(rejection) => out.push((path.clone(), rejection)),
+                Err(BridgeError::SubprocessDied) => return Err(BridgeError::SubprocessDied),
+                Err(_) => {}
+            }
         }
     }
     Ok(out)
 }
 
-/// Run a single chunk of inputs through one freshly-spawned `Worker`.
+/// Run a single chunk of inputs through one freshly-spawned `Worker` on
+/// the `svelte` package `svelte_pkg`.
 fn compile_chunk(
+    svelte_pkg: &Path,
     workspace: &Path,
+    runtime: &Path,
     inputs: Vec<(PathBuf, String)>,
 ) -> Result<Vec<(PathBuf, Vec<CompilerDiagnostic>)>, BridgeError> {
-    let mut worker = Worker::spawn(workspace)?;
+    let mut worker = Worker::spawn_on(svelte_pkg, workspace, runtime)?;
     let mut out = Vec::with_capacity(inputs.len());
     for (path, source) in inputs {
         match worker.compile_one(&path, &source) {

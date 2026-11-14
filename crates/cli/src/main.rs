@@ -2589,18 +2589,22 @@ fn check_project(
                 .collect();
             // A rejected component inside the tsconfig is a file of the
             // default engine's program (as the script it falls back to),
-            // so what it imports is in the program as well.
+            // so what that script imports is in the program as well.
+            let rejected_inside: Vec<PathBuf> = svelte_sources[..svelte_sources_in_scope_end]
+                .iter()
+                .filter(|(p, _)| dropped_files.contains(p))
+                .map(|(p, _)| p.clone())
+                .collect();
             let mut importers = program_files.clone();
-            importers.extend(
-                svelte_sources[..svelte_sources_in_scope_end]
-                    .iter()
-                    .filter(|(p, _)| dropped_files.contains(p))
-                    .map(|(p, _)| p.clone()),
-            );
-            let imported: std::collections::HashSet<PathBuf> =
-                svn_enhance::components_imported_by(tsconfig, &importers, &rejected_outside)
-                    .into_iter()
-                    .collect();
+            importers.extend(rejected_inside.iter().cloned());
+            let imported: std::collections::HashSet<PathBuf> = svn_enhance::components_imported_by(
+                tsconfig,
+                &importers,
+                &rejected_inside,
+                &rejected_outside,
+            )
+            .into_iter()
+            .collect();
             let rejected: Vec<(PathBuf, String)> = svelte_sources
                 .iter()
                 .enumerate()

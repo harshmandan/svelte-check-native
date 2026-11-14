@@ -116,6 +116,26 @@ pub(crate) fn collect_component(
     dedup(out)
 }
 
+/// The references in what the language server makes of a component
+/// svelte2tsx can't convert: its instance script alone, else its module
+/// script. `is_ts` is the component's language, as for
+/// [`collect_component`].
+pub(crate) fn collect_fallback(doc: &Document<'_>, is_ts: bool) -> Vec<SvelteImportRef> {
+    let mut out = Vec::new();
+    if let Some(section) = doc.instance_script.as_ref().or(doc.module_script.as_ref()) {
+        let allocator = Allocator::default();
+        let parsed = svn_parser::parse_script_body(&allocator, section.content, section.lang);
+        if !parsed.panicked {
+            let origin = Origin {
+                base: section.content_range.start,
+                prefix: 0,
+            };
+            collect_program(&parsed.program, origin, !is_ts, &mut out);
+        }
+    }
+    dedup(out)
+}
+
 /// The same literal can be reached twice (a snippet parameter's default
 /// is both part of the parameter list and an expression of its own).
 fn dedup(mut refs: Vec<SvelteImportRef>) -> Vec<SvelteImportRef> {

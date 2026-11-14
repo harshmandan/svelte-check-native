@@ -329,9 +329,15 @@ pub fn missing_svelte_import_diagnostics_in_script(
 /// `include` as well. Imports resolve as everywhere in this crate, but
 /// without the guard against a user-authored `*.svelte` wildcard, which
 /// only keeps `TS2307`s from firing.
+///
+/// `components` and the program files among `rejected` are components
+/// svelte2tsx can't convert. The program holds such a component as the
+/// script the language server falls back to (the instance script, else
+/// the module script), so only that script's imports are followed.
 pub fn components_imported_by(
     tsconfig: &Path,
     program_files: &[PathBuf],
+    rejected: &[PathBuf],
     components: &[PathBuf],
 ) -> Vec<PathBuf> {
     if components.is_empty() {
@@ -339,6 +345,11 @@ pub fn components_imported_by(
     }
     let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     let wanted: HashSet<PathBuf> = components.iter().map(|c| canonical(c)).collect();
+    let fallback_only: HashSet<PathBuf> = rejected
+        .iter()
+        .map(|c| canonical(c))
+        .chain(wanted.iter().cloned())
+        .collect();
     let resolver = Resolver::new(resolve_options(tsconfig));
     let mut imported: HashSet<PathBuf> = HashSet::new();
     // A component found this way is a file of the program too, and what
@@ -359,10 +370,14 @@ pub fn components_imported_by(
         }
         let refs = if file.extension().is_some_and(|e| e == "svelte") {
             let (doc, _) = svn_parser::parse_sections(&source);
-            let (fragment, _) =
-                svn_parser::parse_all_template_runs(&source, &doc.template.text_runs);
             let is_ts = svn_parser::is_ts_svelte(&source);
-            svelte_refs::collect_component(&doc, &fragment, &source, is_ts)
+            if fallback_only.contains(&canonical(file)) {
+                svelte_refs::collect_fallback(&doc, is_ts)
+            } else {
+                let (fragment, _) =
+                    svn_parser::parse_all_template_runs(&source, &doc.template.text_runs);
+                svelte_refs::collect_component(&doc, &fragment, &source, is_ts)
+            }
         } else {
             let Ok(source_type) = SourceType::from_path(file) else {
                 continue;

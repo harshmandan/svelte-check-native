@@ -15,7 +15,10 @@
 //
 // To move the port to newer sources, check those out and pass --repin:
 // the pins are rewritten with the corpus, and the port has to agree with
-// the new answers before the tests pass again.
+// the new answers before the tests pass again. A repin that moves acorn
+// needs the acorn-typescript checkout as well, since acorn answers both
+// corpora; without it the script refuses rather than leave
+// typescript.json answered by the old acorn.
 //
 // The second argument is where the `acorn` package the Svelte compiler
 // uses is installed (any project with svelte in node_modules). The acorn
@@ -258,6 +261,17 @@ const acorn_commit = pinned_commit('acorn', checkout);
 if (!repin && pins.acorn.version !== acorn.version) {
 	console.error(
 		`acorn ${acorn.version} is installed in ${installed}, and ${pins.acorn.version} is pinned; pass --repin to move to it`
+	);
+	process.exit(2);
+}
+// typescript.json is answered by acorn too, through the plugin: moving
+// acorn without regenerating it would leave that corpus answered by the
+// old acorn under the new pin. A repin that moves acorn needs both.
+const acorn_moves = pins.acorn.version !== acorn.version || pins.acorn.commit !== acorn_commit;
+if (repin && acorn_moves && !ts_checkout) {
+	console.error(
+		`--repin moves acorn to ${acorn.version} (${acorn_commit}), which also answers typescript.json;\n` +
+			'pass the acorn-typescript checkout too, so both corpora are answered by the new acorn'
 	);
 	process.exit(2);
 }

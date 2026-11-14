@@ -80,6 +80,10 @@ pub(crate) enum Bind {
     TsExportOnly,
     TsEnum,
     TsConstEnum,
+    /// An imported name: kept apart from the scope's other names, so
+    /// that a declaration may share it (TypeScript merges the two, or
+    /// reports the clash itself).
+    TsImport,
 }
 
 /// A list of names that a snapshot of the parser shares until one
@@ -155,6 +159,8 @@ pub(crate) enum Ty {
     TsTypeAliasDeclaration,
     TsEnumDeclaration,
     TsModuleDeclaration,
+    /// `export <declaration>` in TypeScript: `a` is the declaration.
+    ExportNamedDeclaration,
     TsIndexSignature,
     TemplateLiteral,
     UnaryExpression,
@@ -462,6 +468,9 @@ pub(crate) struct Parser {
     /// The names the module exports so far.
     pub exports: Names,
     pub scope_stack: Vec<Scope>,
+    /// acorn-typescript's: the names imported at the top level, and in
+    /// each namespace being read.
+    pub imports_stack: Vec<Names>,
     pub private_name_stack: Vec<PrivateNames>,
     /// How deep expressions are nested, and statements. acorn's stack
     /// runs out by expression nesting whatever the statement around it.
@@ -574,6 +583,7 @@ impl Parser {
             undefined_exports: std::rc::Rc::default(),
             exports: Names::default(),
             scope_stack: Vec::new(),
+            imports_stack: vec![Names::default()],
             private_name_stack: Vec::new(),
             depth: 0,
             statement_depth: 0,
@@ -651,6 +661,15 @@ impl Parser {
             column_of: false,
             no_position: false,
         }))
+    }
+
+    /// acorn-typescript lets some of acorn's errors pass in an ambient
+    /// context (`declare …`, a declaration file's contents): a reserved
+    /// word used as a name, a strict-mode binding, `await` and
+    /// `arguments` where acorn forbids them, a static field named
+    /// `prototype`. The check that would raise goes on as if it had not.
+    pub(crate) fn ambient_allows_names(&self) -> bool {
+        self.ts && self.is_ambient_context
     }
 
     /// Guards one level of expression nesting.
@@ -770,6 +789,9 @@ impl Parser {
         } else {
             flags
         };
+        if flags & TS_SCOPE_TS_MODULE != 0 {
+            self.imports_stack.push(Names::default());
+        }
         self.scope_stack.push(Scope {
             flags,
             var: Names::default(),
@@ -782,7 +804,11 @@ impl Parser {
     }
 
     pub(crate) fn exit_scope(&mut self) {
-        self.scope_stack.pop();
+        if let Some(scope) = self.scope_stack.pop()
+            && scope.flags & TS_SCOPE_TS_MODULE != 0
+        {
+            self.imports_stack.pop();
+        }
     }
 
     fn treat_functions_as_var_in(flags: u32) -> bool {
@@ -864,7 +890,13 @@ impl Parser {
     }
 
     pub(crate) fn check_local_export(&mut self, name: &str, start: u32) {
-        if self.ts && self.ts_exportable_without_binding(name) {
+        // acorn-typescript asks for a declaration only at the top level,
+        // and not of an import, a type or a name only `export` sees.
+        if self.ts
+            && (self.ts_has_import(name, false)
+                || self.ts_exportable_without_binding(name)
+                || self.scope_stack.len() > 1)
+        {
             return;
         }
         let top = &self.scope_stack[0];

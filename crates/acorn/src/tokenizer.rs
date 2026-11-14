@@ -475,13 +475,18 @@ impl Parser {
 
     fn get_token_from_code(&mut self, code: i32) -> PResult<()> {
         if self.ts {
-            if self.in_type {
-                // In a type every `<` and `>` stands alone.
-                if code == 62 || code == 60 {
-                    self.finish_op(Tok::Relational, 1);
-                    return Ok(());
-                }
-            } else if code == 64 {
+            // U+0085 (next line) is white space to TypeScript, which
+            // acorn does not skip: it is stepped over here.
+            if code == 133 {
+                self.pos += 1;
+                return self.next_token();
+            }
+            // In a type every `<` and `>` stands alone.
+            if self.in_type && (code == 62 || code == 60) {
+                self.finish_op(Tok::Relational, 1);
+                return Ok(());
+            }
+            if code == 64 {
                 self.pos += 1;
                 self.finish_token(Tok::At, String::new());
                 return Ok(());

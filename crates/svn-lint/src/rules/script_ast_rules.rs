@@ -89,6 +89,10 @@ pub(crate) enum ErrorGate {
     DerivedExport { name: SmolStr, scope: ScopeId },
     /// An exported name that is state the component reassigns.
     ReassignedStateExport { name: SmolStr, scope: ScopeId },
+    /// A variable of the instance script's top level: an error when
+    /// one of the names it declares is an import, which the compiler
+    /// keeps in the module's scope whichever script imports it.
+    ModuleImport { names: Vec<SmolStr> },
 }
 
 impl ErrorGate {
@@ -114,6 +118,12 @@ impl ErrorGate {
                     matches!(b.kind, BindingKind::State | BindingKind::RawState) && b.reassigned
                 })
             }
+            Self::ModuleImport { names } => names.iter().any(|name| {
+                tree.scope(tree.module_root)
+                    .declarations
+                    .get(name)
+                    .is_some_and(|b| tree.binding(*b).declaration_kind == DeclarationKind::Import)
+            }),
             Self::RestProp { object, scope } => tree.resolve(*scope, object).is_some_and(|b| {
                 let b = tree.binding(b);
                 b.kind == BindingKind::RestProp && b.declaration_kind != DeclarationKind::Synthetic

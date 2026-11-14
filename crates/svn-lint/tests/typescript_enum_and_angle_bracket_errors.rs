@@ -306,9 +306,10 @@ const CASES: &[(&str, Expected)] = &[
         "<script lang=\"ts\">x = { m<let>() {} };</script>",
         Some(("js_parse_error", "The keyword 'let' is reserved", 26, 26)),
     ),
+    // A declared function: a reserved word passes for a name there.
     (
         "<script lang=\"ts\">declare function f<let>(): void;</script>",
-        Some(("js_parse_error", "The keyword 'let' is reserved", 37, 37)),
+        None,
     ),
     (
         "<script lang=\"ts\">function f<await>() {}</script>",

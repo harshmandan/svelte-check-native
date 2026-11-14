@@ -3,15 +3,32 @@
 // acorn-typescript's) with what the parser does with it, read the four
 // ways the Svelte compiler reads text.
 //
-//   git clone --depth 1 --branch <version> https://github.com/acornjs/acorn bench/_acorn
-//   git clone --depth 1 https://github.com/sveltejs/acorn-typescript bench/_acorn_typescript
+//   git clone https://github.com/acornjs/acorn bench/_acorn
+//   git clone https://github.com/sveltejs/acorn-typescript bench/_acorn_typescript
 //   node scripts/acorn-corpus-oracle.mjs bench/_acorn <dir with node_modules> [bench/_acorn_typescript]
 //
-// The second argument is where the `acorn` and `@sveltejs/acorn-typescript`
-// packages the Svelte compiler uses are installed (any project with
-// svelte in node_modules). The acorn checkout has to be at that
-// version. Only inputs are taken from the checkouts; the parsers that
-// answer are the installed ones.
+// Both checkouts are pinned by commit in crates/acorn/tests/corpus/versions.json,
+// next to the corpus they answered. The script refuses a checkout at any
+// other commit, or one with changed files:
+//
+//   git -C bench/_acorn checkout <the pinned commit>
+//
+// To move the port to newer sources, check those out and pass --repin:
+// the pins are rewritten with the corpus, and the port has to agree with
+// the new answers before the tests pass again.
+//
+// The second argument is where the `acorn` package the Svelte compiler
+// uses is installed (any project with svelte in node_modules). The acorn
+// checkout has to be at that version; only inputs are taken from it, and
+// the installed acorn answers.
+//
+// acorn-typescript answers from its checkout, built: the port follows
+// its source as it stands, ahead of the last release. Build it first,
+// with any esbuild, and give it the installed acorn to load:
+//
+//   (cd bench/_acorn_typescript &&
+//     esbuild src/index.ts --bundle --format=esm --outfile=index.js --platform=node --external:acorn &&
+//     mkdir -p node_modules && ln -s <dir with node_modules>/node_modules/acorn node_modules/acorn)
 //
 // With MUTANTS_DIR set it also writes javascript-mutants.json and
 // typescript-mutants.json there: every input with a few tokens dropped,
@@ -23,14 +40,49 @@
 //   ACORN_CORPUS_EXTRA=<dir>/typescript-mutants.json cargo test -p svn-acorn --test corpus
 
 import { createRequire } from 'node:module';
-import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const [checkout, installed, ts_checkout] = process.argv.slice(2).map((p) => resolve(p));
+const args = process.argv.slice(2);
+const repin = args.includes('--repin');
+const [checkout, installed, ts_checkout] = args.filter((a) => a !== '--repin').map((p) => resolve(p));
 if (!checkout || !installed) {
-	console.error('usage: acorn-corpus-oracle.mjs <acorn checkout> <dir with node_modules/acorn>');
+	console.error(
+		'usage: acorn-corpus-oracle.mjs [--repin] <acorn checkout> <dir with node_modules/acorn> [acorn-typescript checkout]'
+	);
 	process.exit(2);
+}
+
+const corpus_dir = join(fileURLToPath(new URL('..', import.meta.url)), 'crates/acorn/tests/corpus');
+const pins_file = join(corpus_dir, 'versions.json');
+/** @type {Record<string, { version: string, commit: string }>} */
+const pins = JSON.parse(readFileSync(pins_file, 'utf8'));
+
+const git = (dir, ...command) => execFileSync('git', ['-C', dir, ...command], { encoding: 'utf8' }).trim();
+
+/**
+ * The commit `dir` is at, which has to be the one pinned for `name`
+ * unless the pins are being moved. Changed files make the commit say
+ * nothing about what answers.
+ */
+function pinned_commit(name, dir) {
+	const commit = git(dir, 'rev-parse', 'HEAD');
+	const changed = git(dir, 'status', '--porcelain', '--untracked-files=no');
+	if (changed) {
+		console.error(`${dir} has changed files; the corpus has to come from a commit:\n${changed}`);
+		process.exit(2);
+	}
+	if (!repin && pins[name].commit !== commit) {
+		console.error(
+			`${dir} is at ${commit}, and ${name} is pinned at ${pins[name].commit}.\n` +
+				`Check the pinned commit out (git -C ${dir} checkout ${pins[name].commit}),\n` +
+				'or pass --repin to move the port to this one.'
+		);
+		process.exit(2);
+	}
+	return commit;
 }
 
 const require = createRequire(join(installed, 'x.js'));
@@ -199,12 +251,18 @@ const mutants_dir = process.env.MUTANTS_DIR;
 const per_input = Number(process.env.MUTANTS_PER_INPUT) || 30;
 const seed = Number(process.env.MUTANTS_SEED) || 1;
 
-const corpus_dir = join(fileURLToPath(new URL('..', import.meta.url)), 'crates/acorn/tests/corpus');
-
-// Which parsers answered: a corpus is only as current as they are.
-const versions = { acorn: acorn.version };
-const write_versions = () =>
-	writeFileSync(join(corpus_dir, 'versions.json'), JSON.stringify(versions, null, '\t') + '\n');
+// Which parsers answered: a corpus is only as current as they are. The
+// installed acorn answers, and its test inputs come from the checkout:
+// the two have to be the same release.
+const acorn_commit = pinned_commit('acorn', checkout);
+if (!repin && pins.acorn.version !== acorn.version) {
+	console.error(
+		`acorn ${acorn.version} is installed in ${installed}, and ${pins.acorn.version} is pinned; pass --repin to move to it`
+	);
+	process.exit(2);
+}
+const versions = { ...pins, acorn: { version: acorn.version, commit: acorn_commit } };
+const write_versions = () => writeFileSync(pins_file, JSON.stringify(versions, null, '\t') + '\n');
 
 const javascript = answers(acorn.Parser, inputs);
 writeFileSync(join(corpus_dir, 'javascript.json'), JSON.stringify(javascript));
@@ -217,9 +275,27 @@ if (mutants_dir) {
 }
 
 if (ts_checkout) {
-	const entry = require.resolve('@sveltejs/acorn-typescript');
-	const { tsPlugin } = await import(pathToFileURL(entry).href);
-	const version = JSON.parse(readFileSync(join(dirname(entry), 'package.json'), 'utf8')).version;
+	const entry = join(ts_checkout, 'index.js');
+	let tsPlugin;
+	try {
+		({ tsPlugin } = await import(pathToFileURL(entry).href));
+	} catch (error) {
+		console.error(`cannot load ${entry} (${error.message}); build the checkout first, see the top of this file`);
+		process.exit(2);
+	}
+	// A build older than the source answers for some other source.
+	const built = statSync(entry).mtimeMs;
+	const stale = readdirSync(join(ts_checkout, 'src'), { recursive: true, withFileTypes: true }).find(
+		(file) => file.isFile() && statSync(join(file.parentPath, file.name)).mtimeMs > built
+	);
+	if (stale) {
+		console.error(`${entry} is older than src/${stale.name}; build the checkout again`);
+		process.exit(2);
+	}
+	// The release the source is at or ahead of, and its commit.
+	const release = JSON.parse(readFileSync(join(dirname(entry), 'package.json'), 'utf8')).version;
+	const commit = pinned_commit('@sveltejs/acorn-typescript', ts_checkout);
+	const version = `${release} at ${commit.slice(0, 7)}`;
 	// TypeScript reads JavaScript too, its own way.
 	const ts_inputs = new Set(inputs);
 	const walk = (dir) => {
@@ -235,7 +311,7 @@ if (ts_checkout) {
 	for (const code of breaking) ts_inputs.add(code);
 	const typescript = answers(acorn.Parser.extend(tsPlugin()), ts_inputs);
 	writeFileSync(join(corpus_dir, 'typescript.json'), JSON.stringify(typescript));
-	versions['@sveltejs/acorn-typescript'] = version;
+	versions['@sveltejs/acorn-typescript'] = { version: release, commit };
 	write_versions();
 	console.log(`${typescript.length} inputs, acorn-typescript ${version} -> typescript.json`);
 	if (mutants_dir) {

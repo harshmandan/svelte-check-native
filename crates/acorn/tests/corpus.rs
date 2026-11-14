@@ -178,12 +178,24 @@ fn port_agrees_on_a_corpus_given_by_the_environment() {
     compare_cases(&cases, language);
 }
 
-/// The corpus says which parsers answered it. The port is written
-/// against these versions; a corpus from others is a different claim.
+/// The corpus says which parsers answered it, each by the commit of
+/// its source. The port follows those commits; the script that writes
+/// the corpus refuses any other checkout unless told to move the pins.
 #[test]
-fn corpus_comes_from_the_parsers_the_port_follows() {
-    let versions: serde_json::Value =
+fn corpus_names_the_commits_it_was_answered_from() {
+    let pins: serde_json::Value =
         serde_json::from_str(include_str!("corpus/versions.json")).unwrap_or_default();
-    assert_eq!(versions["acorn"], "8.19.0");
-    assert_eq!(versions["@sveltejs/acorn-typescript"], "1.0.13");
+    for parser in ["acorn", "@sveltejs/acorn-typescript"] {
+        let commit = pins[parser]["commit"].as_str().unwrap_or_default();
+        assert!(
+            commit.len() == 40 && commit.bytes().all(|b| b.is_ascii_hexdigit()),
+            "{parser} is pinned by a full commit hash, not {commit:?}"
+        );
+        assert!(
+            pins[parser]["version"]
+                .as_str()
+                .is_some_and(|v| !v.is_empty()),
+            "{parser} names the release its source is at or ahead of"
+        );
+    }
 }

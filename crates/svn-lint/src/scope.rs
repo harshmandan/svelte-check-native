@@ -845,6 +845,15 @@ impl TreeBuilder {
         // nearest function/root scope — upstream `scope.js` forwards
         // the declaration to the parent while the scope is porous.
         let mut scope = scope;
+        // An import is declared in the outermost scope, the module's,
+        // wherever it is written: the instance script's imports live
+        // beside the module script's, and a declaration of the instance
+        // script may share a name with one.
+        if declaration_kind == DeclarationKind::Import {
+            while let Some(parent) = self.scopes[scope.0 as usize].parent {
+                scope = parent;
+            }
+        }
         if declaration_kind == DeclarationKind::Var {
             while self.scopes[scope.0 as usize].porous {
                 let Some(parent) = self.scopes[scope.0 as usize].parent else {
@@ -3742,6 +3751,26 @@ impl<'b> ScriptWalker<'b> {
         // node, whose span starts at the pattern.
         let pushed = self.push_leading_ignores(Some(d.span.start));
         self.node_spans.push((d.span.start, d.span.end));
+        // `ensure_no_module_import_conflict`, the declarator visitor's
+        // first check: at the instance script's top level a variable may
+        // not take the name of an import.
+        if self.is_instance && self.scope_stack.len() == 1 {
+            use oxc_span::GetSpan;
+            let names: Vec<SmolStr> =
+                d.id.get_binding_identifiers()
+                    .iter()
+                    .map(|id| SmolStr::new(id.name.as_str()))
+                    .collect();
+            let span = d.id.span();
+            self.tree
+                .script_rule_events
+                .push(ScriptRuleEvent::GatedError {
+                    gate: crate::rules::script_ast_rules::ErrorGate::ModuleImport { names },
+                    code: Code::declaration_duplicate_module_import,
+                    message: crate::messages::declaration_duplicate_module_import(),
+                    range: Range::new(self.base_offset + span.start, self.base_offset + span.end),
+                });
+        }
         self.visit_declarator_inner(d, decl_kind);
         self.node_spans.pop();
         if pushed {

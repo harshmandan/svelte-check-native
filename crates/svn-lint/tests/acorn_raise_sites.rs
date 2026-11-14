@@ -2135,15 +2135,8 @@ const CASES: &[(bool, &str, Expected)] = &[
         "function f(a, a) { 'use strict' }",
         Some(("js_parse_error", "Argument name clash", 33)),
     ),
-    (
-        true,
-        "function f(a = 1) { 'use strict' }",
-        Some((
-            "js_parse_error",
-            "Illegal 'use strict' directive in function with non-simple parameter list",
-            19,
-        )),
-    ),
+    // acorn-typescript lets this one pass.
+    (true, "function f(a = 1) { 'use strict' }", None),
     (
         true,
         "break",
@@ -2298,31 +2291,38 @@ const CASES: &[(bool, &str, Expected)] = &[
     ),
     (true, "export const a = 1; export { a }", None),
     (true, "export { b }", None),
+    // An import clashes with an import only, and acorn-typescript says
+    // so itself, with a full stop.
     (
         true,
         "import a from 'x'; import a from 'y'",
         Some((
             "js_parse_error",
-            "Identifier 'a' has already been declared",
+            "Identifier 'a' has already been declared.",
             45,
         )),
     ),
+    // An import clashes with an import only, and acorn-typescript says
+    // so itself, with a full stop.
     (
         true,
         "import { a, a } from 'x'",
         Some((
             "js_parse_error",
-            "Identifier 'a' has already been declared",
+            "Identifier 'a' has already been declared.",
             31,
         )),
     ),
+    // It parses: an import is kept apart from the scope's other names.
+    // The compiler then refuses the variable, which shares the name of
+    // an import in the module's scope.
     (
         true,
         "let a; import a from 'x'",
         Some((
-            "js_parse_error",
-            "Identifier 'a' has already been declared",
-            33,
+            "declaration_duplicate_module_import",
+            "Cannot declare a variable with the same name as an import from `<script module>`",
+            23,
         )),
     ),
     (

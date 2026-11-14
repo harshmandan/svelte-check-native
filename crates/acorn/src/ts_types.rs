@@ -345,6 +345,10 @@ impl Parser {
             );
         }
         self.parse_expr_atom(None, ForInit::No, false)?;
+        // `import("a", { with: { … } })`: options, or a trailing comma.
+        if self.eat(Tok::Comma)? && self.ty != Tok::ParenR {
+            self.parse_expr_atom(None, ForInit::No, false)?;
+        }
         self.expect(Tok::ParenR)?;
         if self.eat(Tok::Dot)? {
             self.ts_parse_entity_name(true)?;

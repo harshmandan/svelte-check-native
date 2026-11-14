@@ -238,7 +238,7 @@ impl Parser {
                 return self.stack_exhausted();
             }
             if self.ts {
-                match self.ts_parse_as_or_satisfies(left, left_start, min_prec)? {
+                match self.ts_parse_as_or_satisfies(left, left_start, min_prec, for_init)? {
                     Ok(node) => {
                         left = node;
                         continue;
@@ -276,7 +276,7 @@ impl Parser {
         }
     }
 
-    fn build_binary(&mut self, start_pos: usize, right: &Node) -> PResult<Node> {
+    pub(crate) fn build_binary(&mut self, start_pos: usize, right: &Node) -> PResult<Node> {
         if right.is(Ty::PrivateIdentifier) {
             return self.raise(
                 right.start as usize,
@@ -557,7 +557,7 @@ impl Parser {
             if is_async_arrow {
                 self.check_pattern_errors(Some(&errors), false)?;
                 self.check_yield_await_in_default_params()?;
-                if self.await_ident_pos > 0 {
+                if self.await_ident_pos > 0 && !self.ambient_allows_names() {
                     return self.raise(
                         self.await_ident_pos,
                         "Cannot use 'await' as identifier inside an async function",
@@ -616,7 +616,14 @@ impl Parser {
 
         if self.ts && self.ty == Tok::At {
             self.parse_decorators(false)?;
-            return self.parse_expr_atom(None, ForInit::No, false);
+            // `@dec abstract class {}` as an expression.
+            if self.ts_is_abstract_class()? {
+                let mut class = self.start_node();
+                self.next()?;
+                class.modifiers.push("abstract".to_string());
+                return self.parse_class(class, crate::statement::ClassPosition::Expression);
+            }
+            return self.parse_expr_atom(errors, for_init, for_new);
         }
 
         let can_be_arrow = self.potential_arrow_at == self.start as i64;
@@ -752,9 +759,6 @@ impl Parser {
     }
 
     fn parse_dynamic_import(&mut self, node: Node) -> PResult<Node> {
-        if self.ts {
-            return self.ts_parse_dynamic_import(node);
-        }
         self.next()?;
         self.parse_maybe_assign(ForInit::No, None)?;
         if !self.eat(Tok::ParenR)? {
@@ -769,7 +773,7 @@ impl Parser {
                 }
             }
         }
-        Ok(self.finish_node(node, Ty::Other))
+        Ok(self.finish_node(node, Ty::ImportExpression))
     }
 
     fn parse_import_meta(&mut self, node: Node) -> PResult<Node> {
@@ -1352,10 +1356,19 @@ impl Parser {
             self.parse_maybe_assign(for_init, None)?;
             self.check_params(node, false)?;
         } else {
-            let simple = node.list.iter().flatten().all(|p| p.is(Ty::Identifier));
+            // acorn-typescript looks through a parameter property
+            // (`constructor(public x)`) to the parameter it holds.
+            let simple = node.list.iter().flatten().all(|p| {
+                if p.is(Ty::TsParameterProperty) {
+                    p.first().is(Ty::Identifier)
+                } else {
+                    p.is(Ty::Identifier)
+                }
+            });
             if !old_strict || !simple {
                 use_strict = self.strict_directive(self.end);
-                if use_strict && !simple {
+                // acorn-typescript lets this one pass everywhere.
+                if use_strict && !simple && !self.ts {
                     return self.raise(
                         node.start as usize,
                         "Illegal 'use strict' directive in function with non-simple parameter list",
@@ -1449,16 +1462,17 @@ impl Parser {
         if self.in_generator() && name == "yield" {
             return self.raise(start, "Cannot use 'yield' as identifier inside a generator");
         }
-        if self.in_async() && name == "await" {
+        let lenient = self.ambient_allows_names();
+        if !lenient && self.in_async() && name == "await" {
             return self.raise(
                 start,
                 "Cannot use 'await' as identifier inside an async function",
             );
         }
-        if self.current_this_scope().flags & SCOPE_VAR == 0 && name == "arguments" {
+        if !lenient && self.current_this_scope().flags & SCOPE_VAR == 0 && name == "arguments" {
             return self.raise(start, "Cannot use 'arguments' in class field initializer");
         }
-        if self.in_class_static_block() && (name == "arguments" || name == "await") {
+        if !lenient && self.in_class_static_block() && (name == "arguments" || name == "await") {
             return self.raise(
                 start,
                 format!("Cannot use {name} in class static initialization block"),
@@ -1472,7 +1486,7 @@ impl Parser {
         } else {
             is_reserved(name)
         };
-        if reserved {
+        if reserved && !lenient {
             if !self.in_async() && name == "await" {
                 return self.raise(
                     start,

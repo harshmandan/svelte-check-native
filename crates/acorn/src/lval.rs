@@ -42,7 +42,7 @@ impl Parser {
     ) -> PResult<()> {
         match node.ty {
             Ty::Identifier => {
-                if self.in_async() && node.name == "await" {
+                if self.in_async() && node.name == "await" && !self.ambient_allows_names() {
                     return self.raise(
                         node.start as usize,
                         "Cannot use 'await' as identifier inside an async function",
@@ -227,12 +227,6 @@ impl Parser {
             return Ok(());
         }
         if self.eat(Tok::Question)? {
-            if !param.is(Ty::Identifier) && !self.is_ambient_context && !self.in_type {
-                return self.raise(
-                    param.start as usize,
-                    "A binding pattern parameter cannot be optional in an implementation signature.",
-                );
-            }
             param.optional = true;
         }
         if let Some(annotation) = self.ts_try_parse_type_annotation()? {
@@ -298,7 +292,10 @@ impl Parser {
         let is_bind = binding != Bind::None;
         match expr.ty {
             Ty::Identifier => {
-                if self.strict && is_reserved_strict_bind(&expr.name) {
+                if self.strict
+                    && is_reserved_strict_bind(&expr.name)
+                    && !self.ambient_allows_names()
+                {
                     return self.raise(
                         expr.start as usize,
                         format!(

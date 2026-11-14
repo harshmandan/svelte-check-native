@@ -9,7 +9,7 @@
 
 use crate::identifier::is_identifier_char;
 use crate::state::{
-    Bind, Node, PResult, Parser, Raised, SCOPE_TOP, Stop, Ty, add_name, is_new_line,
+    Bind, Names, Node, PResult, Parser, Raised, SCOPE_TOP, Stop, Ty, add_name, is_new_line,
 };
 use crate::token::{Ctx, Tok};
 
@@ -389,6 +389,18 @@ impl Parser {
     pub(crate) fn ts_declare_name(&mut self, name: &str, binding: Bind, pos: u32) -> PResult<()> {
         let last = self.scope_stack.len() - 1;
         match binding {
+            Bind::TsImport => {
+                if self.ts_has_import(name, true) {
+                    return self.raise(
+                        pos as usize,
+                        format!("Identifier '{name}' has already been declared."),
+                    );
+                }
+                if let Some(imports) = self.imports_stack.last_mut() {
+                    add_name(imports, name);
+                }
+                Ok(())
+            }
             Bind::TsExportOnly => {
                 self.maybe_export_defined(name);
                 add_name(&mut self.scope_stack[last].export_only_bindings, name);
@@ -414,6 +426,16 @@ impl Parser {
                 Ok(())
             }
             _ => self.declare_name_base(name, binding, pos),
+        }
+    }
+
+    /// Whether `name` is imported where the parser stands; unless
+    /// `allow_shadow`, in a namespace around it too.
+    pub(crate) fn ts_has_import(&self, name: &str, allow_shadow: bool) -> bool {
+        let has = |names: &Names| names.iter().any(|n| n == name);
+        match self.imports_stack.split_last() {
+            Some((last, outer)) => has(last) || (!allow_shadow && outer.iter().any(has)),
+            None => false,
         }
     }
 
@@ -537,7 +559,6 @@ impl Parser {
                     duplicate(self)?;
                 }
                 incompatible(self, modified, "accessor", "readonly")?;
-                incompatible(self, modified, "accessor", "override")?;
                 modified.modifiers.push(modifier.to_string());
                 read.push(modifier.to_string());
             } else if modifier == "const" {
@@ -589,16 +610,34 @@ impl Parser {
                 inner
             }
         } else {
-            let mut expr = self.parse_ident(false)?;
-            while self.eat(Tok::Dot)? {
+            self.parse_ident(false)?
+        };
+        // Members, private ones too, and TypeScript's `!` anywhere along
+        // the chain: `@x.#y`, `@x!`, `@x!.y`.
+        loop {
+            if self.eat(Tok::Dot)? {
                 let mut member = self.start_node_at(start_pos);
-                let property = self.parse_ident(true)?;
+                let property = if self.ty == Tok::PrivateId {
+                    self.parse_private_ident()?
+                } else {
+                    self.parse_ident(true)?
+                };
                 member.a = Some(Box::new(expr));
                 member.b = Some(Box::new(property));
                 expr = self.finish_node(member, Ty::MemberExpression);
+            } else if !self.has_preceding_line_break()
+                && self.value == "!"
+                && self.ty == Tok::Prefix
+            {
+                self.expr_allowed = false;
+                self.next()?;
+                let mut asserted = self.start_node_at(start_pos);
+                asserted.a = Some(Box::new(expr));
+                expr = self.finish_node(asserted, Ty::TsNonNullExpression);
+            } else {
+                break;
             }
-            expr
-        };
+        }
 
         // parseMaybeDecoratorArguments
         let has_type_arguments = if self.ts_match_left_relational() || self.ty == Tok::BitShift {
@@ -695,16 +734,13 @@ impl Parser {
             if self.ty == Tok::BraceR {
                 break;
             }
-            // A string key has no `name`: every one of them is the
-            // same missing name to the duplicate check.
-            let key = if self.ty == Tok::String {
-                self.parse_literal()?;
-                None
+            // A key is a name or a string: `type` and `"type"` are one.
+            let name = if self.ty == Tok::String {
+                self.parse_literal()?.string.take().unwrap_or_default()
             } else {
-                Some(std::mem::take(&mut self.parse_ident(true)?.name))
+                std::mem::take(&mut self.parse_ident(true)?.name)
             };
             self.next()?;
-            let name = key.unwrap_or_else(|| "\u{0}undefined".to_string());
             if names.contains(&name) {
                 return self.raise(self.pos, "Duplicated key in attributes");
             }

@@ -10,6 +10,11 @@
 //! code, ECMAScript 2025, parentheses kept. It builds only as much of
 //! a syntax tree as acorn itself looks at again.
 //!
+//! Which acorn and which acorn-typescript it follows is pinned by
+//! commit in `tests/corpus/versions.json`, next to the answers those
+//! two gave for the corpus the tests hold the port to. acorn-typescript
+//! is followed at its source, which may be ahead of its last release.
+//!
 //! Positions are byte offsets into the text given. Inside, the parser
 //! indexes UTF-16 code units, as acorn does.
 

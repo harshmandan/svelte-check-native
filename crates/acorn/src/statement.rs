@@ -496,7 +496,14 @@ impl Parser {
     fn parse_catch_clause_param(&mut self) -> PResult<()> {
         let param = self.parse_binding_atom()?;
         let simple = param.is(Ty::Identifier);
-        self.enter_scope(if simple { SCOPE_SIMPLE_CATCH } else { 0 });
+        // acorn-typescript gives every catch clause the scope acorn
+        // keeps for one with a plain name: a `var` in the block may
+        // reuse a name the clause's pattern binds.
+        self.enter_scope(if simple || self.ts {
+            SCOPE_SIMPLE_CATCH
+        } else {
+            0
+        });
         self.check_lval_pattern(
             &param,
             if simple {
@@ -1073,7 +1080,10 @@ impl Parser {
                 field.first().start as usize,
                 "Classes can't have a field named 'constructor'",
             );
-        } else if field.is_static && check_key_name(&field, "prototype") {
+        } else if field.is_static
+            && check_key_name(&field, "prototype")
+            && !self.ambient_allows_names()
+        {
             return self.raise(
                 field.first().start as usize,
                 "Classes can't have a static field named 'prototype'",

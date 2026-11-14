@@ -51,7 +51,12 @@ fn is_possibly_literal_enum(expression: &Node) -> bool {
         return false;
     }
     let property = expression.second();
-    if expression.computed && (!property.is(Ty::TemplateLiteral) || !property.list.is_empty()) {
+    // `Bar['b']` and `` Bar[`b`] `` name a member as `Bar.b` does.
+    let string_key = property.is(Ty::Literal) && property.lit == Lit::String;
+    if expression.computed
+        && !string_key
+        && (!property.is(Ty::TemplateLiteral) || !property.list.is_empty())
+    {
         return false;
     }
     is_uncomputed_member_expression_chain(expression.first())
@@ -247,6 +252,7 @@ impl Parser {
         let members = self.ts_parse_list(ListKind::TypeMembers, Self::ts_parse_type_member);
         self.in_type = old_in_type;
         members?;
+        self.expr_allowed_after_declaration_body();
         self.expect(Tok::BraceR)?;
         Ok(Ok(self.finish_node(node, Ty::TsInterfaceDeclaration)))
     }
@@ -298,19 +304,34 @@ impl Parser {
         node.a = Some(Box::new(id));
         self.expect(Tok::BraceL)?;
         self.ts_parse_delimited_list(ListKind::EnumMembers, Self::ts_parse_enum_member)?;
+        self.expr_allowed_after_declaration_body();
         self.expect(Tok::BraceR)?;
         Ok(self.finish_node(node, Ty::TsEnumDeclaration))
     }
 
-    fn ts_parse_module_block(&mut self) -> PResult<()> {
+    /// The body of an interface, an enum or a namespace is in braces,
+    /// and acorn decides what a brace is from the token before it:
+    /// here the declaration's name, which makes it look like an object
+    /// literal, after which an operator is due. A statement follows
+    /// instead, where a `/` starts a regular expression. The flag is
+    /// put right before the closing brace is passed, which is when the
+    /// token after it is read.
+    fn expr_allowed_after_declaration_body(&mut self) {
+        self.expr_allowed = true;
+    }
+
+    /// The statements of a namespace's block.
+    fn ts_parse_module_block(&mut self) -> PResult<Vec<Node>> {
         self.enter_scope(TS_SCOPE_OTHER);
         self.expect(Tok::BraceL)?;
+        let mut body = Vec::new();
         while self.ty != Tok::BraceR {
-            self.parse_statement(None, true)?;
+            body.push(self.parse_statement(None, true)?);
         }
+        self.expr_allowed_after_declaration_body();
         self.next()?;
         self.exit_scope();
-        Ok(())
+        Ok(body)
     }
 
     fn ts_parse_module_or_namespace_declaration(
@@ -337,7 +358,8 @@ impl Parser {
     }
 
     fn ts_parse_ambient_external_module_declaration(&mut self, mut node: Node) -> PResult<Node> {
-        if self.ts_is_contextual(Tok::TsGlobal) {
+        let global = self.ts_is_contextual(Tok::TsGlobal);
+        if global {
             node.a = Some(Box::new(self.parse_ident(false)?));
         } else if self.ty == Tok::String {
             node.a = Some(Box::new(self.parse_literal()?));
@@ -346,8 +368,33 @@ impl Parser {
         }
         if self.ty == Tok::BraceL {
             self.enter_scope(TS_SCOPE_TS_MODULE);
-            self.ts_parse_module_block()?;
+            let body = self.ts_parse_module_block()?;
             self.exit_scope();
+            // What `declare global { … }` declares is declared for the
+            // file around it too, as far as `export` is concerned.
+            if global {
+                for statement in &body {
+                    let statement = match &statement.a {
+                        Some(declaration) if statement.is(Ty::ExportNamedDeclaration) => {
+                            declaration
+                        }
+                        _ => statement,
+                    };
+                    if statement.is(Ty::VariableDeclaration) {
+                        for declarator in statement.list.iter().flatten() {
+                            if let Some(id) =
+                                declarator.a.as_deref().filter(|id| id.is(Ty::Identifier))
+                            {
+                                self.declare_name(&id.name, Bind::TsExportOnly, id.start)?;
+                            }
+                        }
+                    } else if let Some(id) =
+                        statement.a.as_deref().filter(|id| id.is(Ty::Identifier))
+                    {
+                        self.declare_name(&id.name, Bind::TsExportOnly, id.start)?;
+                    }
+                }
+            }
         } else {
             self.semicolon()?;
         }
@@ -434,8 +481,8 @@ impl Parser {
         let generator = self.eat(Tok::Star)?;
         let is_declaration = statement & FUNC_STATEMENT != 0;
         if is_declaration {
-            // Only a plain name: one of TypeScript's own words is none.
-            node.a = if statement & FUNC_NULLABLE_ID != 0 && self.ty != Tok::Name {
+            // A plain name or one of TypeScript's own words.
+            node.a = if statement & FUNC_NULLABLE_ID != 0 && !self.ty.is_identifier() {
                 None
             } else {
                 Some(Box::new(self.parse_ident(false)?))
@@ -452,7 +499,7 @@ impl Parser {
         self.await_ident_pos = 0;
         self.enter_scope(function_flags(is_async, generator));
 
-        if !is_declaration && self.ty == Tok::Name {
+        if !is_declaration && self.ty.is_identifier() {
             node.a = Some(Box::new(self.parse_ident(false)?));
         }
 
@@ -533,10 +580,20 @@ impl Parser {
 
         // An unnamed class expression that goes straight to
         // `implements` has no name to read.
-        if !(position == ClassPosition::Expression && self.is_contextual("implements")) {
-            if self.ty == Tok::Name {
+        // `class implements I {}`, where a class may go unnamed, has no
+        // name: `implements` is not one.
+        if !(position != ClassPosition::Statement && self.is_contextual("implements")) {
+            let declares = position != ClassPosition::Expression;
+            if declares && self.is_ambient_context && self.ty.is_identifier() {
+                // A declared class is known by name only: it takes no
+                // place among the values.
                 let id = self.parse_ident(false)?;
-                if position != ClassPosition::Expression {
+                self.check_lval_simple(&id, Bind::TsExportOnly, None)?;
+                node.a = Some(Box::new(id));
+            } else if self.ty.is_identifier() {
+                // A plain name or one of TypeScript's own words.
+                let id = self.parse_ident(false)?;
+                if declares {
                     self.check_lval_simple(&id, Bind::Lexical, None)?;
                 }
                 node.a = Some(Box::new(id));
@@ -955,9 +1012,10 @@ impl Parser {
 
     fn ts_parse_import_equals_declaration(&mut self, node: Node, type_only: bool) -> PResult<Node> {
         let id = self.parse_ident(false)?;
-        self.check_lval_simple(&id, Bind::Lexical, None)?;
         self.expect(Tok::Eq)?;
-        // `require("…")`, or a name.
+        // `require("…")`, or a name. Only a `require` that is no type
+        // import brings in a value; an alias of a name, like a type,
+        // is known to `export` and nothing else.
         if self.is_contextual("require") && self.lookahead_char_code() == 40 {
             self.expect_contextual("require")?;
             self.expect(Tok::ParenL)?;
@@ -966,8 +1024,15 @@ impl Parser {
             }
             self.parse_expr_atom(None, ForInit::No, false)?;
             self.expect(Tok::ParenR)?;
+            let binding = if type_only {
+                Bind::TsExportOnly
+            } else {
+                Bind::Lexical
+            };
+            self.check_lval_simple(&id, binding, None)?;
         } else {
             let reference = self.ts_parse_entity_name(false)?;
+            self.check_lval_simple(&id, Bind::TsExportOnly, None)?;
             if type_only {
                 return self.raise(
                     reference.start as usize,
@@ -1011,9 +1076,10 @@ impl Parser {
                 has_type_specifier = true;
                 left = first_as;
             }
-        } else if self.ty.is_keyword_or_identifier() {
+        } else if self.ty.is_keyword_or_identifier() || self.ty == Tok::String {
             has_type_specifier = true;
-            if is_import {
+            // `type "name" as local`: a string names what is imported.
+            if is_import && self.ty != Tok::String {
                 left = self.parse_ident(true)?;
                 if !self.is_contextual("as") {
                     self.check_unreserved(left.start as usize, &left.name)?;
@@ -1037,7 +1103,12 @@ impl Parser {
         }
         let right = right.unwrap_or_else(|| left.clone());
         if is_import {
-            self.check_lval_simple(&right, Bind::Lexical, None)?;
+            let binding = if has_type_specifier || in_type_only {
+                Bind::TsType
+            } else {
+                Bind::TsImport
+            };
+            self.check_lval_simple(&right, binding, None)?;
         }
         Ok((left, right))
     }
@@ -1064,7 +1135,13 @@ impl Parser {
             self.check_unreserved(imported.start as usize, &imported.name)?;
             imported
         };
-        self.check_lval_simple(&local, Bind::Lexical, None)
+        // Under `import type` every name is a type.
+        let binding = if self.import_or_export_outer_kind == OuterKind::Type {
+            Bind::TsType
+        } else {
+            Bind::TsImport
+        };
+        self.check_lval_simple(&local, binding, None)
     }
 
     /// The specifiers of an import: how many, and whether the first is
@@ -1074,7 +1151,7 @@ impl Parser {
         let mut starts_with_default = false;
         if self.ty.is_identifier() {
             let local = self.parse_ident(false)?;
-            self.check_lval_simple(&local, Bind::Lexical, None)?;
+            self.check_lval_simple(&local, Bind::TsImport, None)?;
             count += 1;
             starts_with_default = true;
             if !self.eat(Tok::Comma)? {
@@ -1085,7 +1162,7 @@ impl Parser {
             self.next()?;
             self.expect_contextual("as")?;
             let local = self.parse_ident(false)?;
-            self.check_lval_simple(&local, Bind::Lexical, None)?;
+            self.check_lval_simple(&local, Bind::TsImport, None)?;
             return Ok((count + 1, starts_with_default));
         }
         self.expect(Tok::BraceL)?;
@@ -1114,8 +1191,15 @@ impl Parser {
             let mut ahead = self.lookahead(2)?;
             let ahead_is_from =
                 ahead.ty == Tok::Name && ahead.value == "from" && !ahead.contains_esc;
+            // `import type from from "a"` and `import type from = …`
+            // bind the name `from`: the word after it tells.
+            let ahead_is_binding_named_from = ahead_is_from && {
+                let after = self.lookahead(3)?;
+                (after.ty == Tok::Name && after.value == "from" && !after.contains_esc)
+                    || after.ty == Tok::Eq
+            };
             if ahead.ty != Tok::Comma
-                && !ahead_is_from
+                && (!ahead_is_from || ahead_is_binding_named_from)
                 && ahead.ty != Tok::Eq
                 && enter_head.ty == Tok::TsType
                 && !enter_head.contains_esc
@@ -1134,6 +1218,15 @@ impl Parser {
             }
         }
         self.next()?;
+        // `import defer * as ns from "a"`.
+        if !type_only
+            && self.ty == Tok::Name
+            && self.value == "defer"
+            && !self.contains_esc
+            && self.lookahead(1)?.ty == Tok::Star
+        {
+            self.next()?;
+        }
         let mut specifiers = (0, false);
         if self.ty == Tok::String {
             self.parse_expr_atom(None, ForInit::No, false)?;
@@ -1297,6 +1390,9 @@ impl Parser {
                     "Cannot read properties of undefined (reading 'start')",
                 ));
             }
+            let mut export = self.finish_node(node, Ty::ExportNamedDeclaration);
+            export.a = Some(Box::new(declaration));
+            return Ok(export);
         } else {
             let locals = self.ts_parse_export_specifiers()?;
             if self.eat_contextual("from")? {
@@ -1327,7 +1423,7 @@ impl Parser {
             let mut class = self.start_node();
             self.next()?;
             class.modifiers.push("abstract".to_string());
-            self.parse_class(class, ClassPosition::Statement)?;
+            self.parse_class(class, ClassPosition::NullableId)?;
             return Ok(());
         }
         if self.ty == Tok::TsInterface {

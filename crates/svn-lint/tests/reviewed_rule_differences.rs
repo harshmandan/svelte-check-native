@@ -383,6 +383,40 @@ const CASES: &[(&str, &[Reported])] = &[
             ("bidirectional_control_characters", 8, 14, false),
         ],
     ),
+    // A variable at the top of the instance script may not take the name
+    // of an import; a function, a class or a variable further in may.
+    (
+        "<script module>import a from \"x\";</script><script>let a = 1;</script>{a}",
+        &[("declaration_duplicate_module_import", 54, 55, true)],
+    ),
+    (
+        "<script module>import a from \"x\";</script><script>let {a} = $props();</script>{a}",
+        &[("declaration_duplicate_module_import", 54, 57, true)],
+    ),
+    (
+        "<script module>import a from \"x\";</script><script>function f(){ let a = 1; return a }</script>{f()}",
+        &[],
+    ),
+    (
+        "<script module>import a from \"x\";</script><script>function a(){}</script>",
+        &[],
+    ),
+    (
+        "<script module>import a from \"x\";</script><script>let [a] = [1];</script>{a}",
+        &[("declaration_duplicate_module_import", 54, 57, true)],
+    ),
+    (
+        "<script module>import a from \"x\";</script><script>class a {}</script>",
+        &[],
+    ),
+    (
+        "<script module>import {b as a} from \"x\";</script><script>const c = 1, a = 2;</script>{a}{c}",
+        &[("declaration_duplicate_module_import", 70, 71, true)],
+    ),
+    (
+        "<script module>let a = 1;</script><script>let a = 2;</script>{a}",
+        &[],
+    ),
 ];
 
 #[test]

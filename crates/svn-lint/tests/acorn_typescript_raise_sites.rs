@@ -444,22 +444,10 @@ const CASES: &[(&str, Expected)] = &[
         )),
     ),
     ("class A extends B { override m() {} }", None),
-    (
-        "function f({ a }?: any) {}",
-        Some((
-            "js_parse_error",
-            "A binding pattern parameter cannot be optional in an implementation signature.",
-            30,
-        )),
-    ),
-    (
-        "function f([a]?: any) {}",
-        Some((
-            "js_parse_error",
-            "A binding pattern parameter cannot be optional in an implementation signature.",
-            30,
-        )),
-    ),
+    // An optional pattern parameter is left to the type checker.
+    ("function f({ a }?: any) {}", None),
+    // An optional pattern parameter is left to the type checker.
+    ("function f([a]?: any) {}", None),
     ("declare function f({ a }?: any): void", None),
     (
         "abstract class A { abstract #x }",
@@ -911,14 +899,8 @@ const CASES: &[(&str, Expected)] = &[
     ("function f<T extends U, U = T>() {}", None),
     ("function f<T = 1, U>() {}", None),
     ("function f(...a: number[]) {}", None),
-    (
-        "function f(...a?: number[]) {}",
-        Some((
-            "js_parse_error",
-            "A binding pattern parameter cannot be optional in an implementation signature.",
-            30,
-        )),
-    ),
+    // An optional pattern parameter is left to the type checker.
+    ("function f(...a?: number[]) {}", None),
     (
         "function f(...a = []) {}",
         Some(("js_parse_error", "Unexpected token", 35)),
@@ -1192,9 +1174,14 @@ const CASES: &[(&str, Expected)] = &[
         "export default type A = 1",
         Some(("js_parse_error", "Unexpected token", 39)),
     ),
+    // It parses, unnamed; a component has no default export.
     (
         "export default abstract class {}",
-        Some(("js_parse_error", "Unexpected token", 49)),
+        Some((
+            "module_illegal_default_export",
+            "A component cannot have a default export",
+            19,
+        )),
     ),
     ("export declare function f(): void", None),
     ("export declare class A {}", None),

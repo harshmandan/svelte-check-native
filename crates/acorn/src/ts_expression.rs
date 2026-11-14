@@ -402,6 +402,7 @@ impl Parser {
         left: Node,
         left_start: usize,
         min_prec: i32,
+        for_init: ForInit,
     ) -> PResult<Result<Node, Node>> {
         // As tight as `in`.
         if 7 <= min_prec || self.has_preceding_line_break() {
@@ -425,6 +426,12 @@ impl Parser {
             },
         );
         self.re_scan_lt_gt();
+        // `x as T ** n`: the cast is the base, whatever binds around it.
+        if self.ty == Tok::StarStar {
+            self.next()?;
+            let right = self.parse_maybe_unary(None, false, false, for_init)?;
+            return self.build_binary(left_start, &right).map(Ok);
+        }
         Ok(Ok(node))
     }
 
@@ -466,6 +473,10 @@ impl Parser {
             return Ok(None);
         }
         let old = self.maybe_in_arrow_parameters;
+        // An `await` or `yield` seen before the arrow is none of its
+        // parameters' business.
+        let old_yield_pos = std::mem::take(&mut self.yield_pos);
+        let old_await_pos = std::mem::take(&mut self.await_pos);
         self.maybe_in_arrow_parameters = true;
         let head = self.ts_try_parse_and_catch(|p| {
             let node = p.start_node_at(start_pos);
@@ -476,8 +487,11 @@ impl Parser {
             p.ts_try_parse_type_or_type_predicate_annotation()?;
             p.expect(Tok::Arrow)?;
             Ok(Some((node, params)))
-        })?;
+        });
+        self.yield_pos = old_yield_pos;
+        self.await_pos = old_await_pos;
         self.maybe_in_arrow_parameters = old;
+        let head = head?;
         let Some((node, params)) = head else {
             return Ok(None);
         };
@@ -685,23 +699,6 @@ impl Parser {
             self.parse_expr_list(Tok::ParenR, true, false, None)?;
         }
         Ok(self.finish_node(node, Ty::Other))
-    }
-
-    /// acorn-typescript's `parseDynamicImport`.
-    pub(crate) fn ts_parse_dynamic_import(&mut self, node: Node) -> PResult<Node> {
-        self.next()?;
-        self.parse_maybe_assign(ForInit::No, None)?;
-        if self.eat(Tok::Comma)? {
-            self.parse_expression(ForInit::No, None)?;
-        }
-        if !self.eat(Tok::ParenR)? {
-            let error_pos = self.start;
-            if self.eat(Tok::Comma)? && self.eat(Tok::ParenR)? {
-                return self.raise(error_pos, "Trailing comma is not allowed in import()");
-            }
-            return self.unexpected_at(error_pos);
-        }
-        Ok(self.finish_node(node, Ty::ImportExpression))
     }
 
     /// acorn-typescript's `parseGetterSetter`: type parameters are read

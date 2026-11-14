@@ -96,10 +96,18 @@ pub(crate) fn script_tag_error(
 
 /// True when the compiler's `parse()` would throw on this template for
 /// one of the reasons in the module doc.
-pub fn template_parse_rejected(fragment: &Fragment, source: &str, lang: ScriptLang) -> bool {
+pub fn template_parse_rejected(fragment: &Fragment, source: &str) -> bool {
     if crate::parse_errors::first_template_parse_error(fragment, source).is_some() {
         return true;
     }
+    // The compiler reads every expression of the template in one
+    // language: the one its scan for the first `<script lang=…>` finds,
+    // whichever script that is.
+    let lang = if svn_parser::tag_read::compiler_reads_typescript(source) {
+        ScriptLang::Ts
+    } else {
+        ScriptLang::Js
+    };
     let mut finder = InvalidExpressionFinder {
         source,
         lang,
@@ -199,7 +207,7 @@ mod tests {
     fn rejected(source: &str) -> bool {
         let (doc, _) = svn_parser::parse_sections(source);
         let (fragment, _) = svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
-        template_parse_rejected(&fragment, source, doc.script_lang())
+        template_parse_rejected(&fragment, source)
     }
 
     #[test]

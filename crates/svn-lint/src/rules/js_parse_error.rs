@@ -107,7 +107,7 @@ pub(crate) fn script_parse_error(
         let base = script.section.content_range.start;
         let mut at = match candidate.at {
             Position::At(rel) => base + candidate.token_start.filter(|_| transpiled).unwrap_or(rel),
-            Position::ColumnOf(rel) => column_as_offset(source, base + rel),
+            Position::ColumnOf(rel) => svn_acorn::column_as_offset(source, base + rel),
             Position::Nowhere => 0,
         };
         if transpiled
@@ -2022,24 +2022,6 @@ fn mixed_operator(program: &Program<'_>, text: &str, at: u32) -> Option<(u32, u3
     let operators = finder.operators?;
     let first = operators.first()?.1;
     operators.iter().find(|(_, c)| *c != first).map(|(p, _)| *p)
-}
-
-/// acorn-typescript's column-for-offset slip: the column (in UTF-16
-/// units) of the token at `at`, taken as a UTF-16 offset into the file.
-fn column_as_offset(source: &str, at: u32) -> u32 {
-    let line_start = source[..at as usize].rfind('\n').map_or(0, |i| i + 1);
-    let column: usize = source[line_start..at as usize]
-        .chars()
-        .map(char::len_utf16)
-        .sum();
-    let mut units = 0;
-    for (i, c) in source.char_indices() {
-        if units >= column {
-            return i as u32;
-        }
-        units += c.len_utf16();
-    }
-    source.len() as u32
 }
 
 /// svelte-check's `hasLanguageAttribute`: a `lang` or `type` attribute

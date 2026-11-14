@@ -75,12 +75,6 @@ pub(crate) fn first_template_parse_error_at(
     read_options(fragment, source).map(|finding| (source.len() as u32, finding))
 }
 
-/// The offset that equals the column of `pos`, in UTF-16 units.
-fn column_as_offset(source: &str, pos: u32) -> u32 {
-    let line_start = source[..pos as usize].rfind('\n').map_or(0, |i| i + 1);
-    source[line_start..pos as usize].encode_utf16().count() as u32
-}
-
 struct Finder<'s> {
     source: &'s str,
     ts: bool,
@@ -132,7 +126,7 @@ impl Finder<'_> {
                 break;
             }
             let at = if error.column_of {
-                column_as_offset(self.source, error.pos)
+                svn_acorn::column_as_offset(self.source, error.pos)
             } else {
                 error.pos
             };
@@ -286,7 +280,7 @@ impl Finder<'_> {
         // acorn-typescript places a few errors at the column number of
         // a position, taken for an offset.
         let at = if error.column_of {
-            column_as_offset(self.source, error.pos)
+            svn_acorn::column_as_offset(self.source, error.pos)
         } else {
             error.pos
         };

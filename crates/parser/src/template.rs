@@ -1001,8 +1001,6 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
     fn parse_at_tag(&mut self, sigil_idx: u32) -> Node {
         let start = self.scanner.pos();
         let source = self.scanner.source();
-        let counted_close = self.find_mustache_end_in_fragment(start + 1);
-        let limit = counted_close.unwrap_or(self.fragment_end);
         // The compiler's `special()` tries each keyword in this order and
         // takes the first one the text starts with, then reads the tag's
         // own syntax right after it: `{@debugx}` debugs `x`, and
@@ -1010,7 +1008,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         // matching no keyword is an unknown tag; its word is skipped.
         let keyword_start = sigil_idx + 1;
         let rest = source
-            .get(keyword_start as usize..limit as usize)
+            .get(keyword_start as usize..self.fragment_end as usize)
             .unwrap_or("");
         let word_len = rest.bytes().take_while(u8::is_ascii_alphabetic).count();
         let (kind, keyword_len) = [
@@ -1024,6 +1022,10 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         .map_or((InterpolationKind::AtTag, word_len), |(keyword, kind)| {
             (kind, keyword.len())
         });
+        // The tag's content starts after the keyword: a `/` right there
+        // starts a regular expression, where after a name it divides.
+        let counted_close = self.find_mustache_end_in_fragment(keyword_start + keyword_len as u32);
+        let limit = counted_close.unwrap_or(self.fragment_end);
         let keyword_end = keyword_start + keyword_len as u32;
         let reader = TagReader::new(source, self.ts);
         let read = match kind {

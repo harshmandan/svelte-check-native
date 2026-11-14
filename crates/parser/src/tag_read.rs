@@ -249,33 +249,77 @@ pub fn compiler_reads_typescript(source: &str) -> bool {
 }
 
 /// The value the compiler's regex captures for a `<script` tag at the
-/// start of `tag`: the last `lang=value` before its `>` that the regex
-/// accepts. `None` when it matches nothing there.
+/// start of `tag`, or `None` when it matches nothing there.
+///
+/// The regex reads the tag's attributes two ways and takes the first
+/// that fits. One runs to the tag's first `>` and takes the last
+/// `lang=value` before it. The other steps over `name=value` attributes
+/// one by one, where a quoted value may hold a `>`, and takes a `lang=`
+/// that follows one directly.
 fn script_lang_attribute(tag: &str) -> Option<&str> {
     let after = tag.strip_prefix("<script")?;
-    if !after.starts_with(|c: char| c.is_whitespace()) {
+    let attributes = after.trim_start_matches(is_regex_space);
+    if attributes.len() == after.len() {
         return None;
     }
-    let attributes = &after[..after.find('>')?];
-    attributes.rmatch_indices("lang=").find_map(|(p, _)| {
-        // At least one whitespace character separates it from `<script`.
-        if p == 0 {
-            return None;
+    let to_first_close = &attributes[..attributes.find('>')?];
+    to_first_close
+        .rmatch_indices("lang=")
+        .find_map(|(p, _)| lang_value(&attributes[p + 5..]))
+        .or_else(|| lang_after_attributes(attributes))
+}
+
+/// What JavaScript's `\s` matches.
+fn is_regex_space(c: char) -> bool {
+    c.is_whitespace() || c == '\u{feff}'
+}
+
+/// `(["'])?([^"' >]+)\1[^>]*>` at the start of `text`: the value.
+fn lang_value(text: &str) -> Option<&str> {
+    let quote = text.chars().next().filter(|c| matches!(c, '"' | '\''));
+    let value = &text[quote.map_or(0, char::len_utf8)..];
+    let len = value.find(['"', '\'', ' ', '>']).unwrap_or(value.len());
+    if len == 0 {
+        return None;
+    }
+    let rest = &value[len..];
+    let rest = match quote {
+        Some(q) => rest.strip_prefix(q)?,
+        None => rest,
+    };
+    rest.contains('>').then_some(&value[..len])
+}
+
+/// `(?:[^=>'"/]+=(?:"[^"]*"|'[^']*'|[^>\s]+)\s+)*lang=…` at the start
+/// of `text`: as many attributes as will go, then the value of `lang=`.
+fn lang_after_attributes(text: &str) -> Option<&str> {
+    let name_len = text.find(['=', '>', '\'', '"', '/']).unwrap_or(text.len());
+    let after_attribute = |value_len: usize| {
+        let rest = &text[name_len + 1 + value_len..];
+        let next = rest.trim_start_matches(is_regex_space);
+        (next.len() < rest.len()).then_some(next)
+    };
+    if name_len > 0 && text[name_len..].starts_with('=') {
+        let value = &text[name_len + 1..];
+        let quoted = value
+            .chars()
+            .next()
+            .filter(|c| matches!(c, '"' | '\''))
+            .and_then(|q| value[1..].find(q))
+            .map(|close| close + 2);
+        let bare = value
+            .find(|c: char| c == '>' || is_regex_space(c))
+            .unwrap_or(value.len());
+        let found = [quoted, Some(bare).filter(|&len| len > 0)]
+            .into_iter()
+            .flatten()
+            .filter_map(after_attribute)
+            .find_map(lang_after_attributes);
+        if found.is_some() {
+            return found;
         }
-        let value = &attributes[p + 5..];
-        let quote = value.chars().next().filter(|c| matches!(c, '"' | '\''));
-        let value = &value[quote.map_or(0, char::len_utf8)..];
-        let len = value.find(['"', '\'', ' ', '>']).unwrap_or(value.len());
-        if len == 0 {
-            return None;
-        }
-        if let Some(q) = quote
-            && !value[len..].starts_with(q)
-        {
-            return None;
-        }
-        Some(&value[..len])
-    })
+    }
+    lang_value(text.strip_prefix("lang=")?)
 }
 
 /// `RESERVED_WORDS` from the compiler's `utils.js`.
@@ -823,6 +867,21 @@ impl<'s> TagReader<'s> {
         let whole = parsed.diagnostics.is_empty() && parsed.program.body.len() == 1;
         match parsed.program.body.first() {
             Some(oxc_ast::ast::Statement::VariableDeclaration(declaration)) if whole => {
+                // acorn refuses declarations this reading lets through:
+                // a name declared twice, a reserved word bound in strict
+                // code, an invalid regular expression.
+                let language = if self.ts {
+                    svn_acorn::Language::TypeScript
+                } else {
+                    svn_acorn::Language::JavaScript
+                };
+                if let Err(error) = svn_acorn::parse_statement_at(text, 0, language) {
+                    return Err(TagReadError::new(
+                        start + error.pos,
+                        TagReadErrorKind::JsParse(error.message),
+                    )
+                    .reading(read));
+                }
                 let expression_end = start + declaration.span.end;
                 Ok(Some(ExpressionRead {
                     expression_end,

@@ -814,7 +814,7 @@ fn rejected_templates_are_detected() {
         let (doc, _) = svn_parser::parse_sections(&src);
         let (fragment, errors) = svn_parser::parse_all_template_runs(&src, &doc.template.text_runs);
         let rejected = errors.iter().any(|e| e.compiler_rejects())
-            || svn_lint::template_parse_rejected(&fragment, &src, doc.script_lang());
+            || svn_lint::template_parse_rejected(&fragment, &src);
         if rejected != expected.is_some() {
             failures.push(format!("ts={ts} {template:?}: rejected={rejected}"));
         }

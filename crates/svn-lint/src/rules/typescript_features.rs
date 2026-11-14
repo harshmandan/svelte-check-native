@@ -70,56 +70,7 @@ const NAMESPACES: &str = "namespaces with non-type nodes";
 /// (comments are matched and skipped; a tag whose `lang=` value does
 /// not fit the pattern is passed over).
 pub(crate) fn compiler_parses_as_ts(source: &str) -> bool {
-    let bytes = source.as_bytes();
-    let mut at = 0;
-    while at < bytes.len() {
-        let Some(rel) = source[at..].find('<') else {
-            return false;
-        };
-        let start = at + rel;
-        let rest = &source[start..];
-        if let Some(body) = rest.strip_prefix("<!--")
-            && let Some(end) = body.find("-->")
-        {
-            at = start + 4 + end + 3;
-            continue;
-        }
-        if let Some(after) = rest.strip_prefix("<script")
-            && after.starts_with(|c: char| c.is_ascii_whitespace())
-            && let Some(value) = script_tag_lang(after)
-        {
-            return value == "ts";
-        }
-        at = start + 1;
-    }
-    false
-}
-
-/// The `lang=` value the compiler's pattern reads from a `<script`
-/// tag's attribute text: the last `lang=` before the tag's first `>`
-/// whose value is `"v"`, `'v'` or a bare `v` (no quotes, spaces or
-/// `>` inside) followed by the end of the tag.
-fn script_tag_lang(after: &str) -> Option<&str> {
-    let tag = &after[..after.find('>')?];
-    let mut search_end = tag.len();
-    while let Some(pos) = tag[..search_end].rfind("lang=") {
-        let value = &tag[pos + "lang=".len()..];
-        let (quote, body) = match value.as_bytes().first() {
-            Some(b'"') => (Some('"'), &value[1..]),
-            Some(b'\'') => (Some('\''), &value[1..]),
-            _ => (None, value),
-        };
-        let len = body.find(['"', '\'', ' ', '>']).unwrap_or(body.len());
-        let closes = match quote {
-            Some(q) => body[len..].starts_with(q),
-            None => true,
-        };
-        if len > 0 && closes {
-            return Some(&body[..len]);
-        }
-        search_end = pos;
-    }
-    None
+    svn_parser::tag_read::compiler_reads_typescript(source)
 }
 
 /// Whether the project's preprocessors (`preprocess_ts`: they

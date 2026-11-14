@@ -192,6 +192,89 @@ pub fn parse_statement_at(source: &str, pos: u32, language: Language) -> Result<
         .map_err(|stop| text.error(stop))
 }
 
+/// Where acorn's tokenizer finds the `}` that closes a tag whose
+/// content starts `text`: the offset of the first `}` that pairs with
+/// no `{` or `${` before it.
+///
+/// The tokenizer decides as it goes whether a `/` divides or starts a
+/// regular expression, so a `}` inside a regular expression, a string
+/// or a template's text closes nothing.
+///
+/// `Err` when no such `}` is found: `true` when the tokenizer read to
+/// the end of `text`, where more text might still hold one, `false`
+/// when it stopped at something it cannot read.
+pub fn closing_brace(text: &str) -> Result<u32, bool> {
+    let units = Units::new(text);
+    let mut parser = parser_for(&units, 0, Language::TypeScript);
+    let mut depth = 0u32;
+    // The token before the current one: whether an expression could
+    // start after it, and whether it is `await` or `yield`.
+    let mut expression_ended = false;
+    let mut awaits = false;
+    let mut after_dot = false;
+    let mut result = parser.next_token();
+    loop {
+        // Twice the parser overrules the tokenizer. Where it wants an
+        // operand and is handed a `/`, it reads a regular expression:
+        // the tokenizer takes `await` and `yield` for names, after
+        // which it divides. And TypeScript's `!` after an expression
+        // asserts instead of negating, so that a `/` after it divides.
+        if result.is_ok() && parser.ty == token::Tok::Slash && awaits {
+            result = parser.read_regexp();
+        }
+        if result.is_err() {
+            return Err(parser.pos >= units.units.len());
+        }
+        if parser.ty == token::Tok::Prefix
+            && parser.value == "!"
+            && expression_ended
+            && !awaits
+            && !parser.has_preceding_line_break()
+        {
+            parser.expr_allowed = false;
+        }
+        match parser.ty {
+            token::Tok::Eof => return Err(true),
+            token::Tok::BraceL | token::Tok::DollarBraceL => depth += 1,
+            token::Tok::BraceR if depth == 0 => return Ok(units.byte(parser.start as u32)),
+            token::Tok::BraceR => depth -= 1,
+            _ => {}
+        }
+        expression_ended = !parser.expr_allowed;
+        // After a `.` they name a property.
+        awaits = parser.ty == token::Tok::Name
+            && !parser.contains_esc
+            && !after_dot
+            && matches!(parser.value.as_str(), "await" | "yield");
+        after_dot = matches!(parser.ty, token::Tok::Dot | token::Tok::QuestionDot);
+        result = parser.next();
+    }
+}
+
+/// Where an error with `column_of` set points: acorn-typescript raised
+/// it at the column number of `pos`, taken for an offset into `source`.
+///
+/// The column counts UTF-16 units from the last line break before `pos`
+/// (`\n`, `\r`, U+2028 or U+2029, wherever it stands), and the offset
+/// it is taken for counts them from the start of the text.
+pub fn column_as_offset(source: &str, pos: u32) -> u32 {
+    let before = source.get(..pos as usize).unwrap_or(source);
+    let line_start = before
+        .char_indices()
+        .rev()
+        .find(|(_, c)| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}'))
+        .map_or(0, |(i, c)| i + c.len_utf8());
+    let column = before[line_start..].encode_utf16().count();
+    let mut units = 0;
+    for (i, c) in source.char_indices() {
+        if units >= column {
+            return i as u32;
+        }
+        units += c.len_utf16();
+    }
+    source.len() as u32
+}
+
 /// acorn's reason for rejecting the regular expression `pattern` with
 /// `flags`, or `None` when it accepts it. The flags are taken as valid.
 pub fn regexp_pattern_error(pattern: &str, flags: &str) -> Option<&'static str> {

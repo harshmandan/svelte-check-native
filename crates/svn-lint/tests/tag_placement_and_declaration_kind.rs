@@ -248,6 +248,287 @@ const CASES: &[(&str, Expected)] = &[
             8,
         )),
     ),
+    // A declaration acorn refuses for an early error: a name declared
+    // twice, a reserved word bound, a number or regular expression it
+    // does not allow. In a JavaScript component, then a TypeScript one.
+    (
+        "<script>let obj = {}, y = 1, a = 1;</script>\n{let q = 1, q = 2}",
+        Some((
+            "js_parse_error",
+            "Identifier 'q' has already been declared",
+            57,
+            57,
+        )),
+    ),
+    (
+        "<script>let obj = {}, y = 1, a = 1;</script>\n{const {q, q} = obj}",
+        Some((
+            "js_parse_error",
+            "Identifier 'q' has already been declared",
+            56,
+            56,
+        )),
+    ),
+    (
+        "<script>let obj = {}, y = 1, a = 1;</script>\n{let [q, q] = obj}",
+        Some((
+            "js_parse_error",
+            "Identifier 'q' has already been declared",
+            54,
+            54,
+        )),
+    ),
+    (
+        "<script>let obj = {}, y = 1, a = 1;</script>\n{const q = w => { let w }}",
+        Some((
+            "js_parse_error",
+            "Identifier 'w' has already been declared",
+            67,
+            67,
+        )),
+    ),
+    (
+        "<script>let obj = {}, y = 1, a = 1;</script>\n{const q = function(w, w) {}}",
+        Some(("js_parse_error", "Argument name clash", 68, 68)),
+    ),
+    (
+        "<script>let obj = {}, y = 1, a = 1;</script>\n{let q = class { #a; #a }}",
+        Some((
+            "js_parse_error",
+            "Identifier '#a' has already been declared",
+            66,
+            66,
+        )),
+    ),
+    (
+        "<script>let obj = {}, y = 1, a = 1;</script>\n{let q = y.#z}",
+        Some((
+            "js_parse_error",
+            "Private field '#z' must be declared in an enclosing class",
+            56,
+            56,
+        )),
+    ),
+    (
+        "<script>let obj = {}, y = 1, a = 1;</script>\n{const q = super.y}",
+        Some(("js_parse_error", "'super' keyword outside a method", 56, 56)),
+    ),
+    (
+        "<script>let obj = {}, y = 1, a = 1;</script>\n{const q = 08}",
+        Some(("js_parse_error", "Invalid number", 56, 56)),
+    ),
+    (
+        "<script>let obj = {}, y = 1, a = 1;</script>\n{let q = \"\\08\"}",
+        Some(("js_parse_error", "Octal literal in strict mode", 55, 55)),
+    ),
+    (
+        "<script>let obj = {}, y = 1, a = 1;</script>\n{let q = delete y}",
+        Some((
+            "js_parse_error",
+            "Deleting local variable in strict mode",
+            54,
+            54,
+        )),
+    ),
+    (
+        "<script>let obj = {}, y = 1, a = 1;</script>\n{let yield = 1}",
+        Some(("js_parse_error", "The keyword 'yield' is reserved", 50, 50)),
+    ),
+    (
+        "<script>let obj = {}, y = 1, a = 1;</script>\n{let static = 1}",
+        Some(("js_parse_error", "The keyword 'static' is reserved", 50, 50)),
+    ),
+    (
+        "<script>let obj = {}, y = 1, a = 1;</script>\n{let implements = 1}",
+        Some((
+            "js_parse_error",
+            "The keyword 'implements' is reserved",
+            50,
+            50,
+        )),
+    ),
+    (
+        "<script>let obj = {}, y = 1, a = 1;</script>\n{let let = 1}",
+        Some(("js_parse_error", "The keyword 'let' is reserved", 50, 50)),
+    ),
+    (
+        "<script>let obj = {}, y = 1, a = 1;</script>\n{let eval = 1}",
+        Some(("js_parse_error", "Binding eval in strict mode", 50, 50)),
+    ),
+    (
+        "<script>let obj = {}, y = 1, a = 1;</script>\n{let arguments = 1}",
+        Some(("js_parse_error", "Binding arguments in strict mode", 50, 50)),
+    ),
+    (
+        "<script>let obj = {}, y = 1, a = 1;</script>\n{const q = { __proto__: 1, __proto__: 2 }}",
+        Some((
+            "js_parse_error",
+            "Redefinition of __proto__ property",
+            72,
+            72,
+        )),
+    ),
+    (
+        "<script>let obj = {}, y = 1, a = 1;</script>\n{let q = /(?<n>.)(?<n>.)/}",
+        Some((
+            "js_parse_error",
+            "Invalid regular expression: /(?<n>.)(?<n>.)/: Duplicate capture group name",
+            55,
+            55,
+        )),
+    ),
+    (
+        "<script>let obj = {}, y = 1, a = 1;</script>\n{let q = a + 1}{q}",
+        None,
+    ),
+    (
+        "<script>let obj = {}, y = 1, a = 1;</script>\n{const {x, y} = obj}{x}{y}",
+        Some((
+            "declaration_duplicate",
+            "`y` has already been declared",
+            56,
+            57,
+        )),
+    ),
+    (
+        "<script lang=\"ts\">let obj = {}, y = 1, a = 1;</script>\n{let q = 1, q = 2}",
+        Some((
+            "js_parse_error",
+            "Identifier 'q' has already been declared",
+            67,
+            67,
+        )),
+    ),
+    (
+        "<script lang=\"ts\">let obj = {}, y = 1, a = 1;</script>\n{const {q, q} = obj}",
+        Some((
+            "js_parse_error",
+            "Identifier 'q' has already been declared",
+            66,
+            66,
+        )),
+    ),
+    (
+        "<script lang=\"ts\">let obj = {}, y = 1, a = 1;</script>\n{let [q, q] = obj}",
+        Some((
+            "js_parse_error",
+            "Identifier 'q' has already been declared",
+            64,
+            64,
+        )),
+    ),
+    (
+        "<script lang=\"ts\">let obj = {}, y = 1, a = 1;</script>\n{const q = w => { let w }}",
+        Some((
+            "js_parse_error",
+            "Identifier 'w' has already been declared",
+            77,
+            77,
+        )),
+    ),
+    (
+        "<script lang=\"ts\">let obj = {}, y = 1, a = 1;</script>\n{const q = function(w, w) {}}",
+        Some(("js_parse_error", "Argument name clash", 78, 78)),
+    ),
+    (
+        "<script lang=\"ts\">let obj = {}, y = 1, a = 1;</script>\n{let q = class { #a; #a }}",
+        Some((
+            "js_parse_error",
+            "Identifier '#a' has already been declared",
+            76,
+            76,
+        )),
+    ),
+    (
+        "<script lang=\"ts\">let obj = {}, y = 1, a = 1;</script>\n{let q = y.#z}",
+        Some((
+            "js_parse_error",
+            "Private field '#z' must be declared in an enclosing class",
+            66,
+            66,
+        )),
+    ),
+    (
+        "<script lang=\"ts\">let obj = {}, y = 1, a = 1;</script>\n{const q = super.y}",
+        Some(("js_parse_error", "'super' keyword outside a method", 66, 66)),
+    ),
+    (
+        "<script lang=\"ts\">let obj = {}, y = 1, a = 1;</script>\n{const q = 08}",
+        Some(("js_parse_error", "Invalid number", 66, 66)),
+    ),
+    (
+        "<script lang=\"ts\">let obj = {}, y = 1, a = 1;</script>\n{let q = \"\\08\"}",
+        Some(("js_parse_error", "Octal literal in strict mode", 65, 65)),
+    ),
+    (
+        "<script lang=\"ts\">let obj = {}, y = 1, a = 1;</script>\n{let q = delete y}",
+        Some((
+            "js_parse_error",
+            "Deleting local variable in strict mode",
+            64,
+            64,
+        )),
+    ),
+    (
+        "<script lang=\"ts\">let obj = {}, y = 1, a = 1;</script>\n{let yield = 1}",
+        Some(("js_parse_error", "The keyword 'yield' is reserved", 60, 60)),
+    ),
+    (
+        "<script lang=\"ts\">let obj = {}, y = 1, a = 1;</script>\n{let static = 1}",
+        Some(("js_parse_error", "The keyword 'static' is reserved", 60, 60)),
+    ),
+    (
+        "<script lang=\"ts\">let obj = {}, y = 1, a = 1;</script>\n{let implements = 1}",
+        Some((
+            "js_parse_error",
+            "The keyword 'implements' is reserved",
+            60,
+            60,
+        )),
+    ),
+    (
+        "<script lang=\"ts\">let obj = {}, y = 1, a = 1;</script>\n{let let = 1}",
+        Some(("js_parse_error", "The keyword 'let' is reserved", 60, 60)),
+    ),
+    (
+        "<script lang=\"ts\">let obj = {}, y = 1, a = 1;</script>\n{let eval = 1}",
+        Some(("js_parse_error", "Binding eval in strict mode", 60, 60)),
+    ),
+    (
+        "<script lang=\"ts\">let obj = {}, y = 1, a = 1;</script>\n{let arguments = 1}",
+        Some(("js_parse_error", "Binding arguments in strict mode", 60, 60)),
+    ),
+    (
+        "<script lang=\"ts\">let obj = {}, y = 1, a = 1;</script>\n{const q = { __proto__: 1, __proto__: 2 }}",
+        Some((
+            "js_parse_error",
+            "Redefinition of __proto__ property",
+            82,
+            82,
+        )),
+    ),
+    (
+        "<script lang=\"ts\">let obj = {}, y = 1, a = 1;</script>\n{let q = /(?<n>.)(?<n>.)/}",
+        Some((
+            "js_parse_error",
+            "Invalid regular expression: /(?<n>.)(?<n>.)/: Duplicate capture group name",
+            65,
+            65,
+        )),
+    ),
+    (
+        "<script lang=\"ts\">let obj = {}, y = 1, a = 1;</script>\n{let q = a + 1}{q}",
+        None,
+    ),
+    (
+        "<script lang=\"ts\">let obj = {}, y = 1, a = 1;</script>\n{const {x, y} = obj}{x}{y}",
+        Some((
+            "declaration_duplicate",
+            "`y` has already been declared",
+            66,
+            67,
+        )),
+    ),
 ];
 
 #[test]

@@ -19,6 +19,50 @@
 /// `expression_start` is the offset of the first char *after* the `{`.
 /// Returns `None` if no matching `}` is found (truncated input).
 pub fn find_mustache_end(source: &str, expression_start: u32) -> Option<u32> {
+    let (counted, saw_slash) = count_mustache_end(source, expression_start);
+    if !saw_slash {
+        return counted;
+    }
+    tokenized_mustache_end(source, expression_start, counted).unwrap_or(counted)
+}
+
+/// The closing `}` by acorn's own tokenizer, which knows a division
+/// from a regular expression where the count below can only guess.
+/// `counted` is the count's answer; `None` when the tokenizer cannot
+/// read the text, and the count stands.
+fn tokenized_mustache_end(
+    source: &str,
+    expression_start: u32,
+    counted: Option<u32>,
+) -> Option<Option<u32>> {
+    let start = expression_start as usize;
+    let mut end = counted.map_or(source.len(), |close| close as usize + 1);
+    loop {
+        match svn_acorn::closing_brace(source.get(start..end)?) {
+            Ok(close) => return Some(Some(expression_start + close)),
+            // The text ran out inside the tag: the `}` the count found
+            // lies inside a regular expression.
+            Err(true) if end < source.len() => {
+                end = (start + (end - start) * 2 + 64).min(source.len());
+                while !source.is_char_boundary(end) {
+                    end += 1;
+                }
+            }
+            Err(true) => return Some(None),
+            Err(false) => return None,
+        }
+    }
+}
+
+/// [`find_mustache_end`] by counting braces, and whether a `/` that is
+/// no comment was met on the way: the one place the count guesses.
+fn count_mustache_end(source: &str, expression_start: u32) -> (Option<u32>, bool) {
+    let mut saw_slash = false;
+    let end = count_braces(source, expression_start, &mut saw_slash);
+    (end, saw_slash)
+}
+
+fn count_braces(source: &str, expression_start: u32, saw_slash: &mut bool) -> Option<u32> {
     let bytes = source.as_bytes();
     let mut i = expression_start as usize;
     let mut depth: i32 = 1;
@@ -83,9 +127,11 @@ pub fn find_mustache_end(source: &str, expression_start: u32) -> Option<u32> {
                         }
                     }
                     _ if can_start_regex(bytes, expression_start as usize, i) => {
+                        *saw_slash = true;
                         i = skip_regex_literal(bytes, i + 1)?;
                     }
                     _ => {
+                        *saw_slash = true;
                         i += 1;
                     }
                 }
@@ -486,6 +532,29 @@ mod tests {
         assert_eq!(end_of(src), Some((src.len() - 1) as u32));
         let src = "{(() => { switch (x) { case /}/.source: return 1; } })()}";
         assert_eq!(end_of(src), Some((src.len() - 1) as u32));
+    }
+
+    /// Places where only acorn's tokenizer tells a regular expression
+    /// from a division: after the `)` of an `if`, after a block, after
+    /// an operator that is itself a `/`, after a spread.
+    #[test]
+    fn regex_literal_where_the_tokenizer_decides() {
+        for src in [
+            "{() => { if (a) /}/.test(s); }}",
+            "{() => { if (a) {} /}/.test(s); }}",
+            "{a / /}/.source.length}",
+            "{[.../}/.source]}",
+            "{() => { while (a) /}/.test(s); }}",
+        ] {
+            assert_eq!(end_of(src), Some((src.len() - 1) as u32), "{src}");
+        }
+    }
+
+    #[test]
+    fn division_where_the_tokenizer_decides() {
+        for src in ["{(a) / 2}", "{a[0] / b}", "{f() / g() / 2}", "{`${a}` / 2}"] {
+            assert_eq!(end_of(src), Some((src.len() - 1) as u32), "{src}");
+        }
     }
 
     #[test]

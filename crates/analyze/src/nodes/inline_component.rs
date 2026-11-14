@@ -249,7 +249,8 @@ struct StartTag {
     /// `None` for `<svelte:self>`.
     name_move: Option<Range>,
     /// SVELTE-4-COMPAT: a text `slot="x"` names a parent slot, so only
-    /// its value is kept (see [`is_parent_slot_name`]).
+    /// its value is kept (see
+    /// [`crate::svelte4::slot_position::is_parent_slot_name`]).
     fills_parent_slot: bool,
 }
 
@@ -353,7 +354,8 @@ fn kept_attribute_ranges(
         Attribute::Plain(p) => {
             // SVELTE-4-COMPAT: `slot="x"` under a component names the
             // slot the element fills; its value is still a kept range.
-            let is_slot_name = is_parent_slot_name(p, fills_parent_slot);
+            let is_slot_name =
+                crate::svelte4::slot_position::is_parent_slot_name(p, fills_parent_slot);
             if !is_slot_name {
                 out.push(name_range(p.range.start, p.name.as_str()));
             }
@@ -609,7 +611,7 @@ fn collect_attribute(
                 // component. Anywhere else (inside a snippet or an
                 // element, at the top level) and with any other value
                 // it is an ordinary prop, as in svelte2tsx.
-                if is_parent_slot_name(p, fills_parent_slot) {
+                if crate::svelte4::slot_position::is_parent_slot_name(p, fills_parent_slot) {
                     return;
                 }
                 let Some(v) = &p.value else {
@@ -967,21 +969,6 @@ fn collect_attribute(
             }
         }
     }
-}
-
-/// SVELTE-4-COMPAT: is `p` a `slot` attribute naming the parent slot the
-/// component fills? svelte2tsx reads it so only for a value that is one
-/// text chunk (`Attribute.ts`, `attributeValueIsOfType(value, 'Text')`;
-/// an empty quoted value counts) on a component whose parent is a
-/// component; otherwise `slot` is a prop like any other.
-fn is_parent_slot_name(p: &svn_parser::PlainAttr, fills_parent_slot: bool) -> bool {
-    fills_parent_slot
-        && p.name.as_str() == "slot"
-        && p.value.as_ref().is_some_and(|v| match v.parts.as_slice() {
-            [AttrValuePart::Text { .. }] => true,
-            [] => v.quoted,
-            _ => false,
-        })
 }
 
 /// `slot="x"` with `x` other than `default` on a component child — the

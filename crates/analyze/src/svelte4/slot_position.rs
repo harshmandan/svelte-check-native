@@ -13,7 +13,7 @@
 
 use std::collections::HashSet;
 
-use svn_parser::{Fragment, Node, SvelteElementKind};
+use svn_parser::{AttrValuePart, Fragment, Node, PlainAttr, SvelteElementKind};
 
 /// Start offsets of the components (`<Comp>`, `<svelte:component>`,
 /// `<svelte:self>`) whose nearest enclosing element, component or
@@ -22,6 +22,22 @@ pub(crate) fn components_in_slot_position(fragment: &Fragment) -> HashSet<u32> {
     let mut out = HashSet::new();
     walk(fragment, false, &mut out);
     out
+}
+
+/// Is `p` a `slot` attribute naming the parent slot the component
+/// fills? svelte2tsx reads it so only for a value that is one text chunk
+/// (`Attribute.ts`, `attributeValueIsOfType(value, 'Text')`; an empty
+/// quoted value counts) on a component whose parent is a component
+/// (`fills_parent_slot`, from [`components_in_slot_position`]);
+/// otherwise `slot` is a prop like any other.
+pub(crate) fn is_parent_slot_name(p: &PlainAttr, fills_parent_slot: bool) -> bool {
+    fills_parent_slot
+        && p.name.as_str() == "slot"
+        && p.value.as_ref().is_some_and(|v| match v.parts.as_slice() {
+            [AttrValuePart::Text { .. }] => true,
+            [] => v.quoted,
+            _ => false,
+        })
 }
 
 fn walk(fragment: &Fragment, parent_is_component: bool, out: &mut HashSet<u32>) {

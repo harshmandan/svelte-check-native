@@ -488,6 +488,20 @@ Total time:            1.237s
     }
 
     #[test]
+    fn listed_files_keep_a_path_with_a_spaced_dash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("proj - Copy/src");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.ts");
+        std::fs::write(&file, "").unwrap();
+        let stdout = format!(
+            "{0}\n{0}(1,1): error TS2304: Cannot find name 'x'.\n",
+            file.display()
+        );
+        assert_eq!(listed_files(&stdout), [file]);
+    }
+
+    #[test]
     fn failure_output_drops_listed_files_and_blanks() {
         let tmp = tempfile::tempdir().unwrap();
         let listed = tmp.path().join("a.ts");

@@ -150,14 +150,17 @@ impl InvalidExpressionFinder<'_> {
     fn check_attributes(&mut self, attributes: &[Attribute]) {
         for attr in attributes {
             match attr {
-                Attribute::Plain(p) => {
-                    if let Some(v) = &p.value {
-                        self.check_parts(&v.parts);
-                    }
-                }
-                Attribute::Expression(e) => self.check(e.expression_range),
-                Attribute::Spread(s) => self.check(s.expression_range),
-                Attribute::Attach(a) => self.check(a.expression_range),
+                // acorn's own reading decides everywhere else
+                // (`first_template_parse_error`). A directive's value is
+                // also written into the overlay as a target (`bind:`) or
+                // a pattern (`let:`), where an expression only
+                // acorn-typescript accepts, such as the bare type
+                // parameters `<T>`, cannot stand; svelte2tsx writes
+                // unparsable code for it there.
+                Attribute::Plain(_)
+                | Attribute::Expression(_)
+                | Attribute::Spread(_)
+                | Attribute::Attach(_) => {}
                 Attribute::Directive(d) => match &d.value {
                     Some(DirectiveValue::Expression {
                         expression_range, ..
@@ -183,9 +186,7 @@ impl InvalidExpressionFinder<'_> {
 }
 
 impl TemplateScopeVisitor for InvalidExpressionFinder<'_> {
-    fn visit_expr(&mut self, range: Range) {
-        self.check(range);
-    }
+    fn visit_expr(&mut self, _range: Range) {}
 
     fn visit_element(&mut self, element: &Element) {
         self.check_attributes(&element.attributes);
@@ -215,6 +216,17 @@ mod tests {
         assert!(rejected("<p>{a +}</p>"));
         assert!(rejected("<div title={a +}></div>"));
         assert!(rejected("{#if a +}x{/if}"));
+    }
+
+    /// acorn-typescript returns the type parameters it read where a
+    /// type assertion has nothing to assert, so the compiler accepts
+    /// the tag and the type checker is the one to refuse it.
+    #[test]
+    fn bare_type_parameters_in_a_typescript_tag_are_left_to_the_type_checker() {
+        let ts = "<script lang=\"ts\">let a = 1;</script>";
+        assert!(!rejected(&format!("{ts}{{<div>}}{{a}}")));
+        assert!(!rejected(&format!("{ts}<p title={{<T>}}>{{a}}</p>")));
+        assert!(rejected("<script>let a = 1;</script>{<div>}{a}"));
     }
 
     #[test]

@@ -715,7 +715,7 @@ impl<'s> TagReader<'s> {
         if next as usize >= self.source.len() {
             // The compiler reads a template whose end is trimmed, so
             // there is no whitespace to skip at the end of it.
-            next = (self.source.trim_end().len() as u32).max(at);
+            next = self.template_end().max(at);
         }
         let at = next;
         if self.byte(at) != Some(b'}') {
@@ -868,69 +868,57 @@ impl<'s> TagReader<'s> {
     /// A `{const …}` / `{let …}` declaration tag whose keyword starts at
     /// `start`, reading no further than `limit`.
     ///
-    /// The compiler has acorn read a statement there. A variable
-    /// declaration is the tag's content, and the `}` must follow it.
-    /// Anything else acorn reads (`{let}` is the expression `let`) makes
-    /// the tag an expression tag: `Ok(None)`.
+    /// The compiler has acorn read one statement there, in the whole
+    /// template (trimmed at its end), and the `}` must follow the
+    /// statement after white space. acorn ends a statement where
+    /// JavaScript's semicolon insertion does, so `{let x = 1\nfoo}`
+    /// misses its `}` at `foo`, and `{let x = 1;;}` at the second `;`.
+    /// A variable declaration is the tag's content. Anything else acorn
+    /// reads makes the tag an expression tag: `Ok(None)`.
     pub fn read_declaration_tag(
         &self,
         start: u32,
         limit: u32,
     ) -> Result<Option<ExpressionRead>, TagReadError> {
-        let text = self
-            .source
-            .get(start as usize..limit as usize)
-            .unwrap_or("");
         let read = AcornRead {
             range: Range::new(start, limit),
             shape: AcornReadShape::Statement,
         };
+        let language = if self.ts {
+            svn_acorn::Language::TypeScript
+        } else {
+            svn_acorn::Language::JavaScript
+        };
+        let template = &self.source[..self.template_end() as usize];
+        let end = match svn_acorn::parse_statement_at(template, start, language) {
+            Ok(end) => end,
+            // A statement the template ends inside is the compiler's
+            // `unexpected_eof`, not acorn's error.
+            Err(error) if error.pos as usize == template.len() && !error.no_position => {
+                return Err(TagReadError::new(
+                    error.pos,
+                    TagReadErrorKind::UnexpectedEof,
+                ));
+            }
+            Err(error) => {
+                return Err(
+                    TagReadError::new(error.pos, TagReadErrorKind::JsParse(error.message))
+                        .reading(read),
+                );
+            }
+        };
+        let text = self.source.get(start as usize..end as usize).unwrap_or("");
         let alloc = Allocator::default();
         let source_type = SourceType::default()
             .with_module(true)
             .with_typescript(self.ts);
         let parsed = oxc_parser::Parser::new(&alloc, text, source_type).parse();
-        let whole = parsed.diagnostics.is_empty() && parsed.program.body.len() == 1;
         match parsed.program.body.first() {
-            Some(oxc_ast::ast::Statement::VariableDeclaration(declaration)) if whole => {
-                // acorn refuses declarations this reading lets through:
-                // a name declared twice, a reserved word bound in strict
-                // code, an invalid regular expression.
-                let language = if self.ts {
-                    svn_acorn::Language::TypeScript
-                } else {
-                    svn_acorn::Language::JavaScript
-                };
-                if let Err(error) = svn_acorn::parse_statement_at(text, 0, language) {
-                    return Err(TagReadError::new(
-                        start + error.pos,
-                        TagReadErrorKind::JsParse(error.message),
-                    )
-                    .reading(read));
-                }
-                let expression_end = start + declaration.span.end;
-                Ok(Some(ExpressionRead {
-                    expression_end,
-                    end: self.closing_brace(expression_end)?,
-                }))
-            }
-            Some(_) if whole => Ok(None),
-            first => {
-                // acorn stops inside the statement, or after it where
-                // the `}` should be.
-                let at = parsed
-                    .diagnostics
-                    .first()
-                    .and_then(|d| d.labels.first())
-                    .map(|l| l.span().start)
-                    .or_else(|| first.map(|statement| statement.span().end))
-                    .unwrap_or(text.len() as u32);
-                Err(TagReadError::new(
-                    start + at,
-                    TagReadErrorKind::JsParse("Unexpected token".to_string()),
-                )
-                .reading(read))
-            }
+            Some(oxc_ast::ast::Statement::VariableDeclaration(_)) => Ok(Some(ExpressionRead {
+                expression_end: end,
+                end: self.closing_brace(end)?,
+            })),
+            _ => Ok(None),
         }
     }
 
@@ -960,9 +948,10 @@ impl<'s> TagReader<'s> {
         Ok(at + 1)
     }
 
-    /// Where the template ends for the compiler, which trims it.
+    /// Where the template ends for the compiler, which trims it
+    /// (`trimEnd()`, which takes JavaScript's white space).
     fn template_end(&self) -> u32 {
-        self.source.trim_end().len() as u32
+        self.source.trim_end_matches(is_compiler_whitespace).len() as u32
     }
 
     /// `read_tag_name()`: the end of the name at `at`. An attribute's
@@ -1227,7 +1216,7 @@ impl<'s> TagReader<'s> {
         let open = index;
         index += 1;
         // The compiler reads a template whose end is trimmed.
-        let template_end = self.source.trim_end().len() as u32;
+        let template_end = self.template_end();
         let mut depth = 1;
         while index < template_end && !(self.byte(index) == Some(b')') && depth == 1) {
             match self.byte(index) {

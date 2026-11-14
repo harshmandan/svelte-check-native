@@ -1,0 +1,7 @@
+{
+    "errors": [
+        { "file": "SelfClosing.svelte", "line": 0, "column": 18, "code": "expected_token" },
+        { "file": "input.svelte", "line": 0, "column": 13, "code": "expected_token" }
+    ],
+    "_note": "The compiler reads the attributes of a top-level `<script>` or `<style>` tag with `read_static_attribute`, which is stricter than an element's reading: `=` must follow the attribute name directly, and the tag cannot close with `/>`. `<script lang = \"ts\">` is the attribute `lang` followed by an `=` that starts no attribute, so `parse()` throws `expected_token >` there, and `<script lang=\"ts\" />` throws it at the `/`. svelte-check drops both components; reading the tags like an element's checked them, reporting the type error in the script."
+}

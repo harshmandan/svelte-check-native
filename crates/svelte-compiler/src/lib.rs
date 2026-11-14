@@ -534,9 +534,12 @@ fn locate_svelte_config(start: &Path) -> Option<PathBuf> {
 /// A fixed path in a temp dir shared between users (`/tmp` on Linux)
 /// allows all three.
 fn write_script_to_temp(name: &str, text: &str) -> std::io::Result<(tempfile::TempDir, PathBuf)> {
-    let dir = tempfile::Builder::new()
-        .prefix("svelte-check-native-")
-        .tempdir()?;
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("svelte-check-native-");
+    // tempfile leaves a directory's mode to the umask.
+    #[cfg(unix)]
+    builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
+    let dir = builder.tempdir()?;
     let path = dir.path().join(format!("{name}.mjs"));
     std::fs::write(&path, text)?;
     Ok((dir, path))

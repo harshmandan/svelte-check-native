@@ -16,6 +16,8 @@ fn a_rejected_script_tag_keeps_its_lang() {
         ("<script lang = \"ts\">let a = 1;</script>", 13),
         ("<script lang=\"ts\" lang=\"ts\">let a = 1;</script>", 18),
         ("<script lang=\"ts\" />", 18),
+        ("<script lang=\"ts\"", 17),
+        ("<script lang=\"ts\" ", 17),
     ] {
         let (doc, errors) = svn_parser::parse_sections(source);
         let codes: Vec<_> = errors

@@ -486,15 +486,31 @@ impl<'s> TagReader<'s> {
             }
             Read::Error { at, message } => {
                 self.collect_comments(text, start, at, comments);
+                // acorn-typescript places a few errors at a column number
+                // taken for an offset, which the compiler cuts an each
+                // block's iterable at; the column counts from the line the
+                // read started on in the template.
+                let at = match svn_acorn::read_expression(text, self.language()) {
+                    Err(error) if error.column_of => {
+                        svn_acorn::column_as_offset_from(self.source, start, start + error.pos)
+                    }
+                    _ => start + at,
+                };
                 Err(
-                    TagReadError::new(start + at, TagReadErrorKind::JsParse(message)).reading(
-                        AcornRead {
-                            range: Range::new(start, start + text.len() as u32),
-                            shape: AcornReadShape::Expression,
-                        },
-                    ),
+                    TagReadError::new(at, TagReadErrorKind::JsParse(message)).reading(AcornRead {
+                        range: Range::new(start, start + text.len() as u32),
+                        shape: AcornReadShape::Expression,
+                    }),
                 )
             }
+        }
+    }
+
+    fn language(&self) -> svn_acorn::Language {
+        if self.ts {
+            svn_acorn::Language::TypeScript
+        } else {
+            svn_acorn::Language::JavaScript
         }
     }
 

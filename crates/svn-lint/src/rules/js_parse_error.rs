@@ -107,7 +107,10 @@ pub(crate) fn script_parse_error(
         let base = script.section.content_range.start;
         let mut at = match candidate.at {
             Position::At(rel) => base + candidate.token_start.filter(|_| transpiled).unwrap_or(rel),
-            Position::ColumnOf(rel) => svn_acorn::column_as_offset(source, base + rel),
+            // acorn reads the script with the text before it blanked
+            // to spaces, its `\n`s kept: the column counts from the last
+            // `\n` before the script, or from a break inside it.
+            Position::ColumnOf(rel) => svn_acorn::column_as_offset_from(source, base, base + rel),
             Position::Nowhere => 0,
         };
         if transpiled

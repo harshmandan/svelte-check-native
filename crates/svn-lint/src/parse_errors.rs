@@ -139,7 +139,7 @@ impl Finder<'_> {
                 break;
             }
             let at = if error.column_of {
-                svn_acorn::column_as_offset(self.source, error.pos)
+                svn_acorn::column_as_offset_from(self.source, start, error.pos)
             } else {
                 error.pos
             };
@@ -278,8 +278,10 @@ impl Finder<'_> {
         }
         // acorn-typescript places a few errors at the column number of
         // a position, taken for an offset.
+        // The compiler's read starts where this one does, in the template
+        // or in text that keeps the template before it.
         let at = if error.column_of {
-            svn_acorn::column_as_offset(self.source, error.pos)
+            svn_acorn::column_as_offset_from(self.source, read.range.start, error.pos)
         } else {
             error.pos
         };

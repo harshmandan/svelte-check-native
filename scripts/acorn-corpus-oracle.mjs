@@ -1,20 +1,24 @@
-// Writes crates/acorn/tests/corpus/javascript.json: every input of
-// acorn's own test suite with what acorn does with it, read the four
+// Writes crates/acorn/tests/corpus/javascript.json and typescript.json:
+// every input of acorn's own test suite (and, for TypeScript, of
+// acorn-typescript's) with what the parser does with it, read the four
 // ways the Svelte compiler reads text.
 //
 //   git clone --depth 1 --branch <version> https://github.com/acornjs/acorn bench/_acorn
-//   node scripts/acorn-corpus-oracle.mjs bench/_acorn <dir with node_modules/acorn>
+//   git clone --depth 1 https://github.com/sveltejs/acorn-typescript bench/_acorn_typescript
+//   node scripts/acorn-corpus-oracle.mjs bench/_acorn <dir with node_modules> [bench/_acorn_typescript]
 //
-// The second argument is where the `acorn` package the Svelte compiler
-// uses is installed (any project with svelte in node_modules). Its
-// version has to be the one the checkout is at.
+// The second argument is where the `acorn` and `@sveltejs/acorn-typescript`
+// packages the Svelte compiler uses are installed (any project with
+// svelte in node_modules). The acorn checkout has to be at that
+// version. Only inputs are taken from the checkouts; the parsers that
+// answer are the installed ones.
 
 import { createRequire } from 'node:module';
-import { readdirSync, writeFileSync } from 'node:fs';
-import { resolve, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, resolve, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const [checkout, installed] = process.argv.slice(2).map((p) => resolve(p));
+const [checkout, installed, ts_checkout] = process.argv.slice(2).map((p) => resolve(p));
 if (!checkout || !installed) {
 	console.error('usage: acorn-corpus-oracle.mjs <acorn checkout> <dir with node_modules/acorn>');
 	process.exit(2);
@@ -36,10 +40,11 @@ Module._load = function (request, ...rest) {
 };
 const test_dir = join(checkout, 'test');
 const driver = require(join(test_dir, 'driver.js'));
-const collect = (code) => {
+const collect_into = (set, code) => {
 	// A lone surrogate has no UTF-8 form, so it cannot be a file's text.
-	if (typeof code === 'string' && code.isWellFormed() && code.length < 20000) inputs.add(code);
+	if (typeof code === 'string' && code.isWellFormed() && code.length < 20000) set.add(code);
 };
+const collect = (code) => collect_into(inputs, code);
 driver.test = collect;
 driver.testFail = collect;
 driver.testAssert = collect;
@@ -70,41 +75,69 @@ function shifted(result) {
 	return result;
 }
 
-// The compiler empties the list of undeclared exports after every
-// statement of a component's script.
-class Script extends acorn.Parser {
-	parseStatement(...args) {
-		const statement = super.parseStatement(...args);
-		this.undefinedExports = {};
-		return statement;
+/**
+ * What `Parser` does with each of `codes`.
+ * @param {typeof acorn.Parser} Parser
+ * @param {Iterable<string>} codes
+ */
+function answers(Parser, codes) {
+	// The compiler empties the list of undeclared exports after every
+	// statement of a component's script.
+	class Script extends Parser {
+		parseStatement(...args) {
+			const statement = super.parseStatement(...args);
+			this.undefinedExports = {};
+			return statement;
+		}
 	}
+	const corpus = [];
+	for (const code of codes) {
+		// A component's script, a tag's expression or statement is never
+		// at offset zero of what the parser is given: one space stands
+		// for the rest.
+		const padded = ' ' + code;
+		corpus.push({
+			code,
+			script: shifted(run(padded, () => void Script.parse(padded, options))),
+			module: run(code, () => void Parser.parse(code, options)),
+			exprAt1: shifted(
+				run(padded, () => Parser.parseExpressionAt(padded, 1, { ...options, preserveParens: true }).end)
+			),
+			stmtAt1: shifted(
+				run(padded, () => {
+					const parser = new Parser(options, padded, 1);
+					parser.nextToken();
+					return parser.parseStatement(null, true, Object.create(null)).end;
+				})
+			)
+		});
+	}
+	return corpus;
 }
 
-const corpus = [];
-for (const code of inputs) {
-	// A component's script, a tag's expression or statement is never at
-	// offset zero of what acorn is given: one space stands for the rest.
-	const padded = ' ' + code;
-	corpus.push({
-		code,
-		script: shifted(run(padded, () => void Script.parse(padded, options))),
-		module: run(code, () => void acorn.parse(code, options)),
-		exprAt1: shifted(
-			run(padded, () => acorn.parseExpressionAt(padded, 1, { ...options, preserveParens: true }).end)
-		),
-		stmtAt1: shifted(
-			run(padded, () => {
-				const parser = new acorn.Parser(options, padded, 1);
-				parser.nextToken();
-				return parser.parseStatement(null, true, Object.create(null)).end;
-			})
-		)
-	});
-}
+const corpus_dir = join(fileURLToPath(new URL('..', import.meta.url)), 'crates/acorn/tests/corpus');
 
-const out = join(
-	fileURLToPath(new URL('..', import.meta.url)),
-	'crates/acorn/tests/corpus/javascript.json'
-);
-writeFileSync(out, JSON.stringify(corpus));
-console.log(`${corpus.length} inputs, acorn ${acorn.version} -> ${out}`);
+const javascript = answers(acorn.Parser, inputs);
+writeFileSync(join(corpus_dir, 'javascript.json'), JSON.stringify(javascript));
+console.log(`${javascript.length} inputs, acorn ${acorn.version} -> javascript.json`);
+
+if (ts_checkout) {
+	const entry = require.resolve('@sveltejs/acorn-typescript');
+	const { tsPlugin } = await import(pathToFileURL(entry).href);
+	const version = JSON.parse(readFileSync(join(dirname(entry), 'package.json'), 'utf8')).version;
+	// TypeScript reads JavaScript too, its own way.
+	const ts_inputs = new Set(inputs);
+	const walk = (dir) => {
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			const path = join(dir, entry.name);
+			if (entry.isDirectory()) walk(path);
+			else if (/\.(ts|mts|cts)$/.test(entry.name) && !/\.(test|d)\.ts$/.test(entry.name)) {
+				collect_into(ts_inputs, readFileSync(path, 'utf8'));
+			}
+		}
+	};
+	walk(join(ts_checkout, 'test'));
+	const typescript = answers(acorn.Parser.extend(tsPlugin()), ts_inputs);
+	writeFileSync(join(corpus_dir, 'typescript.json'), JSON.stringify(typescript));
+	console.log(`${typescript.length} inputs, acorn-typescript ${version} -> typescript.json`);
+}

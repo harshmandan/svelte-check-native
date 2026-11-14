@@ -528,7 +528,8 @@ impl<'s> TagReader<'s> {
             if !matches!(self.byte(start), Some(b'{' | b'[')) {
                 return Err(TagReadError::new(start, TagReadErrorKind::ExpectedPattern));
             }
-            let end = acorn::match_bracket(self.source, start).map_err(TagReadError::bracket)?;
+            let end =
+                acorn::match_bracket(self.template(), start).map_err(TagReadError::bracket)?;
             // acorn reads the pattern as the left side of an assignment,
             // written where it stands in the template.
             let read = AcornRead {
@@ -889,7 +890,7 @@ impl<'s> TagReader<'s> {
         } else {
             svn_acorn::Language::JavaScript
         };
-        let template = &self.source[..self.template_end() as usize];
+        let template = self.template();
         let end = match svn_acorn::parse_statement_at(template, start, language) {
             Ok(end) => end,
             // A statement the template ends inside is the compiler's
@@ -946,6 +947,12 @@ impl<'s> TagReader<'s> {
             return Err(TagReadError::new(at, TagReadErrorKind::ExpectedToken(">")));
         }
         Ok(at + 1)
+    }
+
+    /// The template as the compiler reads it: trimmed at its end, so a
+    /// read that runs out of text stops there.
+    fn template(&self) -> &'s str {
+        &self.source[..self.template_end() as usize]
     }
 
     /// Where the template ends for the compiler, which trims it
@@ -1201,7 +1208,7 @@ impl<'s> TagReader<'s> {
         let mut index = params_start;
         let mut generics = None;
         if self.ts && self.byte(index) == Some(b'<') {
-            let end = acorn::match_brackets(self.source, index, &[(b'<', b'>')])
+            let end = acorn::match_brackets(self.template(), index, &[(b'<', b'>')])
                 .map_err(TagReadError::bracket)?;
             generics = Some(Range::new(index + 1, end - 1));
             index = end;

@@ -1,0 +1,8 @@
+{
+    "errors": [
+        { "file": "input.svelte", "line": 5, "column": 19, "code": 2345 },
+        { "file": "input.svelte", "line": 7, "column": 19, "code": 2345 },
+        { "file": "input.svelte", "line": 8, "column": 18, "code": 2345 }
+    ],
+    "_note": "A style directive whose quoted value is one mustache and nothing else (`style:color=\"{obj}\"`) is that expression to svelte2tsx, as `style:color={obj}` is, so `__sveltets_2_ensureType(String, Number, obj)` reports a value that is neither a string nor a number. We wrote it as a template literal, which is always a string, and reported nothing."
+}

@@ -1,10 +1,11 @@
 {
   "private": true,
   "name": "upstream-emit-reference",
-  "description": "Pinned svelte2tsx + svelte used by scripts/gen-upstream-emit.mjs to write the upstream reference emit for the emit-snapshot samples. svelte2tsx must equal the language-tools submodule's packages/svelte2tsx version; the generator refuses to run otherwise.",
+  "description": "Pinned svelte2tsx + svelte used by scripts/gen-upstream-emit.mjs to write the upstream reference emit for the emit-snapshot samples. svelte2tsx must equal the language-tools submodule's packages/svelte2tsx version; the generator refuses to run otherwise. `svelte4` is the compiler a sample whose workspace installs Svelte 4 is generated with, as svelte-check would load that project's own compiler.",
   "dependencies": {
-    "svelte": "5.57.2",
+    "svelte": "5.57.3",
     "svelte2tsx": "0.7.63",
+    "svelte4": "npm:svelte@4.2.19",
     "typescript": "6.0.3"
   }
 }

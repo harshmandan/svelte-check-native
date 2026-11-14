@@ -12,8 +12,19 @@
 // differs from what Svelte 5 projects get (implicit `children` props,
 // for one).
 //
-// A sample whose template svelte2tsx rejects (svelte-check reports the
-// parse error and type-checks nothing) gets `upstream.error.txt` instead.
+// svelte-check takes `parse` and `VERSION` from one `svelte/compiler`,
+// the project's. A sample whose workspace installs Svelte 4 (some
+// fixtures carry a `node_modules/svelte` stub) gets the pinned Svelte 4
+// compiler, every other the pinned Svelte 5 one; each file's header names
+// the version used.
+//
+// The files of a sample are its input's `.svelte` files, found the way
+// our `--emit-ts` finds them (`node_modules` and dot directories left
+// out), not the ones our snapshot happens to list, so a component our
+// emit drops still gets a reference. A file whose template svelte2tsx
+// rejects (svelte-check reports the parse error and type-checks nothing
+// of it) is listed in `upstream.error.txt` as `file: message`; the other
+// files of the sample are still written to `upstream.emit.ts`.
 //
 // Run after bumping the submodule, then review the diff:
 //   (cd scripts/upstream-emit && npm install)
@@ -31,11 +42,22 @@ const SNAP = path.join(ROOT, 'crates/cli/tests/emit_snapshots');
 const SAMPLES = path.join(ROOT, 'language-tools/packages/svelte2tsx/test');
 
 const require = createRequire(path.join(PINNED, 'package.json'));
-let svelte2tsx, parse, VERSION, s2tVersion;
+// The pinned compilers, by the Svelte major a workspace installs.
+const compilers = {};
+let svelte2tsx, s2tVersion;
 try {
     ({ svelte2tsx } = require('svelte2tsx'));
-    ({ parse, VERSION } = require('svelte/compiler'));
     s2tVersion = require('svelte2tsx/package.json').version;
+    for (const [major, name] of [
+        [5, 'svelte'],
+        [4, 'svelte4'],
+    ]) {
+        const { parse, VERSION } = require(`${name}/compiler`);
+        if (Number(VERSION.split('.')[0]) !== major) {
+            throw new Error(`${name} is ${VERSION}, expected Svelte ${major}`);
+        }
+        compilers[major] = { parse, VERSION };
+    }
 } catch {
     console.error('missing pinned deps: run `(cd scripts/upstream-emit && npm install)`');
     process.exit(2);
@@ -66,26 +88,44 @@ function isTsSvelte(text) {
 }
 
 /**
- * The Svelte version svelte-check passes for a workspace: the nearest
- * installed `svelte` package (some fixtures pin a Svelte 4 stub), else
- * the pinned one.
+ * The `svelte/compiler` svelte-check would load for a workspace: the
+ * pinned compiler of the major the nearest installed `svelte` package
+ * has (some fixtures pin a Svelte 4 stub), else the pinned Svelte 5.
  */
-function svelteVersionFor(workspace) {
+function compilerFor(workspace) {
     for (let dir = workspace; dir.startsWith(ROOT); dir = path.dirname(dir)) {
         const pkg = path.join(dir, 'node_modules', 'svelte', 'package.json');
-        if (fs.existsSync(pkg)) return JSON.parse(fs.readFileSync(pkg, 'utf8')).version;
+        if (fs.existsSync(pkg)) {
+            const version = JSON.parse(fs.readFileSync(pkg, 'utf8')).version;
+            const compiler = compilers[Number(version.split('.')[0])];
+            if (!compiler) {
+                console.error(`${pkg}: no pinned compiler for Svelte ${version}`);
+                process.exit(2);
+            }
+            return compiler;
+        }
         if (dir === ROOT) break;
     }
-    return VERSION;
+    return compilers[5];
 }
 
-/** The `.svelte` files our snapshot covers, in the order it lists them. */
-function snapshotFiles(snapshot) {
-    return [...snapshot.matchAll(/^\/\/ === (.+) ===$/gm)].map((m) => m[1]);
+/**
+ * A sample's `.svelte` files, relative and sorted, found as our
+ * `--emit-ts` finds them: every directory but `node_modules` and the
+ * ones whose name starts with a dot.
+ */
+function sampleFiles(dir, base = dir, out = []) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) sampleFiles(full, base, out);
+        else if (entry.name.endsWith('.svelte')) out.push(path.relative(base, full).split(path.sep).join('/'));
+    }
+    return out.sort();
 }
 
 let written = 0;
-let errors = 0;
+let rejected = 0;
 // Where each corpus keeps its inputs: upstream's samples, and our own
 // bug fixtures.
 const inputDir = {
@@ -102,7 +142,8 @@ for (const corpus of Object.keys(inputDir)) {
         if (!fs.existsSync(workspace)) continue;
         const parts = [];
         const failures = [];
-        for (const rel of snapshotFiles(fs.readFileSync(ours, 'utf8'))) {
+        const { parse, VERSION } = compilerFor(workspace);
+        for (const rel of sampleFiles(workspace)) {
             const sourcePath = path.join(workspace, rel);
             const text = fs.readFileSync(sourcePath, 'utf8');
             const isTsFile = isTsSvelte(text);
@@ -115,7 +156,7 @@ for (const corpus of Object.keys(inputDir)) {
             try {
                 const { code } = svelte2tsx(text, {
                     parse,
-                    version: svelteVersionFor(workspace),
+                    version: VERSION,
                     filename: sourcePath,
                     isTsFile,
                     mode: 'ts',
@@ -136,13 +177,16 @@ for (const corpus of Object.keys(inputDir)) {
             `svelte ${VERSION}, svelte-check --tsgo options\n`;
         if (failures.length) {
             fs.writeFileSync(errorFile, failures.join('\n') + '\n');
-            fs.rmSync(emitFile, { force: true });
-            errors++;
+            rejected += failures.length;
         } else {
-            fs.writeFileSync(emitFile, header + parts.join('\n'));
             fs.rmSync(errorFile, { force: true });
+        }
+        if (parts.length) {
+            fs.writeFileSync(emitFile, header + parts.join('\n'));
             written++;
+        } else {
+            fs.rmSync(emitFile, { force: true });
         }
     }
 }
-console.log(`${written} upstream emits written, ${errors} samples rejected by svelte2tsx`);
+console.log(`${written} upstream emits written, ${rejected} files rejected by svelte2tsx`);

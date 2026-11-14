@@ -502,6 +502,50 @@ fn block_comment_directives_above_an_import_take_its_error() {
     assert_eq!(found, [(7, 16, 2306)]);
 }
 
+/// What tsgo says of a name imported from a rejected component is set
+/// aside only where it judged the name against svelte's `*.svelte`
+/// declaration. What does not depend on the module, such as an unused
+/// import under `noUnusedLocals`, the default engine reports as well.
+#[test]
+fn an_unused_import_of_a_rejected_component_is_still_reported() {
+    let dir = workspace(&[
+        (
+            "src/main.ts",
+            "import Z, { named } from './WithImport.svelte';\nexport const n = named;\n",
+        ),
+        (
+            "src/ambient.d.ts",
+            "declare module '*.svelte' {\n  const component: any;\n  export default component;\n}\n",
+        ),
+        (
+            "src/WithImport.svelte",
+            "<script>\n  export const named = 1;\n</script>\n<div>\n",
+        ),
+    ]);
+    fs::write(
+        dir.path().join("tsconfig.json"),
+        r#"{ "compilerOptions": { "target": "ES2022", "module": "ESNext",
+             "moduleResolution": "bundler", "strict": true, "skipLibCheck": true,
+             "noUnusedLocals": true },
+             "include": ["src/**/*"] }"#,
+    )
+    .unwrap();
+    let (diagnostics, _) = check(dir.path(), &[]);
+    let mut found: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["filename"] == "src/main.ts")
+        .map(|d| {
+            (
+                d["start"]["line"].as_i64().unwrap(),
+                d["start"]["character"].as_i64().unwrap(),
+                d["code"].as_i64().unwrap(),
+            )
+        })
+        .collect();
+    found.sort();
+    assert_eq!(found, [(0, 7, 1192), (0, 7, 6133)]);
+}
+
 /// What TypeScript says of a name a module does not export depends on
 /// what the module does hold: an export spelled nearly alike, a default
 /// export, a declaration it keeps to itself or exports under another

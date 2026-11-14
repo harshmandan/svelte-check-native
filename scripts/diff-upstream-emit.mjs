@@ -18,12 +18,20 @@
 //   await     the awaited expression of `{#await}`
 //   snippet   a snippet's name and parameters (compared as a set)
 //   render    the argument of `{@render}`
+//   on        the event name and handler of a component's `$on(…)`
 //
 // Not compared: the render function's result and the non-generic default
 // export. We fold svelte2tsx's factory wrappers (`with_any_event`,
 // `partial`) into the render result instead of applying them around it,
 // so the two only agree at the level of the resulting types, which a
 // text comparison cannot see.
+//
+// Also not compared, because the two sides write them in shapes a text
+// comparison cannot pair: `bind:` assignments and `$$bindings`, actions,
+// transitions and animations, `{@const}`, `{@html}` and `{#key}`, bare
+// `{expression}` statements, slot definitions, and which stretches are
+// wrapped in ignore comments (all comments are dropped). A difference
+// there shows only in the diagnostics, which the fixtures check.
 //
 // Each construct is normalised before comparing: comments and whitespace
 // outside strings removed, trailing commas dropped, helper names mapped
@@ -290,8 +298,12 @@ function unwrapValues(s) {
         if (c === '(' && (out.endsWith(':') || out.endsWith('...'))) {
             const close = matchClose(s, i);
             const next = s[close + 1];
-            if (next === ',' || next === '}' || next === undefined) {
-                out += unwrapValues(s.slice(i + 1, close));
+            // Not around a comma sequence: bare, `"x":a, b` gives the
+            // object a second member, and parenthesised it is one value.
+            const inner = s.slice(i + 1, close);
+            const one_value = splitTop(stripOuterParens(inner)).length === 1;
+            if (one_value && (next === ',' || next === '}' || next === undefined)) {
+                out += unwrapValues(inner);
                 i = close + 1;
                 continue;
             }
@@ -409,6 +421,13 @@ function extract(original) {
     parenContent(/\bif\s*\(/g, 'if');
     parenContent(/\bawait\s*\(/g, 'await');
     parenContent(/(?:__sveltets_2_ensureSnippet|__svn_ensure_snippet)\(/g, 'render');
+    // `on:event` on a component: the event's name and its handler, which
+    // `$on` types against the component's events.
+    parenContent(/\.\$on\(/g, 'on');
+    // We parenthesise the handler; an argument is one value either way.
+    for (const c of found) {
+        if (c.kind === 'on') c.text = splitTop(c.text).map(stripOuterParens).join(',');
+    }
     parenContent(
         /\bconst\s+([\w$]+)\s*(?:\/\*Ωignore_positionΩ\*\/)?\s*=\s*\/\*\*\s*@returns\s*\{ReturnType<import\('svelte'\)\.Snippet>\}\s*\*\/\s*\(/g,
         'snippet',
@@ -455,6 +474,7 @@ function compareSample(corpus, name) {
         'await',
         'snippet',
         'render',
+        'on',
     ]) {
         let xs = a.filter((c) => c.kind === kind);
         let ys = b.filter((c) => c.kind === kind);

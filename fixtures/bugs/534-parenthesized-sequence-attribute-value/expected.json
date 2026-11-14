@@ -1,0 +1,7 @@
+{
+    "errors": [
+        { "file": "input.svelte", "line": 6, "column": 13, "code": 2353 },
+        { "file": "input.svelte", "line": 7, "column": 6, "code": 2322 }
+    ],
+    "_note": "svelte2tsx copies the text of an attribute value's node into the props object. The node leaves out parentheses around the expression, so `x={(a, b)}` is written `\"x\":a, b`: the prop `x` is `a`, and `b` is a second, shorthand property. TypeScript then reports `b` as a property the component does not take (TS2353), and for `x={(b, a)}` the string given to `x` (TS2322). We kept the parentheses and checked the sequence as one value, which reported the comma operator's unused left side (TS2695) and the wrong operand's type."
+}

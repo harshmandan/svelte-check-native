@@ -391,11 +391,7 @@ pub(crate) fn emit_plain_value(buf: &mut EmitBuffer, source: &str, v: &svn_parse
             }
             let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
             let start = expression_range.start + leading_ws;
-            let end = start + trimmed.len() as u32;
-            let (open, close) = value_parens(trimmed);
-            buf.push_str(open);
-            buf.append_with_source(trimmed, svn_core::Range::new(start, end));
-            buf.push_str(close);
+            write_value(buf, trimmed, start);
         }
         parts => {
             // Multi-part (text + interpolations). Template literal
@@ -454,7 +450,6 @@ pub(crate) fn emit_expression(
     }
     let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
     let start = e.expression_range.start + leading_ws;
-    let end = start + trimmed.len() as u32;
     let name = e.name.as_str();
     let wrap = needs_data_attr_wrap(name);
     let (key_prefix, line_suffix) = if wrap {
@@ -467,11 +462,8 @@ pub(crate) fn emit_expression(
     let name_range = svn_core::Range::new(e.range.start, e.range.start + name.len() as u32);
     let key_name = transform_attribute_case(name, should_lowercase);
     write_attribute_key(buf, &key_name, name_range, true);
-    let (open, close) = value_parens(trimmed);
     buf.push_str(" ");
-    buf.push_str(open);
-    buf.append_with_source(trimmed, svn_core::Range::new(start, end));
-    buf.push_str(close);
+    write_value(buf, trimmed, start);
     // svelte2tsx writes the separator after a value over the
     // attribute's closing `}`, so an error the value leaves open (a
     // bare comma sequence, say) is reported at that brace.
@@ -490,14 +482,22 @@ pub(crate) fn emit_expression(
     }
 }
 
-/// Parentheses around an attribute value: every value is wrapped except
-/// a comma sequence, which svelte2tsx leaves bare (see
-/// [`crate::util::is_sequence_expression`]).
-pub(crate) fn value_parens(expr: &str) -> (&'static str, &'static str) {
-    if crate::util::is_sequence_expression(expr) {
-        ("", "")
-    } else {
-        ("(", ")")
+/// Writes an attribute value, whose text `expr` starts at `start` in
+/// the source. Every value is wrapped in parentheses except a comma
+/// sequence, of which only its own text is written, bare (see
+/// [`crate::util::sequence_expression_text`]).
+pub(crate) fn write_value(buf: &mut EmitBuffer, expr: &str, start: u32) {
+    match crate::util::sequence_expression_text(expr) {
+        Some(sequence) => {
+            let range =
+                svn_core::Range::new(start + sequence.start as u32, start + sequence.end as u32);
+            buf.append_with_source(&expr[sequence], range);
+        }
+        None => {
+            buf.push_str("(");
+            buf.append_with_source(expr, svn_core::Range::new(start, start + expr.len() as u32));
+            buf.push_str(")");
+        }
     }
 }
 

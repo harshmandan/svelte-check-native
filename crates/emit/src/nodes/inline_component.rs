@@ -814,11 +814,8 @@ fn write_prop_shape_value(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::P
                 return;
             }
             write_quoted_prop_key_with_source(buf, name, attr_range);
-            let (open, close) = crate::nodes::attribute::value_parens(expr);
             buf.push_str(" ");
-            buf.push_str(open);
-            buf.append_with_source(expr, *expr_range);
-            buf.push_str(close);
+            crate::nodes::attribute::write_value(buf, expr, expr_range.start);
         }
         svn_analyze::PropShape::Shorthand { name, .. } => {
             // `{foo}` shorthand is only valid when the key is also a

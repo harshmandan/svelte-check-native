@@ -85,27 +85,39 @@ pub(crate) fn svelte5_plus() -> bool {
         .is_none_or(|major| major >= 5)
 }
 
-/// Whether an attribute value expression is a top-level comma sequence
-/// (`{a, b}`). svelte2tsx copies attribute values into the attrs or
-/// props object without parentheses, so a sequence there is read as
-/// extra object members — usually a syntax error — rather than one
-/// value; the emit sites leave such a value unwrapped to match.
-pub(crate) fn is_sequence_expression(expr: &str) -> bool {
-    let wrapped = format!("(\n{expr}\n);");
+/// Where the comma sequence is in an attribute value expression that
+/// is one, with or without parentheses around it (`{a, b}`,
+/// `{(a, b)}`): the sequence's own text, as offsets into `expr`.
+///
+/// svelte2tsx copies the text of an attribute value's node into the
+/// attrs or props object. The node leaves out parentheses around the
+/// expression, and nothing is put around the copy, so a sequence there
+/// is read as extra object members rather than one value. The emit
+/// sites write a sequence's own text, unwrapped, to match.
+pub(crate) fn sequence_expression_text(expr: &str) -> Option<std::ops::Range<usize>> {
+    use oxc_ast::ast::{Expression, Statement};
+    use oxc_span::GetSpan;
+    const PREFIX: &str = "(\n";
+    let wrapped = format!("{PREFIX}{expr}\n);");
     let alloc = oxc_allocator::Allocator::default();
     let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
     if !parsed.errors.is_empty() {
-        return false;
+        return None;
     }
-    matches!(
-        parsed.program.body.as_slice(),
-        [oxc_ast::ast::Statement::ExpressionStatement(stmt)]
-            if matches!(
-                &stmt.expression,
-                oxc_ast::ast::Expression::ParenthesizedExpression(p)
-                    if matches!(p.expression, oxc_ast::ast::Expression::SequenceExpression(_))
-            )
-    )
+    let [Statement::ExpressionStatement(stmt)] = parsed.program.body.as_slice() else {
+        return None;
+    };
+    let mut expression = &stmt.expression;
+    while let Expression::ParenthesizedExpression(inner) = expression {
+        expression = &inner.expression;
+    }
+    let Expression::SequenceExpression(sequence) = expression else {
+        return None;
+    };
+    let span = sequence.span();
+    let start = (span.start as usize).checked_sub(PREFIX.len())?;
+    let end = (span.end as usize).checked_sub(PREFIX.len())?;
+    (end <= expr.len()).then_some(start..end)
 }
 
 /// Derive a per-file render function name. Hash of the source path

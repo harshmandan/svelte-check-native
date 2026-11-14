@@ -242,3 +242,53 @@ fn suggestion_ties_resolve_as_the_compiler_does() {
         ]
     );
 }
+
+#[test]
+fn comments_in_every_kind_of_template_expression_are_read() {
+    let src = "<svelte:options runes />\n<script>\n\tlet items = $state([]);\n</script>\n\
+               {#each items as item, i (/* svelte-ignore foo_b */ item)}\n\
+               \t{@const x = /* svelte-ignore foo_c */ item}\n\t<p>{x}</p>\n{/each}\n\
+               {#snippet s(/* svelte-ignore foo_d */ a)}{a}{/snippet}\n\
+               {#await /* svelte-ignore foo_e */ items then v}{v}{/await}\n\
+               {#key /* svelte-ignore foo_g */ items}{/key}\n\
+               {@html /* svelte-ignore foo_h */ items}\n\
+               {@render s(/* svelte-ignore foo_i */ 1)}\n\
+               <input bind:value={/* svelte-ignore foo_j */ items[0]} />\n\
+               <p class:a={/* svelte-ignore foo_k */ items} style:color={/* svelte-ignore foo_l */ \"red\"} {.../* svelte-ignore foo_m */ items}></p>\n";
+    // A keyed each block's body is visited before its key.
+    assert_eq!(
+        positions(src),
+        [
+            "unknown_code 6:31",
+            "unknown_code 5:43",
+            "unknown_code 9:30",
+            "unknown_code 10:26",
+            "unknown_code 11:24",
+            "unknown_code 12:25",
+            "unknown_code 13:29",
+            "unknown_code 14:37",
+            "unknown_code 15:30",
+            "unknown_code 15:76",
+            "unknown_code 15:113"
+        ]
+    );
+}
+
+#[test]
+fn snippet_parameter_and_const_tag_comments_are_read_once() {
+    let src = "<svelte:options runes />\n\
+               {#snippet s(/* svelte-ignore foo_d */ a, b = /* svelte-ignore foo_e */ 1, { c = (/* svelte-ignore foo_f */ 2) })}{a}{/snippet}\n\
+               {#snippet t(a /* svelte-ignore foo_g */, b)}{a}{/snippet}\n\
+               {#if true}\n\t{@const x = /* svelte-ignore foo_c */ 1}\n\
+               \t{@const y = /* svelte-ignore foo_h */ { a: 1 }}\n\t{x}{y}\n{/if}\n";
+    assert_eq!(
+        positions(src),
+        [
+            "unknown_code 2:30",
+            "unknown_code 2:63",
+            "unknown_code 2:99",
+            "unknown_code 5:31",
+            "unknown_code 6:31"
+        ]
+    );
+}

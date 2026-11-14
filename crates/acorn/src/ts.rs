@@ -234,9 +234,9 @@ impl Parser {
     pub(crate) fn try_parse<T>(
         &mut self,
         f: impl FnOnce(&mut Self) -> PResult<Option<T>>,
-    ) -> Tried<T> {
+    ) -> PResult<Tried<T>> {
         let snapshot = self.clone();
-        match f(self) {
+        Ok(match f(self) {
             Ok(Some(node)) => Tried {
                 node: Some(node),
                 error: None,
@@ -254,10 +254,12 @@ impl Parser {
                 *self = snapshot;
                 let error = match stop {
                     Stop::Error(raised) => raised,
+                    Stop::Crash(message) => return Err(Stop::Crash(message)),
                     Stop::InvalidTemplateEscape => Raised {
                         pos: self.start as u32,
                         message: "Unexpected token".to_string(),
                         column_of: false,
+                        no_position: false,
                     },
                 };
                 Tried {
@@ -266,7 +268,7 @@ impl Parser {
                     aborted: false,
                 }
             }
-        }
+        })
     }
 
     /// `tsTryParse`: keeps what `f` read when it returns something,
@@ -305,8 +307,8 @@ impl Parser {
     pub(crate) fn ts_try_parse_and_catch<T>(
         &mut self,
         f: impl FnOnce(&mut Self) -> PResult<Option<T>>,
-    ) -> Option<T> {
-        self.try_parse(f).node
+    ) -> PResult<Option<T>> {
+        Ok(self.try_parse(f)?.node)
     }
 
     pub(crate) fn rethrow<T>(&self, error: Raised) -> PResult<T> {

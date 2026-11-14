@@ -12,6 +12,15 @@
 // svelte in node_modules). The acorn checkout has to be at that
 // version. Only inputs are taken from the checkouts; the parsers that
 // answer are the installed ones.
+//
+// With MUTANTS_DIR set it also writes javascript-mutants.json and
+// typescript-mutants.json there: every input with a few tokens dropped,
+// added, replaced or swapped (MUTANTS_PER_INPUT of each, default 30,
+// from MUTANTS_SEED, default 1). The test suites hold mostly whole
+// programs; the mutants are the broken ones. They are too many to keep
+// in the repository:
+//
+//   ACORN_CORPUS_EXTRA=<dir>/typescript-mutants.json cargo test -p svn-acorn --test corpus
 
 import { createRequire } from 'node:module';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -61,8 +70,10 @@ function run(text, read) {
 		const end = read();
 		return { end: end == null ? null : byte(text, end) };
 	} catch (error) {
-		if (!(error instanceof SyntaxError) || error.pos == null) {
-			return { crash: String(error.message).slice(0, 80) };
+		// Not a syntax error with an offset: the parser itself broke, or
+		// raised with something that is no offset.
+		if (!(error instanceof SyntaxError) || typeof error.pos !== 'number') {
+			return { crash: String(error.message) };
 		}
 		return { pos: byte(text, error.pos), msg: error.message.replace(/ \(\d+:\d+\)$/, '') };
 	}
@@ -115,11 +126,86 @@ function answers(Parser, codes) {
 	return corpus;
 }
 
+// Inputs acorn-typescript breaks on: it reads a field of a node it does
+// not have. Neither test suite holds one.
+const breaking = [
+	'class A { @dec ; }',
+	'class A { @dec ; m() {} }',
+	'(class { @dec ; })',
+	'type F = (a,,b) => void;',
+	'interface I { m(a,,b): void }',
+	'interface I { new (,a): I }',
+	'export type;',
+	'export namespace;',
+	'export type\nfoo',
+	'export abstract\nclass A {}',
+	'export type: x',
+	'x = a?.<T>b;',
+	'a?.<T>b',
+	'<U>(x) => a?.<T>b',
+	'let x: [a,,b];',
+	'export declare;',
+	'export interface\nI {}'
+];
+
+const words = ['<', '>', '?', ':', ',', ';', '(', ')', '{', '}', '[', ']', '=', '=>', '...', '!',
+	'@d', 'as', 'type', 'declare', 'abstract', 'export', 'async', 'await', 'yield', 'static',
+	'readonly', 'get', 'set', 'new', 'this', 'let', 'const', 'enum', 'interface', 'namespace',
+	'implements', 'extends', 'satisfies', 'in', 'of', '?.', '<T>', '#p', 'private', 'public',
+	'override', 'accessor', '\n', ' '];
+const token = /\s+|[A-Za-z_$][\w$]*|\d[\w.]*|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|=>|\.\.\.|\?\.|[^\sA-Za-z_$\d]/g;
+
+/**
+ * Each of `codes` with one to three of its tokens changed, `per_input`
+ * times over.
+ * @param {Iterable<string>} codes
+ */
+function mutants(codes, per_input, seed) {
+	const random = (n) => {
+		seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+		return seed % n;
+	};
+	const seen = new Set(codes);
+	const made = [];
+	for (const code of codes) {
+		const tokens = code.length < 400 ? code.match(token) || [] : [];
+		if (tokens.length < 2) continue;
+		for (let k = 0; k < per_input; k++) {
+			const t = tokens.slice();
+			for (let changes = 1 + random(3); changes > 0 && t.length > 1; changes--) {
+				const i = random(t.length);
+				const kind = random(4);
+				if (kind === 0) t.splice(i, 1);
+				else if (kind === 1) t.splice(i, 0, words[random(words.length)]);
+				else if (kind === 2) t[i] = words[random(words.length)];
+				else {
+					const j = random(t.length);
+					[t[i], t[j]] = [t[j], t[i]];
+				}
+			}
+			const mutant = t.join('');
+			if (seen.has(mutant) || !mutant.isWellFormed()) continue;
+			seen.add(mutant);
+			made.push(mutant);
+		}
+	}
+	return made;
+}
+
+const mutants_dir = process.env.MUTANTS_DIR;
+const per_input = Number(process.env.MUTANTS_PER_INPUT) || 30;
+const seed = Number(process.env.MUTANTS_SEED) || 1;
+
 const corpus_dir = join(fileURLToPath(new URL('..', import.meta.url)), 'crates/acorn/tests/corpus');
 
 const javascript = answers(acorn.Parser, inputs);
 writeFileSync(join(corpus_dir, 'javascript.json'), JSON.stringify(javascript));
 console.log(`${javascript.length} inputs, acorn ${acorn.version} -> javascript.json`);
+if (mutants_dir) {
+	const made = answers(acorn.Parser, mutants(inputs, per_input, seed));
+	writeFileSync(join(mutants_dir, 'javascript-mutants.json'), JSON.stringify(made));
+	console.log(`${made.length} mutants -> javascript-mutants.json`);
+}
 
 if (ts_checkout) {
 	const entry = require.resolve('@sveltejs/acorn-typescript');
@@ -137,7 +223,13 @@ if (ts_checkout) {
 		}
 	};
 	walk(join(ts_checkout, 'test'));
+	for (const code of breaking) ts_inputs.add(code);
 	const typescript = answers(acorn.Parser.extend(tsPlugin()), ts_inputs);
 	writeFileSync(join(corpus_dir, 'typescript.json'), JSON.stringify(typescript));
 	console.log(`${typescript.length} inputs, acorn-typescript ${version} -> typescript.json`);
+	if (mutants_dir) {
+		const made = answers(acorn.Parser.extend(tsPlugin()), mutants(ts_inputs, per_input, seed));
+		writeFileSync(join(mutants_dir, 'typescript-mutants.json'), JSON.stringify(made));
+		console.log(`${made.length} mutants -> typescript-mutants.json`);
+	}
 }

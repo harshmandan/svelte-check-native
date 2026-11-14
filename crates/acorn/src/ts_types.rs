@@ -1,7 +1,7 @@
 //! acorn-typescript's type parser: everything after a `:`, inside
 //! `<…>`, and in the body of an interface or type alias.
 
-use crate::state::{ForInit, Node, PResult, Parser, Ty};
+use crate::state::{ForInit, Node, PResult, Parser, Stop, Ty};
 use crate::token::Tok;
 use crate::ts::{
     INVALID_MODIFIER_ON_TYPE_MEMBER, INVALID_MODIFIER_ON_TYPE_PARAMETER,
@@ -373,7 +373,14 @@ impl Parser {
 
     fn ts_parse_binding_list_for_signature(&mut self) -> PResult<Vec<Option<Node>>> {
         let patterns = self.parse_binding_list(Tok::ParenR, true, true, None)?;
-        for pattern in patterns.iter().flatten() {
+        for pattern in &patterns {
+            // A hole between two commas is no pattern, and
+            // acorn-typescript asks for its type all the same.
+            let Some(pattern) = pattern else {
+                return Err(Stop::Crash(
+                    "Cannot read properties of null (reading 'type')",
+                ));
+            };
             if !matches!(
                 pattern.ty,
                 Ty::Identifier | Ty::RestElement | Ty::ObjectPattern | Ty::ArrayPattern

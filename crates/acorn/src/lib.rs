@@ -39,6 +39,11 @@ pub struct SyntaxError {
     /// takes for an offset. Where set, the error points at the offset
     /// that equals the column of `pos` in the text the compiler parsed.
     pub column_of: bool,
+    /// The parser failed without an offset: either it raised with
+    /// something that is none, or it broke on a node it did not have and
+    /// `message` is the JavaScript engine's own. The compiler reports
+    /// such an error with no position, and `pos` means nothing.
+    pub no_position: bool,
 }
 
 /// A text as UTF-16 code units, with the byte offset of each.
@@ -80,6 +85,13 @@ impl Units {
                 message: raised.message,
                 pos: self.byte(raised.pos),
                 column_of: raised.column_of,
+                no_position: raised.no_position,
+            },
+            Stop::Crash(message) => SyntaxError {
+                message: message.to_string(),
+                pos: 0,
+                column_of: false,
+                no_position: true,
             },
             // Never leaves the tokenizer, which reads the template
             // again as an invalid one.
@@ -87,6 +99,7 @@ impl Units {
                 message: "Unexpected token".to_string(),
                 pos: 0,
                 column_of: false,
+                no_position: false,
             },
         }
     }

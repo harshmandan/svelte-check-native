@@ -2,8 +2,8 @@
 //! declarations only TypeScript has.
 
 use crate::state::{
-    Bind, ForInit, Lit, Node, OuterKind, PResult, Parser, PrivateNames, SCOPE_TOP, TS_SCOPE_OTHER,
-    TS_SCOPE_TS_MODULE, Ty, function_flags,
+    Bind, ForInit, Lit, Node, OuterKind, PResult, Parser, PrivateNames, SCOPE_TOP, Stop,
+    TS_SCOPE_OTHER, TS_SCOPE_TS_MODULE, Ty, function_flags,
 };
 use crate::statement::{
     ClassPosition, FUNC_HANGING_STATEMENT, FUNC_NULLABLE_ID, FUNC_STATEMENT, check_key_name,
@@ -577,6 +577,13 @@ impl Parser {
                 continue;
             }
             let Some(mut element) = self.ts_parse_class_element(has_super_class)? else {
+                // A lone `;` is no member, and acorn-typescript hands
+                // it the decorators all the same.
+                if decorators > 0 {
+                    return Err(Stop::Crash(
+                        "Cannot set properties of null (setting 'decorators')",
+                    ));
+                }
                 continue;
             };
             let decorated = decorators > 0;
@@ -1269,7 +1276,25 @@ impl Parser {
             return Ok(self.finish_node(node, Ty::Other));
         }
         if self.should_parse_export_statement() {
-            self.ts_parse_export_declaration()?;
+            let declaration = self.ts_parse_export_declaration()?;
+            // acorn-typescript takes every statement read here for a
+            // declaration and asks where its name starts. A statement
+            // without a name has none to ask.
+            if !matches!(
+                declaration.ty,
+                Ty::VariableDeclaration
+                    | Ty::FunctionDeclaration
+                    | Ty::ClassDeclaration
+                    | Ty::TsDeclareFunction
+                    | Ty::TsInterfaceDeclaration
+                    | Ty::TsTypeAliasDeclaration
+                    | Ty::TsEnumDeclaration
+                    | Ty::TsModuleDeclaration
+            ) {
+                return Err(Stop::Crash(
+                    "Cannot read properties of undefined (reading 'start')",
+                ));
+            }
         } else {
             let locals = self.ts_parse_export_specifiers()?;
             if self.eat_contextual("from")? {

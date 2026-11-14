@@ -14,12 +14,19 @@ pub(crate) struct Raised {
     /// acorn-typescript raised at a column number where it meant a
     /// position: the error points at offset "column of `pos`".
     pub column_of: bool,
+    /// acorn-typescript raised with something that is no offset: the
+    /// error says nothing of where it is.
+    pub no_position: bool,
 }
 
 /// Why parsing stopped.
 #[derive(Debug)]
 pub(crate) enum Stop {
     Error(Raised),
+    /// acorn-typescript itself failed: it read a field of a node it
+    /// does not have. The JavaScript engine's error text is kept. It is
+    /// no syntax error, so no attempt that may fail holds it back.
+    Crash(&'static str),
     /// An escape a template may not hold. Thrown inside the tokenizer
     /// and caught by it: the template is then read as an invalid one.
     InvalidTemplateEscape,
@@ -488,6 +495,7 @@ impl Parser {
             pos: pos as u32,
             message: message.into(),
             column_of: false,
+            no_position: false,
         }))
     }
 
@@ -502,6 +510,7 @@ impl Parser {
             pos: pos as u32,
             message: message.into(),
             column_of: true,
+            no_position: false,
         }))
     }
 
@@ -511,6 +520,18 @@ impl Parser {
 
     pub(crate) fn unexpected_at<T>(&self, pos: usize) -> PResult<T> {
         self.raise(pos, "Unexpected token")
+    }
+
+    /// acorn-typescript's `unexpected` given a line and column where an
+    /// offset belongs. acorn cannot count up to it: the message names
+    /// line 1 and no column, and the error has no offset.
+    pub(crate) fn unexpected_nowhere<T>(&self) -> PResult<T> {
+        Err(Stop::Error(Raised {
+            pos: 0,
+            message: "Unexpected token (1:NaN)".to_string(),
+            column_of: false,
+            no_position: true,
+        }))
     }
 
     /// Guards one level of expression nesting.

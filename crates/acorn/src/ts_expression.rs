@@ -251,7 +251,7 @@ impl Parser {
             }
             expr.start = type_parameters.start;
             Ok(Some(expr))
-        });
+        })?;
         if let Some(node) = arrow.node {
             return Ok(node);
         }
@@ -259,7 +259,7 @@ impl Parser {
         let type_cast = self.try_parse(|p| {
             p.ts_parse_maybe_assign_origin(for_init, errors, paren_item)
                 .map(Some)
-        });
+        })?;
         if let Some(node) = type_cast.node {
             return Ok(node);
         }
@@ -387,7 +387,7 @@ impl Parser {
         }
         let kept = expr.clone();
         let result =
-            self.try_parse(|p| p.ts_parse_conditional(expr, start_pos, for_init).map(Some));
+            self.try_parse(|p| p.ts_parse_conditional(expr, start_pos, for_init).map(Some))?;
         Ok(result.node.unwrap_or(kept))
     }
 
@@ -436,7 +436,7 @@ impl Parser {
             let expression = p.parse_maybe_unary(None, false, false, ForInit::No)?;
             node.a = Some(Box::new(expression));
             Ok(Some(p.finish_node(node, Ty::TsTypeAssertion)))
-        });
+        })?;
         match result.node {
             Some(node) if !result.thrown() => Ok(node),
             _ => self.ts_parse_type_parameters(TypeParameterModifiers::Const),
@@ -472,7 +472,7 @@ impl Parser {
             p.ts_try_parse_type_or_type_predicate_annotation()?;
             p.expect(Tok::Arrow)?;
             Ok(Some((node, params)))
-        });
+        })?;
         self.maybe_in_arrow_parameters = old;
         let Some((node, params)) = head else {
             return Ok(None);
@@ -514,7 +514,7 @@ impl Parser {
         }
 
         if self.ts_match_left_relational() || self.ty == Tok::BitShift {
-            let mut missing_paren_at = None;
+            let mut missing_paren_at = false;
             let kept = base.clone();
             let result = self.ts_try_parse_and_catch(|p| {
                 if !no_calls
@@ -528,7 +528,7 @@ impl Parser {
                     return Ok(Some(base));
                 }
                 if is_optional_call && p.ty != Tok::ParenL {
-                    missing_paren_at = Some(p.pos);
+                    missing_paren_at = true;
                     return Ok(Some(base));
                 }
                 if p.ty == Tok::InvalidTemplate || p.ty == Tok::BackQuote {
@@ -571,9 +571,9 @@ impl Parser {
                 let mut node = p.start_node_at(start_pos);
                 node.a = Some(Box::new(base));
                 Ok(Some(p.finish_node(node, Ty::TsInstantiationExpression)))
-            });
-            if let Some(at) = missing_paren_at {
-                return self.unexpected_at(at);
+            })?;
+            if missing_paren_at {
+                return self.unexpected_nowhere();
             }
             if let Some(result) = result {
                 if result.is(Ty::TsInstantiationExpression)
@@ -615,7 +615,7 @@ impl Parser {
                     return Ok(None);
                 }
                 Ok(Some(return_type))
-            });
+            })?;
             if result.aborted {
                 return Ok(false);
             }
@@ -632,7 +632,7 @@ impl Parser {
                     return Ok(None);
                 }
                 Ok(Some(return_type))
-            });
+            })?;
             if result.aborted || result.thrown() {
                 return Ok(false);
             }

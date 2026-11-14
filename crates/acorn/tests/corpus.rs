@@ -21,11 +21,11 @@
 
 use svn_acorn::{Language, Reading, SyntaxError};
 
-/// What acorn did, or `None` where it failed with something other
-/// than a syntax error.
+/// What acorn did. Where it failed with something other than a syntax
+/// error at an offset, that failure's own message.
 fn want(value: &serde_json::Value) -> Option<String> {
-    if !value["crash"].is_null() {
-        return None;
+    if let Some(message) = value["crash"].as_str() {
+        return Some(format!("crash {message}"));
     }
     Some(match (value["msg"].as_str(), value["end"].as_u64()) {
         (Some(message), _) => format!("{message} @{}", value["pos"]),
@@ -61,6 +61,7 @@ fn got(code: &str, result: Result<Option<u32>, SyntaxError>, padded: bool) -> St
     match result {
         Ok(Some(end)) => format!("end {end}"),
         Ok(None) => "ok".to_string(),
+        Err(error) if error.no_position => format!("crash {}", error.message),
         Err(error) => format!(
             "{} @{}",
             error.message,
@@ -72,9 +73,13 @@ fn got(code: &str, result: Result<Option<u32>, SyntaxError>, padded: bool) -> St
 fn compare(corpus: &str, language: Language, at_least: usize) {
     let cases: Vec<serde_json::Value> = serde_json::from_str(corpus).unwrap_or_default();
     assert!(cases.len() > at_least, "the corpus is all there");
+    compare_cases(&cases, language);
+}
+
+fn compare_cases(cases: &[serde_json::Value], language: Language) {
     let mut failures = Vec::new();
     let mut total = 0;
-    for case in &cases {
+    for case in cases {
         let code = case["code"].as_str().unwrap_or_default();
         let readings = [
             (
@@ -162,4 +167,22 @@ fn port_agrees_with_acorn_typescript() {
         Language::TypeScript,
         3000,
     );
+}
+
+/// A corpus from outside the repository: `ACORN_CORPUS_EXTRA` names a
+/// file the oracle wrote, `ACORN_CORPUS_EXTRA_LANGUAGE` is `js` for
+/// plain acorn's answers.
+#[test]
+fn port_agrees_on_a_corpus_given_by_the_environment() {
+    let Ok(path) = std::env::var("ACORN_CORPUS_EXTRA") else {
+        return;
+    };
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let cases: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap_or_default();
+    assert!(!cases.is_empty(), "{path} holds a corpus");
+    let language = match std::env::var("ACORN_CORPUS_EXTRA_LANGUAGE").as_deref() {
+        Ok("js") => Language::JavaScript,
+        _ => Language::TypeScript,
+    };
+    compare_cases(&cases, language);
 }

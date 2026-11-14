@@ -470,6 +470,38 @@ fn comment_directives_above_an_import_take_its_error() {
     assert_eq!(found, [(9, 16, 2306)]);
 }
 
+/// TypeScript reads a directive in a block comment too: on the comment's
+/// last line, after any leading `/` and `*`. A line comment is one only
+/// with two or three slashes. Each expectation is TypeScript 6.0.3's for
+/// the same lines in a plain module.
+#[test]
+fn block_comment_directives_above_an_import_take_its_error() {
+    let dir = workspace(&[
+        (
+            "src/App.svelte",
+            "<script lang=\"ts\">\n  /* @ts-ignore */\n  import A from './NoModule.svelte';\n  /*\n   * @ts-expect-error */\n  import B from './NoModule.svelte';\n  //// @ts-ignore\n  import C from './NoModule.svelte';\n  const s = \"//\"; /* @ts-ignore */\n  import D from './NoModule.svelte';\n  void [A, B, C, D, s];\n</script>\n",
+        ),
+        (
+            "src/ambient.d.ts",
+            "declare module '*.svelte' {\n  const component: any;\n  export default component;\n}\n",
+        ),
+        ("src/NoModule.svelte", UNCLOSED),
+    ]);
+    let (diagnostics, _) = check(dir.path(), &[]);
+    let found: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| matches!(d["code"].as_i64(), Some(2306 | 1192 | 2305 | 2578)))
+        .map(|d| {
+            (
+                d["start"]["line"].as_i64().unwrap(),
+                d["start"]["character"].as_i64().unwrap(),
+                d["code"].as_i64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(found, [(7, 16, 2306)]);
+}
+
 /// What TypeScript says of a name a module does not export depends on
 /// what the module does hold: an export spelled nearly alike, a default
 /// export, a declaration it keeps to itself or exports under another

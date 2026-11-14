@@ -1430,11 +1430,11 @@ mod tests {
     }
 
     #[test]
-    fn export_specifier_without_init_stays_optional() {
-        // A named export is registered with `required = false` upstream
-        // whatever its declaration looks like.
+    fn export_specifier_without_init_is_required() {
+        // Upstream's named export takes `required` from the variable's
+        // declaration, which records `!initializer`.
         let src = "let n: number;\nexport { n as count };";
-        assert_eq!(props_type(src).as_deref(), Some("{ count?: number; }"));
+        assert_eq!(props_type(src).as_deref(), Some("{ count: number; }"));
     }
 
     #[test]
@@ -1456,7 +1456,7 @@ mod tests {
         // No annotation: upstream types the prop as `typeof <local>`
         // regardless of an initializer.
         let src = "let x;\nexport { x as y };";
-        assert_eq!(props_type(src).as_deref(), Some("{ y?: typeof x; }"));
+        assert_eq!(props_type(src).as_deref(), Some("{ y: typeof x; }"));
     }
 
     #[test]

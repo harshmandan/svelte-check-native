@@ -1,0 +1,8 @@
+{
+    "errors": [
+        { "file": "input.svelte", "line": 7, "column": 9, "code": 2322 },
+        { "file": "input.svelte", "line": 8, "column": 9, "code": 2322 },
+        { "file": "input.svelte", "line": 9, "column": 11, "code": 2322 }
+    ],
+    "_note": "A runes component accepts `bind:` only on its `$bindable()` props, whatever the script's language: svelte2tsx lists them in the render result (`__sveltets_$$bindings('j')`, or `('')` for none), and `bind:a` is reported as \"Cannot use 'bind:' with this property\". We typed a JavaScript runes component's bindings as `string`, which accepted `bind:` on every prop."
+}

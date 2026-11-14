@@ -11,42 +11,6 @@
       "reason": "Same rewrite, different stage: like svelte2tsx's rewriteExternalImports, we rewrite a `../` specifier that leaves the workspace so it resolves from the overlay's directory, and leave every other relative specifier to the overlay tsconfig's `rootDirs`. We do it when the overlay is written (`rewrite_external_imports` in crates/typecheck/src/path_utils.rs), after the point where `--emit-ts` prints, so the snapshot shows the specifier as written."
     },
     {
-      "status": "bug",
-      "sample": "*",
-      "kind": "result",
-      "label": "bindings",
-      "ours": "H.$$bindings()",
-      "upstream": "H.$$bindings(\"\")",
-      "reason": "A runes component with no bindable props: we call the bindings helper with no argument, so the component's bindings type is `never`; svelte2tsx passes `''`, so it is `\"\"`. `bind:` on such a component is checked against a different type."
-    },
-    {
-      "status": "bug",
-      "sample": "*",
-      "kind": "result",
-      "label": "bindings",
-      "ours": "T<string>",
-      "upstream": "H.$$bindings(\"\")",
-      "reason": "A runes component (every JavaScript one, and TypeScript ones without a typed `$props()`) gets `bindings: string` in our render result, so `bind:` is accepted on any of its props; svelte2tsx lists the bindable props with `__sveltets_$$bindings(…)`, here none (`\"\"`)."
-    },
-    {
-      "status": "bug",
-      "sample": "svelte2tsx/runes-best-effort-types.v5",
-      "kind": "result",
-      "label": "bindings",
-      "ours": "T<string>",
-      "upstream": "H.$$bindings(\"j\",\"k\")",
-      "reason": "Our render result declares `bindings: string` for a JavaScript runes component, so every prop accepts `bind:`; svelte2tsx lists the `$bindable()` props, `j` and `k`."
-    },
-    {
-      "status": "bug",
-      "sample": "svelte2tsx/ts-runes-best-effort-types.v5",
-      "kind": "result",
-      "label": "bindings",
-      "ours": "T<string>",
-      "upstream": "H.$$bindings(\"l\",\"m\")",
-      "reason": "Our render result declares `bindings: string` for this runes component, so every prop accepts `bind:`; svelte2tsx lists the `$bindable()` props, `l` and `m`."
-    },
-    {
       "status": "intended",
       "sample": ["bugs/444-svelte-4-install-has-no-implicit-children", "bugs/570-each-nullable-rejected-under-svelte-4"],
       "kind": "result",

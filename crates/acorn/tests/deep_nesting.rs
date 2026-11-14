@@ -149,3 +149,25 @@ fn a_member_chain_of_any_length_is_read() {
         }
     }
 }
+
+/// acorn-typescript spends more stack on each nested expression than
+/// acorn does: in Node 24.19 nested arrays, parentheses, object
+/// literals, arrows and prefix operators all run out at about two
+/// thirds to three quarters of acorn's depth once the engine has warmed
+/// up (before that both vary from run to run), while blocks and binary
+/// operator chains reach as far.
+/// Nesting between the two limits reads as JavaScript and runs out as
+/// TypeScript.
+#[test]
+fn typescript_runs_out_of_stack_on_shallower_expressions() {
+    for (open, close) in [("[", "]"), ("(", ")"), ("{a:", "}")] {
+        let code = format!("x = {};", wrapped(open, "1", close, 850));
+        assert_eq!(script(&code, Language::JavaScript), Ok(()), "{open}");
+        assert!(out_of_stack(script(&code, Language::TypeScript)), "{open}");
+    }
+    let nots = format!("x = {}a;", "!".repeat(3_400));
+    assert_eq!(script(&nots, Language::JavaScript), Ok(()));
+    assert!(out_of_stack(script(&nots, Language::TypeScript)));
+    let blocks = wrapped("{", "", "}", 2_700);
+    assert_eq!(script(&blocks, Language::TypeScript), Ok(()));
+}

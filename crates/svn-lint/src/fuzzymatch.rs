@@ -49,13 +49,23 @@ fn distance(a: &str, b: &str) -> f64 {
     1.0 - d / (a.chars().count().max(b.chars().count()) as f64)
 }
 
-/// `-` + lowercased value with everything outside `[\w, ]` removed + `-`.
+/// `-` + lowercased value + `-`, with the first run of characters
+/// outside `[\w, ]` removed: the compiler's `/[^\w, ]+/` has no `g`
+/// flag, so `replace` drops only the first match. `\w` is ASCII.
 fn simplified(value: &str) -> String {
-    let mut s = String::from("-");
-    for c in value.to_lowercase().chars() {
-        if c.is_alphanumeric() || c == '_' || c == ',' || c == ' ' {
-            s.push(c);
+    let lower = value.to_lowercase();
+    let keep = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == ',' || c == ' ';
+    let mut s = String::with_capacity(lower.len() + 2);
+    s.push('-');
+    match lower.find(|c: char| !keep(c)) {
+        Some(start) => {
+            let end = lower[start..]
+                .find(keep)
+                .map_or(lower.len(), |len| start + len);
+            s.push_str(&lower[..start]);
+            s.push_str(&lower[end..]);
         }
+        None => s.push_str(&lower),
     }
     s.push('-');
     s
@@ -146,6 +156,11 @@ impl<'a> FuzzySet<'a> {
             }
         }
         let norm = sum_of_squares.sqrt();
+        // The compiler collects the matches with `for … in` over an
+        // object keyed by item index, which runs in ascending index
+        // order; its sorts are stable, so that order breaks every tie.
+        let mut matches: Vec<(usize, usize)> = matches.into_iter().collect();
+        matches.sort_unstable_by_key(|&(index, _)| index);
         let mut results: Vec<(f64, usize)> = matches
             .into_iter()
             .map(|(index, score)| (score as f64 / (norm * items[index].0), index))
@@ -179,5 +194,19 @@ mod tests {
         // Too far by the compiler's own scoring (checked against it).
         assert_eq!(fuzzymatch("valeu", &names), None);
         assert_eq!(fuzzymatch("noAssignment", &names), None);
+    }
+
+    /// Equally close names: the one listed first wins, as in the
+    /// compiler (checked against it in both orders).
+    #[test]
+    fn a_tie_goes_to_the_first_name() {
+        assert_eq!(
+            fuzzymatch("abcdefz", &["abcdefx", "abcdefy"]),
+            Some("abcdefx")
+        );
+        assert_eq!(
+            fuzzymatch("abcdefz", &["abcdefy", "abcdefx"]),
+            Some("abcdefy")
+        );
     }
 }

@@ -58,7 +58,8 @@ const LEGACY_RENAMES: &[(&str, &str)] = &[
 /// Walk the siblings preceding index `idx` in `nodes`, collecting any
 /// `svelte-ignore` codes found in preceding `Comment` nodes (with
 /// intervening `Text` allowed — whitespace or not). Stops at any
-/// non-Comment / non-Text sibling. Mirrors the upstream analyze
+/// non-Comment / non-Text sibling (`<svelte:options>` is none: the
+/// parser lifts it out of the template). Mirrors the upstream analyze
 /// visitor's backward walk (`else if (prev.type !== 'Text') break`),
 /// where every Text node continues the chain.
 ///
@@ -78,6 +79,8 @@ pub fn collect_preceding_comment_ignores(
     // non-Text sibling.
     for i in (0..idx).rev() {
         match nodes[i] {
+            // Not a sibling: the parser takes it out of the template.
+            node if is_lifted_options(node) => {}
             Node::Comment(c) => {
                 for code in extract_from_comment(c, ctx) {
                     if !result.contains(&code) {
@@ -281,8 +284,8 @@ fn is_ident_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'$')
 }
 
-/// The `svelte-ignore` comments of one script body, keyed by the node
-/// each one leads.
+/// The `svelte-ignore` comments of one script body or template
+/// expression, keyed by the node each one leads.
 ///
 /// The compiler parses a script with acorn and attaches comments to
 /// the estree afterwards (`phases/1-parse/acorn.js`, `add_comments`):
@@ -290,16 +293,44 @@ fn is_ident_char(b: u8) -> bool {
 /// becomes a `leadingComment` of that node, and after a node's children
 /// the next comment becomes its `trailingComment` when it is the last
 /// node of a block, array or object, or when only `,`, `)`, spaces and
-/// tabs separate the two. The analyze walk then applies the ignores of
-/// a node's leading comments to the node and everything inside it
-/// (`2-analyze/index.js`). [`ScriptComments::build`] replays that
-/// attachment over the oxc tree.
+/// tabs separate the two. So a comment leads exactly one node: the
+/// outermost one starting after it. The analysis walk visits every
+/// node and, at each, reads its leading comments — reporting the codes
+/// that name no warning then, once — and applies their ignores to the
+/// node and everything inside it (`2-analyze/index.js`).
+/// [`ScriptComments::build`] replays that attachment over the oxc tree.
+///
+/// Our walk does not stop at every node, so a node's ignores apply at
+/// every node it visits inside the leading node's span, and its codes
+/// are reported at the first node visited at or after its start.
 pub(crate) struct ScriptComments {
-    /// `(node start, codes, codes that name no warning)` for every
-    /// `svelte-ignore` comment attached as a leading comment, in
-    /// comment order. The node's offset is script-local, matching oxc
-    /// spans.
-    leading: Vec<(u32, Vec<SmolStr>, Vec<BadIgnoreCode>)>,
+    /// Every node with a leading `svelte-ignore` comment, by start;
+    /// spans are offsets into the walked text, matching oxc spans.
+    leading: Vec<LeadingIgnores>,
+    /// The first entry of `leading` whose bad codes are not reported
+    /// yet.
+    next_report: usize,
+}
+
+struct LeadingIgnores {
+    start: u32,
+    end: u32,
+    codes: Vec<SmolStr>,
+    /// The codes that name no warning, in the comment's order.
+    bad: Vec<BadIgnoreCode>,
+}
+
+/// Where the text a comment set was parsed from sits in the file.
+pub(crate) struct CommentSource<'s> {
+    /// The whole file.
+    pub(crate) file: &'s str,
+    /// Where the parsed text's offset 0 lies in the file.
+    pub(crate) base: u32,
+    /// Everything before this file offset was blanked to spaces in
+    /// what the compiler parsed (a script is parsed with the markup
+    /// before it blanked, newlines kept); `0` for a template
+    /// expression, read in place.
+    pub(crate) blank_before: u32,
 }
 
 impl ScriptComments {
@@ -307,38 +338,39 @@ impl ScriptComments {
     pub(crate) fn empty() -> Self {
         Self {
             leading: Vec::new(),
+            next_report: 0,
         }
     }
 
-    /// Attach the comments of `program` (parsed from `content`) the way
-    /// acorn's comment handler does and keep the `svelte-ignore` codes
-    /// of every leading comment.
+    /// Attach the comments of `program` the way acorn's comment
+    /// handler does and keep the `svelte-ignore` codes of every
+    /// leading comment.
     ///
     /// `prior` holds the codes of the comments the compiler read before
     /// this script (see [`prior_script_ignores`]); they lead the
     /// script's first node.
-    ///
-    /// `base` is where `content` starts in the file.
     pub(crate) fn build(
         program: &Program<'_>,
-        content: &str,
-        base: u32,
+        from: &CommentSource<'_>,
         runes: bool,
         prior: PriorIgnores,
     ) -> Self {
+        let file = from.file;
         let codes: Vec<(Vec<SmolStr>, Vec<BadIgnoreCode>)> = program
             .comments
             .iter()
             .map(|c| {
-                content
-                    .get(c.span.start as usize..c.span.end as usize)
-                    .map(|text| {
-                        (
-                            comment_ignore_codes(text, runes),
-                            comment_bad_codes(text, base + c.span.start, runes),
-                        )
-                    })
-                    .unwrap_or_default()
+                let range = Range::new(from.base + c.span.start, from.base + c.span.end);
+                let text = range.slice(file);
+                (
+                    comment_ignore_codes(text, runes),
+                    comment_bad_codes(
+                        text,
+                        range.start,
+                        runes,
+                        &comment_indentation(file, range.start, from.blank_before),
+                    ),
+                )
             })
             .collect();
         let nothing =
@@ -346,6 +378,7 @@ impl ScriptComments {
         if prior.codes.is_empty() && prior.bad_codes.is_empty() && codes.iter().all(nothing) {
             return Self::empty();
         }
+        let content = file.get(from.base as usize..).unwrap_or_default();
         let mut queue: Vec<(u32, u32, usize)> = program
             .comments
             .iter()
@@ -362,48 +395,71 @@ impl ScriptComments {
             first_node: None,
         };
         attacher.visit_program(program);
-        let mut leading: Vec<(u32, Vec<SmolStr>, Vec<BadIgnoreCode>)> = Vec::new();
+        let mut leading: Vec<LeadingIgnores> = Vec::new();
         if let Some(first) = attacher.first_node
             && !(prior.codes.is_empty() && prior.bad_codes.is_empty())
         {
-            leading.push((first, prior.codes, prior.bad_codes));
+            leading.push(LeadingIgnores {
+                start: first.start,
+                end: first.end,
+                codes: prior.codes,
+                bad: prior.bad_codes,
+            });
         }
-        leading.extend(attacher.leading.into_iter().filter_map(|(start, i)| {
+        leading.extend(attacher.leading.into_iter().filter_map(|(span, i)| {
             let (codes, bad) = codes.get(i).filter(|c| !nothing(c))?;
-            Some((start, codes.clone(), bad.clone()))
+            Some(LeadingIgnores {
+                start: span.start,
+                end: span.end,
+                codes: codes.clone(),
+                bad: bad.clone(),
+            })
         }));
-        Self { leading }
+        leading.sort_by_key(|entry| entry.start);
+        Self {
+            leading,
+            next_report: 0,
+        }
     }
 
     pub(crate) fn has_ignores(&self) -> bool {
         !self.leading.is_empty()
     }
 
-    /// Suppression codes of the comments leading the node that starts
-    /// at `node_start` (script-local offset). A node shares its start
-    /// with the nodes it begins with; the compiler attaches to the
-    /// outermost of them, whose subtree holds the others.
-    pub(crate) fn leading_ignores(&self, node_start: u32) -> Vec<SmolStr> {
+    /// The walk enters a node spanning `start..end`. Returns the codes
+    /// naming no warning of the nodes starting at or before it that
+    /// are not reported yet, and the suppression codes of every node
+    /// whose span holds this one.
+    pub(crate) fn enter(&mut self, start: u32, end: u32) -> (Vec<BadIgnoreCode>, Vec<SmolStr>) {
+        let mut bad = Vec::new();
+        while let Some(entry) = self.leading.get(self.next_report)
+            && entry.start <= start
+        {
+            bad.extend(entry.bad.iter().cloned());
+            self.next_report += 1;
+        }
         let mut codes: Vec<SmolStr> = Vec::new();
-        for (_, entry, _) in self.leading.iter().filter(|(s, _, _)| *s == node_start) {
-            for c in entry {
-                if !codes.contains(c) {
-                    codes.push(c.clone());
+        for entry in &self.leading {
+            if entry.start > start {
+                break;
+            }
+            if end <= entry.end {
+                for c in &entry.codes {
+                    if !codes.contains(c) {
+                        codes.push(c.clone());
+                    }
                 }
             }
         }
-        codes
+        (bad, codes)
     }
 
-    /// The codes that name no warning in the comments leading the node
-    /// that starts at `node_start`. The compiler reads a node's leading
-    /// comments when it visits the node, and warns about each then.
-    pub(crate) fn leading_bad_codes(&self, node_start: u32) -> Vec<BadIgnoreCode> {
-        self.leading
-            .iter()
-            .filter(|(s, _, _)| *s == node_start)
-            .flat_map(|(_, _, bad)| bad.iter().cloned())
-            .collect()
+    /// The codes naming no warning of the nodes the walk never reached.
+    pub(crate) fn take_unreported(&mut self) -> Vec<BadIgnoreCode> {
+        let rest = self.leading.get(self.next_report..).unwrap_or_default();
+        let bad = rest.iter().flat_map(|e| e.bad.iter().cloned()).collect();
+        self.next_report = self.leading.len();
+        bad
     }
 }
 
@@ -429,22 +485,40 @@ pub(crate) struct PriorIgnores {
 /// The codes that name no warning in a JavaScript `svelte-ignore`
 /// comment, whose text (delimiters included) starts at `start` in the
 /// file. The compiler only checks the codes in runes mode.
-fn comment_bad_codes(text: &str, start: u32, runes: bool) -> Vec<BadIgnoreCode> {
+///
+/// The compiler reads the comment's value as acorn's comment hook left
+/// it: a block comment spanning lines loses `indentation` — the spaces
+/// and tabs opening the line the comment starts on — from the start of
+/// every line (the first included), and the positions it reports are
+/// offsets into that shortened value, counted from just past the `/*`.
+fn comment_bad_codes(text: &str, start: u32, runes: bool, indentation: &str) -> Vec<BadIgnoreCode> {
     if !runes {
         return Vec::new();
     }
-    let Some(body) = crate::scope_util::strip_comment_delimiters(text) else {
+    let Some(value) = crate::scope_util::strip_comment_delimiters(text) else {
         return Vec::new();
     };
-    let Some(rest) = body.trim_start().strip_prefix("svelte-ignore") else {
+    if text.starts_with("/*") && value.contains('\n') {
+        let value = strip_indentation(value, indentation);
+        bad_codes_in(&value, start + 2)
+    } else {
+        bad_codes_in(value, start + 2)
+    }
+}
+
+/// The codes that name no warning in the `svelte-ignore` list of
+/// `value`, a comment's text, reporting each at `value_start` plus its
+/// offset in `value` — the compiler's `extract_svelte_ignore` in runes
+/// mode, which is told where the value starts.
+fn bad_codes_in(value: &str, value_start: u32) -> Vec<BadIgnoreCode> {
+    let Some(rest) = value.trim_start().strip_prefix("svelte-ignore") else {
         return Vec::new();
     };
     let Some(space) = rest.chars().next().filter(|c| c.is_whitespace()) else {
         return Vec::new();
     };
     let rest = &rest[space.len_utf8()..];
-    // `rest` is a tail of `body`, which is a slice of `text`.
-    let base = start + (rest.as_ptr() as usize - text.as_ptr() as usize) as u32;
+    let base = value_start + (value.len() - rest.len()) as u32;
     let mut out = Vec::new();
     for (at, token, followed_by_comma) in runes_ignore_tokens(rest) {
         if !is_known_code(token) {
@@ -472,6 +546,114 @@ fn comment_bad_codes(text: &str, start: u32, runes: bool) -> Vec<BadIgnoreCode> 
         }
     }
     out
+}
+
+/// The spaces and tabs opening the line of `file` that a comment
+/// starting at `comment_start` sits on, as the text the compiler parsed
+/// has them: everything before `blank_before` is a space there (one per
+/// UTF-16 unit, newlines kept).
+fn comment_indentation(file: &str, comment_start: u32, blank_before: u32) -> String {
+    let head = file.get(..comment_start as usize).unwrap_or_default();
+    let line_start = head.rfind('\n').map_or(0, |i| i + 1);
+    let mut indentation = String::new();
+    let mut at = line_start;
+    let blank_end = (blank_before as usize).min(comment_start as usize);
+    if at < blank_end {
+        let blanked = file.get(at..blank_end).unwrap_or_default();
+        indentation.extend(std::iter::repeat_n(' ', blanked.encode_utf16().count()));
+        at = blank_end;
+    }
+    let rest = file.get(at..).unwrap_or_default();
+    let run = rest
+        .bytes()
+        .take_while(|b| matches!(b, b' ' | b'\t'))
+        .count();
+    indentation.push_str(&rest[..run]);
+    indentation
+}
+
+/// `value` with `indentation` removed from the start of each line, the
+/// first included — JavaScript's `value.replace(/^<indentation>/gm, '')`,
+/// whose lines end at `\n`, `\r`, U+2028 and U+2029.
+fn strip_indentation(value: &str, indentation: &str) -> String {
+    if indentation.is_empty() {
+        return value.to_string();
+    }
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    loop {
+        if let Some(stripped) = rest.strip_prefix(indentation) {
+            rest = stripped;
+        }
+        match rest.find(['\n', '\r', '\u{2028}', '\u{2029}']) {
+            Some(i) => {
+                let break_len = rest[i..].chars().next().map_or(1, char::len_utf8);
+                out.push_str(&rest[..i + break_len]);
+                rest = &rest[i + break_len..];
+            }
+            None => {
+                out.push_str(rest);
+                return out;
+            }
+        }
+    }
+}
+
+/// The `legacy_code` / `unknown_code` warnings for the `svelte-ignore`
+/// comment right before `<style>`. After the template, the compiler
+/// reads that comment once more to see whether it ignores
+/// `css_unused_selector` — giving the comment's start as where its text
+/// starts, without the `<!--` — and warns about its codes again.
+pub(crate) fn style_comment_bad_codes(
+    fragment: &Fragment,
+    style_start: u32,
+    ctx: &mut LintContext<'_>,
+) {
+    if !ctx.runes {
+        return;
+    }
+    let Some(comment) = comment_before_style(fragment, style_start, ctx.source) else {
+        return;
+    };
+    for bad in bad_codes_in(comment.data_range.slice(ctx.source), comment.range.start) {
+        ctx.emit(bad.code, bad.message, bad.range);
+    }
+}
+
+/// The comment the parser keeps for a top-level `<style>` opening at
+/// `style_start`: walking back from the tag over whitespace-only text,
+/// the first comment met. `<svelte:options>` is not in the template.
+fn comment_before_style<'f>(
+    fragment: &'f Fragment,
+    style_start: u32,
+    source: &str,
+) -> Option<&'f Comment> {
+    let mut cursor = style_start;
+    for node in fragment.nodes.iter().rev() {
+        let range = node.range();
+        if range.end > cursor {
+            continue;
+        }
+        // Our fragment leaves out the script and style sections, so the
+        // text around them may stop short of the tag.
+        let gap = source.get(range.end as usize..cursor as usize)?;
+        if !gap.trim().is_empty() {
+            return None;
+        }
+        match node {
+            Node::Comment(c) => return Some(c),
+            Node::Text(t) if t.range.slice(source).trim().is_empty() => cursor = range.start,
+            _ if is_lifted_options(node) => cursor = range.start,
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// `<svelte:options>`, which the parser takes out of the template: it is
+/// no sibling of the nodes around it.
+pub(crate) fn is_lifted_options(node: &Node) -> bool {
+    matches!(node, Node::SvelteElement(se) if se.kind == svn_parser::ast::SvelteElementKind::Options)
 }
 
 /// The `svelte-ignore` codes a JavaScript comment's text (delimiters
@@ -514,22 +696,27 @@ pub(crate) fn prior_script_ignores(
     {
         return PriorIgnores::default();
     }
-    let mut comments: Vec<Range> = Vec::new();
+    // Each comment with where the text it was lexed from stops being
+    // blanked (see `CommentSource::blank_before`).
+    let mut comments: Vec<(Range, u32)> = Vec::new();
     for &(content_start, program) in scripts {
         if content_start < before {
-            comments.extend(
-                program
-                    .comments
-                    .iter()
-                    .map(|c| Range::new(content_start + c.span.start, content_start + c.span.end)),
-            );
+            comments.extend(program.comments.iter().map(|c| {
+                (
+                    Range::new(content_start + c.span.start, content_start + c.span.end),
+                    content_start,
+                )
+            }));
         }
     }
     if let Some(fragment) = fragment {
-        collect_fragment_comments(fragment, source, before, &mut comments);
+        let mut template = Vec::new();
+        collect_fragment_comments(fragment, source, before, &mut template);
+        comments.extend(template.into_iter().map(|range| (range, 0)));
     }
+    comments.sort_by_key(|(range, _)| range.start);
     let mut prior = PriorIgnores::default();
-    for range in comments {
+    for (range, blank_before) in comments {
         for code in comment_ignore_codes(range.slice(source), runes) {
             if !prior.codes.contains(&code) {
                 prior.codes.push(code);
@@ -537,9 +724,12 @@ pub(crate) fn prior_script_ignores(
         }
         // Read again as a leading comment of this script's first node,
         // a code that names no warning is warned about again.
-        prior
-            .bad_codes
-            .extend(comment_bad_codes(range.slice(source), range.start, runes));
+        prior.bad_codes.extend(comment_bad_codes(
+            range.slice(source),
+            range.start,
+            runes,
+            &comment_indentation(source, range.start, blank_before),
+        ));
     }
     prior
 }
@@ -756,10 +946,10 @@ struct CommentAttacher<'s> {
     frames: Vec<Frame>,
     /// One entry per entered oxc node: whether it was passed over.
     skipped: Vec<bool>,
-    /// `(node start, comment index)` of every leading comment.
-    leading: Vec<(u32, usize)>,
-    /// Start of the first node inside the program.
-    first_node: Option<u32>,
+    /// `(node span, comment index)` of every leading comment.
+    leading: Vec<(Span, usize)>,
+    /// The first node inside the program.
+    first_node: Option<Span>,
 }
 
 struct Frame {
@@ -824,13 +1014,13 @@ impl<'a> Visit<'a> for CommentAttacher<'_> {
         }
         let span = kind.span();
         if self.first_node.is_none() && !matches!(kind, AstKind::Program(_)) {
-            self.first_node = Some(span.start);
+            self.first_node = Some(span);
         }
         while let Some(&(start, _, index)) = self.queue.front()
             && start < span.start
         {
             self.queue.pop_front();
-            self.leading.push((span.start, index));
+            self.leading.push((span, index));
         }
         self.frames.push(Frame {
             span,
@@ -903,46 +1093,106 @@ fn runes_ignore_tokens(rest: &str) -> impl Iterator<Item = (usize, &str, bool)> 
     })
 }
 
-/// Closest known code name to `input` via Levenshtein similarity.
-/// Returns `None` when nothing clears the 0.7 threshold (mirrors
-/// upstream fuzzymatch.js).
-fn fuzzymatch_known_code(input: &str) -> Option<&'static str> {
-    let target = input.to_ascii_lowercase();
-    let mut best: Option<(f64, &'static str)> = None;
-    let candidates = crate::codes::CODES
-        .iter()
-        .copied()
-        .filter(|c| !COMPILER_ERROR_CODES.contains(c))
-        .chain(IGNORABLE_RUNTIME_WARNINGS.iter().copied());
-    for c in candidates {
-        let sim = lev_similarity(&target, c);
-        // Upstream's fuzzymatch.js:12 gates on `> 0.7` (strict), so a
-        // typo scoring exactly 0.7 produces no suggestion.
-        if sim > 0.7 && best.map(|(s, _)| sim > s).unwrap_or(true) {
-            best = Some((sim, c));
-        }
-    }
-    best.map(|(_, c)| c)
-}
+/// Every code a `svelte-ignore` comment can name, in the compiler's
+/// order: its warning codes (`warnings.js` `codes`) followed by
+/// `IGNORABLE_RUNTIME_WARNINGS`. The order decides between equally
+/// close suggestions.
+const IGNORE_CODES: &[&str] = &[
+    "a11y_accesskey",
+    "a11y_aria_activedescendant_has_tabindex",
+    "a11y_aria_attributes",
+    "a11y_autocomplete_valid",
+    "a11y_autofocus",
+    "a11y_click_events_have_key_events",
+    "a11y_consider_explicit_label",
+    "a11y_distracting_elements",
+    "a11y_figcaption_index",
+    "a11y_figcaption_parent",
+    "a11y_hidden",
+    "a11y_img_redundant_alt",
+    "a11y_incorrect_aria_attribute_type",
+    "a11y_incorrect_aria_attribute_type_boolean",
+    "a11y_incorrect_aria_attribute_type_id",
+    "a11y_incorrect_aria_attribute_type_idlist",
+    "a11y_incorrect_aria_attribute_type_integer",
+    "a11y_incorrect_aria_attribute_type_token",
+    "a11y_incorrect_aria_attribute_type_tokenlist",
+    "a11y_incorrect_aria_attribute_type_tristate",
+    "a11y_interactive_supports_focus",
+    "a11y_invalid_attribute",
+    "a11y_label_has_associated_control",
+    "a11y_media_has_caption",
+    "a11y_misplaced_role",
+    "a11y_misplaced_scope",
+    "a11y_missing_attribute",
+    "a11y_missing_content",
+    "a11y_mouse_events_have_key_events",
+    "a11y_no_abstract_role",
+    "a11y_no_interactive_element_to_noninteractive_role",
+    "a11y_no_noninteractive_element_interactions",
+    "a11y_no_noninteractive_element_to_interactive_role",
+    "a11y_no_noninteractive_tabindex",
+    "a11y_no_redundant_roles",
+    "a11y_no_static_element_interactions",
+    "a11y_positive_tabindex",
+    "a11y_role_has_required_aria_props",
+    "a11y_role_supports_aria_props",
+    "a11y_role_supports_aria_props_implicit",
+    "a11y_unknown_aria_attribute",
+    "a11y_unknown_role",
+    "bidirectional_control_characters",
+    "legacy_code",
+    "unknown_code",
+    "options_deprecated_accessors",
+    "options_deprecated_immutable",
+    "options_missing_custom_element",
+    "options_removed_enable_sourcemap",
+    "options_removed_hydratable",
+    "options_removed_loop_guard_timeout",
+    "options_renamed_ssr_dom",
+    "custom_element_props_identifier",
+    "export_let_unused",
+    "legacy_component_creation",
+    "non_reactive_update",
+    "perf_avoid_inline_class",
+    "perf_avoid_nested_class",
+    "reactive_declaration_invalid_placement",
+    "reactive_declaration_module_script_dependency",
+    "state_referenced_locally",
+    "store_rune_conflict",
+    "css_unused_selector",
+    "attribute_avoid_is",
+    "attribute_global_event_reference",
+    "attribute_illegal_colon",
+    "attribute_invalid_property_name",
+    "attribute_quoted",
+    "bind_invalid_each_rest",
+    "block_empty",
+    "component_name_lowercase",
+    "element_implicitly_closed",
+    "element_invalid_self_closing_tag",
+    "event_directive_deprecated",
+    "node_invalid_placement_ssr",
+    "script_context_deprecated",
+    "script_unknown_attribute",
+    "slot_element_deprecated",
+    "svelte_component_deprecated",
+    "svelte_element_invalid_this",
+    "svelte_self_deprecated",
+    "await_waterfall",
+    "await_reactivity_loss",
+    "state_snapshot_uncloneable",
+    "binding_property_non_reactive",
+    "hydration_attribute_changed",
+    "hydration_html_changed",
+    "ownership_invalid_binding",
+    "ownership_invalid_mutation",
+];
 
-fn lev_similarity(a: &str, b: &str) -> f64 {
-    let ac: Vec<char> = a.chars().collect();
-    let bc: Vec<char> = b.chars().collect();
-    if ac.is_empty() && bc.is_empty() {
-        return 1.0;
-    }
-    let max = ac.len().max(bc.len()) as f64;
-    let mut prev: Vec<usize> = (0..=bc.len()).collect();
-    let mut curr = vec![0usize; bc.len() + 1];
-    for i in 1..=ac.len() {
-        curr[0] = i;
-        for j in 1..=bc.len() {
-            let cost = if ac[i - 1] == bc[j - 1] { 0 } else { 1 };
-            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-    1.0 - prev[bc.len()] as f64 / max
+/// The code the compiler suggests for `input`, a code that names no
+/// warning: the compiler's `fuzzymatch` over [`IGNORE_CODES`].
+fn fuzzymatch_known_code(input: &str) -> Option<&'static str> {
+    crate::fuzzymatch::fuzzymatch(input, IGNORE_CODES)
 }
 
 /// A code a `svelte-ignore` comment can name: the compiler's warning
@@ -958,4 +1208,31 @@ fn legacy_rename(code: &str) -> Option<&'static str> {
     LEGACY_RENAMES
         .iter()
         .find_map(|(from, to)| if *from == code { Some(*to) } else { None })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IGNORE_CODES, is_known_code};
+
+    /// The ordered list names exactly the codes the ignore parser
+    /// accepts, so a warning added to the catalog cannot miss it.
+    #[test]
+    fn ignore_codes_are_the_known_codes() {
+        let catalog: Vec<&str> = crate::codes::CODES
+            .iter()
+            .copied()
+            .chain(super::IGNORABLE_RUNTIME_WARNINGS.iter().copied())
+            .filter(|c| is_known_code(c))
+            .collect();
+        for code in &catalog {
+            assert!(
+                IGNORE_CODES.contains(code),
+                "{code} missing from IGNORE_CODES"
+            );
+        }
+        for code in IGNORE_CODES {
+            assert!(is_known_code(code), "{code} is no known code");
+        }
+        assert_eq!(catalog.len(), IGNORE_CODES.len());
+    }
 }

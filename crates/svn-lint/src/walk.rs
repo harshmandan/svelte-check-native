@@ -514,6 +514,12 @@ pub fn walk_parsed(
             );
         }
     }
+
+    // Then the comment before `<style>` is read again, for whether it
+    // ignores `css_unused_selector`.
+    if let Some(style) = &doc.style {
+        crate::ignore::style_comment_bad_codes(fragment, style.open_tag_range.start, ctx);
+    }
 }
 
 /// `typescript_invalid_feature` for a TypeScript component: the
@@ -976,7 +982,10 @@ fn walk_fragment_nodes(
         // `legacy_code` / `unknown_code` a second time. Text nodes run
         // their own comment scan for the bidi warning
         // (`text_rules::visit_text`).
+        // `<svelte:options>` is lifted out of the template, so it is
+        // not visited as a node and reads no comments.
         let is_target = match node {
+            Node::SvelteElement(_) if crate::ignore::is_lifted_options(node) => false,
             Node::Element(_)
             | Node::Component(_)
             | Node::SvelteElement(_)
@@ -1120,9 +1129,37 @@ fn walk_fragment_nodes(
             }
             Node::EachBlock(b) => {
                 crate::rules::block_rules::visit_each(b, ctx);
-                flush_expr_events_before(b.body.range.start, ctx);
+                // The compiler visits a keyed block's body before its
+                // key, so the key's events wait for the body's. They
+                // follow the context and the index: the key's own range
+                // starts past any comment before it.
+                let key_from = b.as_clause.as_ref().and_then(|a| {
+                    a.key_range?;
+                    Some(
+                        a.index_range
+                            .or(a.context_range)
+                            .map_or(b.expression_range.end, |r| r.end),
+                    )
+                });
+                flush_expr_events_before(key_from.unwrap_or(b.body.range.start), ctx);
+                let mut key_events = Vec::new();
+                if key_from.is_some() {
+                    while let Some(event) = ctx
+                        .pending_template_events
+                        .pop_front_if(|e| e.range().start < b.opening_tag_end)
+                    {
+                        key_events.push(event);
+                    }
+                }
                 ctx.template_path.push(PathFrame::each(b, source));
                 walk_fragment_impl(&b.body, ctx, parent_tag, ancestors);
+                if !key_events.is_empty() {
+                    flush_expr_events_before(b.body.range.end, ctx);
+                    for event in key_events.into_iter().rev() {
+                        ctx.pending_template_events.push_front(event);
+                    }
+                    flush_expr_events_before(b.opening_tag_end, ctx);
+                }
                 if let Some(empty) = &b.alternate {
                     walk_fragment_impl(empty, ctx, parent_tag, ancestors);
                 }

@@ -30,7 +30,7 @@ use oxc_ast::ast::{
     ObjectPropertyKind, Program, PropertyKey, SimpleAssignmentTarget, Statement, UpdateExpression,
     VariableDeclaration, VariableDeclarator,
 };
-use oxc_span::GetSpan;
+use oxc_span::{GetSpan, Span};
 use smol_str::{SmolStr, ToSmolStr};
 use svn_core::Range;
 
@@ -553,7 +553,15 @@ pub fn build_with_template(
             &other_script(&doc.instance_script, instance_program),
             runes,
         );
-        tree_builder.build_script(script, program, module_root, runes, &leading, prior);
+        tree_builder.build_script(
+            script,
+            doc.source,
+            program,
+            module_root,
+            runes,
+            &leading,
+            prior,
+        );
     }
 
     let instance_root = tree_builder.new_scope(Some(module_root));
@@ -575,6 +583,7 @@ pub fn build_with_template(
         );
         tree_builder.build_script_as_instance(
             script,
+            doc.source,
             program,
             instance_root,
             runes,
@@ -682,6 +691,11 @@ struct TreeBuilder {
     preprocess_ts: bool,
     /// The file's runes mode, for the template-expression rule hooks.
     runes: bool,
+    /// Where the snippet parameter lists put the `svelte-ignore` codes
+    /// naming no warning they reported. A parameter's default value is
+    /// walked again as a template expression, which must not report
+    /// them a second time.
+    snippet_ignore_codes_reported: Vec<u32>,
     /// See [`ScopeTree::script_rule_events`] — filled by the
     /// [`ScriptRuleHooks`] callbacks during the script walks.
     script_rule_events: Vec<ScriptRuleEvent>,
@@ -812,6 +826,7 @@ impl TreeBuilder {
             runes: false,
             preprocess_ts: false,
             bidi_warned: None,
+            snippet_ignore_codes_reported: Vec::new(),
         }
     }
 
@@ -1203,12 +1218,65 @@ impl TreeBuilder {
                 } else {
                     self.const_tag_inits.push(abs);
                 }
-                self.walk_expr_range(abs, ctx, RefFlags::default());
+                // The compiler reads the initializer from just past the
+                // `=`, so a comment before it leads the initializer's
+                // first node.
+                let walked =
+                    equals_end(&wrapped, &parsed.program, d.id.span().end, init_span.start)
+                        .filter(|&from| {
+                            wrapped
+                                .get(from as usize..init_span.start as usize)
+                                .is_some_and(|gap| gap.contains("svelte-ignore"))
+                        })
+                        .map_or(abs, |from| {
+                            Range::new((from as i32 + offset).max(0) as u32, abs.end)
+                        });
+                self.walk_expr_range(walked, ctx, RefFlags::default());
                 self.declaration_tag_init = false;
             }
         }
         drop(parsed);
         drop(alloc);
+    }
+
+    /// The compiler reads a snippet's parameters as the parameters of an
+    /// arrow function, attaching their comments as it does in any
+    /// expression; the codes naming no warning in the `svelte-ignore`
+    /// comments leading a parameter are reported in template order.
+    fn snippet_parameter_ignore_codes(
+        &mut self,
+        parameters: Range,
+        source: &str,
+        lang: svn_parser::document::ScriptLang,
+    ) {
+        if !self.runes
+            || parameters.start == 0
+            || !parameters.slice(source).contains("svelte-ignore")
+        {
+            return;
+        }
+        let wrapped = format!("({}) => {{}}", parameters.slice(source));
+        let alloc = oxc_allocator::Allocator::default();
+        let parsed = parse_script_body(&alloc, &wrapped, lang);
+        let mut comments = crate::ignore::ScriptComments::build(
+            &parsed.program,
+            &crate::ignore::CommentSource {
+                file: source,
+                // The `(` stands where the parser's own `(` does.
+                base: parameters.start - 1,
+                blank_before: 0,
+            },
+            true,
+            crate::ignore::PriorIgnores::default(),
+        );
+        for bad in comments.take_unreported() {
+            self.snippet_ignore_codes_reported.push(bad.range.start);
+            self.template_rule_events.push(ScriptRuleEvent::Warning {
+                code: bad.code,
+                message: bad.message,
+                range: bad.range,
+            });
+        }
     }
 
     fn walk_expr_range(&mut self, range: Range, ctx: &mut TemplateCtx<'_>, flags: RefFlags) {
@@ -1293,10 +1361,23 @@ impl TreeBuilder {
             in_reactive_statement: false,
             is_instance: false,
             at_program_top: false,
-            // Template expression slices rarely carry
-            // `// svelte-ignore` comments (they're inside `{…}`),
-            // so skip the precollect for perf.
-            script_comments: crate::ignore::ScriptComments::empty(),
+            // The compiler attaches a template expression's comments
+            // to its nodes as it does a script's; most expressions
+            // hold no `svelte-ignore` at all.
+            script_comments: if slice.contains("svelte-ignore") {
+                crate::ignore::ScriptComments::build(
+                    &parsed.program,
+                    &crate::ignore::CommentSource {
+                        file: ctx.source,
+                        base: range.start - base_adjust,
+                        blank_before: 0,
+                    },
+                    runes,
+                    crate::ignore::PriorIgnores::default(),
+                )
+            } else {
+                crate::ignore::ScriptComments::empty()
+            },
             ignore_frames: Vec::new(),
             // Template expressions count toward the runes await
             // trigger (upstream: fragment create_scopes has_await).
@@ -1338,7 +1419,15 @@ impl TreeBuilder {
         for stmt in &parsed.program.body {
             walker.visit_stmt(stmt);
         }
-        let template_events = self.script_rule_events.split_off(events_before);
+        walker.report_unreached_ignore_codes();
+        let mut template_events = self.script_rule_events.split_off(events_before);
+        if !self.snippet_ignore_codes_reported.is_empty() {
+            let reported = &self.snippet_ignore_codes_reported;
+            template_events.retain(|event| {
+                !matches!(event, ScriptRuleEvent::Warning { code: Code::unknown_code | Code::legacy_code, range, .. }
+                    if reported.contains(&range.start))
+            });
+        }
         self.template_rule_events.extend(template_events);
         // Apply template flags to refs produced during that walk.
         // PendingRef doesn't yet carry template flags; set them on
@@ -1505,9 +1594,11 @@ impl TreeBuilder {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_script(
         &mut self,
         script: &ScriptSection<'_>,
+        source: &str,
         program: &Program<'_>,
         root_scope: ScopeId,
         runes: bool,
@@ -1516,6 +1607,7 @@ impl TreeBuilder {
     ) {
         self.build_script_inner(
             script,
+            source,
             program,
             root_scope,
             false,
@@ -1576,6 +1668,11 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
     /// references resolve to the snippet rather than to a same-named
     /// script binding.
     fn visit_snippet_block(&mut self, block: &svn_parser::SnippetBlock) {
+        self.builder.snippet_parameter_ignore_codes(
+            block.parameters_range,
+            self.ctx.source,
+            self.ctx.lang,
+        );
         let Some(range) = snippet_name_range(block, self.ctx.source) else {
             return;
         };
@@ -1826,9 +1923,11 @@ impl TreeBuilder {
     /// the program top level flip `in_reactive_statement` on descent.
     /// Upstream guards the `reactive_declaration_module_script_dependency`
     /// check behind `ast_type === 'instance'`, so we gate the same way.
+    #[allow(clippy::too_many_arguments)]
     fn build_script_as_instance(
         &mut self,
         script: &ScriptSection<'_>,
+        source: &str,
         program: &Program<'_>,
         root_scope: ScopeId,
         runes: bool,
@@ -1837,6 +1936,7 @@ impl TreeBuilder {
     ) {
         self.build_script_inner(
             script,
+            source,
             program,
             root_scope,
             true,
@@ -1852,6 +1952,7 @@ impl TreeBuilder {
     fn build_script_inner(
         &mut self,
         script: &ScriptSection<'_>,
+        source: &str,
         program: &Program<'_>,
         root_scope: ScopeId,
         is_instance: bool,
@@ -1870,8 +1971,11 @@ impl TreeBuilder {
         // otherwise.
         let script_comments = crate::ignore::ScriptComments::build(
             program,
-            script.content,
-            base,
+            &crate::ignore::CommentSource {
+                file: source,
+                base,
+                blank_before: base,
+            },
             runes,
             prior_ignores,
         );
@@ -1927,6 +2031,7 @@ impl TreeBuilder {
             walker.at_program_top = true;
             walker.visit_stmt(stmt);
         }
+        walker.report_unreached_ignore_codes();
         if !leading_ignores.is_empty() {
             walker.ignore_frames.pop();
         }
@@ -2334,6 +2439,25 @@ fn synthesize_store_subs(
 /// surrounded only by ASCII whitespace. Anything else — operators,
 /// comments, unicode identifiers/whitespace — returns `None` so the
 /// caller falls through to a real parse.
+/// Just past the `=` before a declarator's initializer, which starts
+/// at `init_start`: only whitespace and the program's comments separate
+/// the two. `pattern_end` bounds the search.
+fn equals_end(text: &str, program: &Program<'_>, pattern_end: u32, init_start: u32) -> Option<u32> {
+    let mut at = init_start;
+    while at > pattern_end {
+        if let Some(comment) = program.comments.iter().find(|c| c.span.end == at) {
+            at = comment.span.start;
+            continue;
+        }
+        match text.as_bytes().get(at as usize - 1)? {
+            b'=' => return Some(at),
+            b if b.is_ascii_whitespace() => at -= 1,
+            _ => return None,
+        }
+    }
+    None
+}
+
 fn bare_identifier(slice: &str) -> Option<(usize, &str)> {
     let bytes = slice.as_bytes();
     let start = bytes.iter().position(|b| !b.is_ascii_whitespace())?;
@@ -2831,7 +2955,7 @@ impl<'b> ScriptWalker<'b> {
     }
 
     fn visit_stmt(&mut self, stmt: &Statement<'_>) {
-        let pushed = self.push_leading_ignores(Some(stmt.span().start));
+        let pushed = self.push_leading_ignores(stmt.span());
         // Only the Program-body loop sets the flag; every statement
         // visited from here down is nested.
         let at_program_top = std::mem::replace(&mut self.at_program_top, false);
@@ -2844,31 +2968,50 @@ impl<'b> ScriptWalker<'b> {
         }
     }
 
-    /// Resolve the `// svelte-ignore …` run leading a node that
-    /// starts at `node_start` (upstream's leadingComments semantic —
-    /// see [`crate::ignore::ScriptComments`]) and push it as a new
-    /// ignore frame. Returns `true` if a frame was pushed so the
-    /// caller pops on exit.
-    fn push_leading_ignores(&mut self, node_start: Option<u32>) -> bool {
+    /// The walk enters the node at `span`: report the `svelte-ignore`
+    /// codes naming no warning of the nodes the compiler has visited by
+    /// now, and push the codes of the comments leading this node or one
+    /// around it as a new ignore frame (upstream's leadingComments
+    /// semantic — see [`crate::ignore::ScriptComments`]). Returns
+    /// `true` if a frame was pushed so the caller pops on exit.
+    fn push_leading_ignores(&mut self, span: Span) -> bool {
         if !self.script_comments.has_ignores() {
             return false;
         }
-        let Some(start) = node_start else {
-            return false;
-        };
-        for bad in self.script_comments.leading_bad_codes(start) {
-            self.tree.script_rule_events.push(ScriptRuleEvent::Warning {
-                code: bad.code,
-                message: bad.message,
-                range: bad.range,
-            });
-        }
-        let codes = self.script_comments.leading_ignores(start);
+        let (bad, codes) = self.script_comments.enter(span.start, span.end);
+        self.report_bad_ignore_codes(bad);
         if codes.is_empty() {
             false
         } else {
             self.ignore_frames.push(codes);
             true
+        }
+    }
+
+    /// The compiler warns about a code naming no warning when it reads
+    /// the comment, under the ignores of the nodes around it.
+    fn report_bad_ignore_codes(&mut self, bad: Vec<crate::ignore::BadIgnoreCode>) {
+        for bad in bad {
+            let ignored = self
+                .ignore_frames
+                .iter()
+                .any(|frame| frame.iter().any(|c| c.as_str() == bad.code.as_str()));
+            if !ignored {
+                self.tree.script_rule_events.push(ScriptRuleEvent::Warning {
+                    code: bad.code,
+                    message: bad.message,
+                    range: bad.range,
+                });
+            }
+        }
+    }
+
+    /// Report the codes naming no warning in comments leading nodes the
+    /// walk passed by without stopping, once it is done.
+    fn report_unreached_ignore_codes(&mut self) {
+        if self.script_comments.has_ignores() {
+            let bad = self.script_comments.take_unreported();
+            self.report_bad_ignore_codes(bad);
         }
     }
 
@@ -3650,7 +3793,7 @@ impl<'b> ScriptWalker<'b> {
             if removed {
                 continue;
             }
-            let pushed = self.push_leading_ignores(Some(m.span().start));
+            let pushed = self.push_leading_ignores(m.span());
             match m {
                 ClassElement::MethodDefinition(md) => {
                     self.visit_key(&md.key, md.computed);
@@ -3749,7 +3892,7 @@ impl<'b> ScriptWalker<'b> {
         // A comment between the declaration keyword and the pattern
         // (`const /* svelte-ignore … */ x = …`) leads the declarator
         // node, whose span starts at the pattern.
-        let pushed = self.push_leading_ignores(Some(d.span.start));
+        let pushed = self.push_leading_ignores(d.span);
         self.node_spans.push((d.span.start, d.span.end));
         // `ensure_no_module_import_conflict`, the declarator visitor's
         // first check: at the instance script's top level a variable may
@@ -4141,7 +4284,7 @@ impl<'b> ScriptWalker<'b> {
     /// The frame push is gated on the script having any ignore
     /// comment at all, so the common case adds one boolean check.
     fn visit_expr(&mut self, e: &Expression<'_>) {
-        let pushed = self.push_leading_ignores(Some(e.span().start));
+        let pushed = self.push_leading_ignores(e.span());
         let is_node = !matches!(
             e,
             Expression::ParenthesizedExpression(_)
@@ -4265,7 +4408,7 @@ impl<'b> ScriptWalker<'b> {
                         AE::SpreadElement(s) => {
                             // Anchor leading ignores at the `...`,
                             // not the spread argument.
-                            let pushed = self.push_leading_ignores(Some(s.span.start));
+                            let pushed = self.push_leading_ignores(s.span);
                             self.visit_expr(&s.argument);
                             if pushed {
                                 self.ignore_frames.pop();
@@ -4443,7 +4586,7 @@ impl<'b> ScriptWalker<'b> {
             // or the `...` of a spread) — a comment before `open:`
             // must suppress inside the value, whose own span starts
             // after the key and colon.
-            let pushed = self.push_leading_ignores(Some(p.span().start));
+            let pushed = self.push_leading_ignores(p.span());
             match p {
                 ObjectPropertyKind::ObjectProperty(op) => {
                     self.visit_key(&op.key, op.computed);
@@ -4964,7 +5107,7 @@ impl<'b> ScriptWalker<'b> {
         if let oxc_ast::ast::Argument::SpreadElement(s) = a {
             // Anchor leading ignores at the `...`, mirroring the
             // array-spread path.
-            let pushed = self.push_leading_ignores(Some(s.span.start));
+            let pushed = self.push_leading_ignores(s.span);
             // A spread's inner identifier is never the DIRECT rune
             // argument, so upstream's ancestor walk always sees it as
             // nested — flag accordingly inside `$state(…)` calls.
@@ -4996,7 +5139,7 @@ impl<'b> ScriptWalker<'b> {
                 && let Expression::Identifier(id) = bare
                 && id.name.starts_with('$')
             {
-                let pushed = self.push_leading_ignores(Some(e.span().start));
+                let pushed = self.push_leading_ignores(e.span());
                 self.check_rune_reference(bare, None);
                 self.record_ref_id_full(
                     id.name.as_str(),
@@ -5042,7 +5185,7 @@ impl<'b> ScriptWalker<'b> {
     fn visit_arg_inside_state_call(&mut self, e: &Expression<'_>) {
         // The direct-identifier branch bypasses the visit_expr
         // wrapper, so pick up leading ignores here.
-        let pushed = self.push_leading_ignores(Some(e.span().start));
+        let pushed = self.push_leading_ignores(e.span());
         match e {
             // Direct identifier / member at top level: NOT flagged
             // (mirrors upstream bug).

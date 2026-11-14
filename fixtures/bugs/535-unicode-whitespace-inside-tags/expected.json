@@ -1,0 +1,7 @@
+{
+    "errors": [
+        { "file": "Lang.svelte", "line": 1, "column": 8, "code": 2322 },
+        { "file": "input.svelte", "line": 1, "column": 8, "code": 2322 }
+    ],
+    "_note": "The compiler skips white space inside a tag with its own `is_whitespace`, which takes the Unicode spaces JavaScript's `\\s` does (NBSP, U+2000-200A, U+3000, U+FEFF and the rest) besides ASCII. Every space between attributes, around an attribute's `=` and inside `{ }` here is an NBSP, and the compiler reads each tag as it would with ordinary spaces, so both components are checked and their type errors reported. Skipping only ASCII white space read `class= \"x\"` and `{id }` as malformed tags, which dropped the whole component as one the compiler rejects, and read `<script lang=\"ts\">` with an NBSP before `lang` as a script with an attribute named ` lang`, checking TypeScript as JavaScript."
+}

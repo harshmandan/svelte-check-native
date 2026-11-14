@@ -1345,7 +1345,11 @@ impl Parser {
             return Ok(());
         }
         self.expect(Tok::BraceL)?;
-        let mut keys: Vec<String> = Vec::new();
+        // acorn keeps the keys as properties of a plain object: setting
+        // `__proto__` on one adds no property, so that key never counts
+        // as seen. A key with a lone surrogate is told apart by its code
+        // units.
+        let mut keys: Vec<(String, Vec<u16>)> = Vec::new();
         let mut first = true;
         while !self.eat(Tok::BraceR)? {
             if first {
@@ -1356,6 +1360,11 @@ impl Parser {
                     break;
                 }
             }
+            let key_units = if self.ty == Tok::String {
+                self.value_units.clone()
+            } else {
+                Vec::new()
+            };
             let key = if self.ty == Tok::String {
                 self.parse_expr_atom(None, ForInit::No, false)?
             } else {
@@ -1366,14 +1375,16 @@ impl Parser {
                 return self.unexpected();
             }
             self.parse_expr_atom(None, ForInit::No, false)?;
-            let key_name = export_name(&key).to_string();
+            let key_name = (export_name(&key).to_string(), key_units);
             if keys.contains(&key_name) {
                 return self.raise(
                     key.start as usize,
-                    format!("Duplicate attribute key '{key_name}'"),
+                    format!("Duplicate attribute key '{}'", key_name.0),
                 );
             }
-            keys.push(key_name);
+            if key_name.0 != "__proto__" {
+                keys.push(key_name);
+            }
         }
         Ok(())
     }

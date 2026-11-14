@@ -573,7 +573,7 @@ impl Parser {
     /// arguments.
     pub(crate) fn parse_decorator(&mut self) -> PResult<()> {
         self.next()?;
-        self.decorator_stack.push(0);
+        self.decorator_stack.push((0, 0));
 
         let start_pos = self.start;
         let mut expr = if self.ty == Tok::ParenL {
@@ -645,8 +645,12 @@ impl Parser {
     /// The decorators before a statement or an expression.
     pub(crate) fn parse_decorators(&mut self, allow_export: bool) -> PResult<()> {
         while self.ty == Tok::At {
+            let start = self.start as u32;
             self.parse_decorator()?;
-            if let Some(count) = self.decorator_stack.last_mut() {
+            if let Some((count, first)) = self.decorator_stack.last_mut() {
+                if *count == 0 {
+                    *first = start;
+                }
                 *count += 1;
             }
         }
@@ -664,9 +668,13 @@ impl Parser {
         Ok(())
     }
 
-    /// A class takes the decorators waiting for it.
-    pub(crate) fn take_decorators(&mut self) {
-        if let Some(count) = self.decorator_stack.last_mut() {
+    /// A class takes the decorators waiting for it, and starts where
+    /// the first of them does.
+    pub(crate) fn take_decorators(&mut self, node: &mut Node) {
+        if let Some((count, first)) = self.decorator_stack.last_mut()
+            && *count > 0
+        {
+            node.start = *first;
             *count = 0;
         }
     }

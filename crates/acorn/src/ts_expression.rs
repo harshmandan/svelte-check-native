@@ -131,9 +131,11 @@ impl Parser {
 
     fn is_assignable(node: &Node, is_binding: bool) -> bool {
         match node.ty {
-            Ty::TsTypeCastExpression | Ty::ParenthesizedExpression => {
-                Self::is_assignable(node.first(), is_binding)
-            }
+            Ty::TsTypeCastExpression => Self::is_assignable(node.first(), is_binding),
+            // acorn-typescript asks about what the parentheses hold
+            // without saying it is a binding, so a parenthesized member
+            // expression passes for a parameter.
+            Ty::ParenthesizedExpression => Self::is_assignable(node.first(), false),
             Ty::TsParameterProperty
             | Ty::Identifier
             | Ty::ObjectPattern

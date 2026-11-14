@@ -778,6 +778,11 @@ impl Parser {
         out.extend_from_slice(&self.input[chunk_start.min(chunk_end)..chunk_end]);
         self.pos += 1;
         self.value_lone_surrogate = has_lone_surrogate(&out);
+        self.value_units = if self.value_lone_surrogate {
+            out.clone()
+        } else {
+            Vec::new()
+        };
         self.finish_token(Tok::String, String::from_utf16_lossy(&out));
         Ok(())
     }

@@ -391,6 +391,9 @@ pub(crate) struct Parser {
     pub value: String,
     /// The current string token holds a lone surrogate.
     pub value_lone_surrogate: bool,
+    /// The code units of a string token that holds a lone surrogate,
+    /// which `value` cannot.
+    pub value_units: Vec<u16>,
     pub start: usize,
     pub end: usize,
     pub last_tok_start: usize,
@@ -449,7 +452,7 @@ pub(crate) struct Parser {
     pub import_or_export_outer_kind: OuterKind,
     /// How many decorators wait for the class they belong to, one count
     /// per nesting of decorator expressions.
-    pub decorator_stack: Vec<u32>,
+    pub decorator_stack: Vec<(u32, u32)>,
 }
 
 /// Deeper nesting than this is reported the way acorn reports running
@@ -506,6 +509,7 @@ impl Parser {
             ty: Tok::Eof,
             value: String::new(),
             value_lone_surrogate: false,
+            value_units: Vec::new(),
             start: start_pos,
             end: start_pos,
             last_tok_start: start_pos,
@@ -542,7 +546,7 @@ impl Parser {
             in_disallow_conditional_types_context: false,
             maybe_in_arrow_parameters: false,
             import_or_export_outer_kind: OuterKind::Unset,
-            decorator_stack: vec![0],
+            decorator_stack: vec![(0, 0)],
         };
         parser.enter_scope(SCOPE_TOP);
         parser

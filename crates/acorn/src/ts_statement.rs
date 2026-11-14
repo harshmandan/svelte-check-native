@@ -527,7 +527,7 @@ impl Parser {
 
     fn ts_parse_class_inner(&mut self, mut node: Node, position: ClassPosition) -> PResult<Node> {
         self.next()?;
-        self.take_decorators();
+        self.take_decorators(&mut node);
         let old_strict = self.strict;
         self.strict = true;
 

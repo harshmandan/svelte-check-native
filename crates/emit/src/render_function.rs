@@ -384,6 +384,15 @@ pub(crate) fn emit_render_body_return(
             write_slots_field_type(out, doc.source, slot_defs, true);
         }
     };
+    // With no props declared, a legacy component reading `$$props` or
+    // `$$restProps` has props `{}`, which the any-prop widening keeps
+    // open; otherwise `Record<string, never>`, whose `never` index
+    // signature rejects every prop (upstream `createPropsStr`).
+    let no_props = if !runes_mode && (ambients.props || ambients.rest_props) {
+        "{}"
+    } else {
+        "Record<string, never>"
+    };
     if generics.is_some() {
         // When generics are declared but no Props source was discovered,
         // fall back to `Record<string, never>` just like the no-generics
@@ -393,7 +402,7 @@ pub(crate) fn emit_render_body_return(
         // to `void` and break every consumer.
         let props_ty: String = match prop_type_source {
             Some(ty) => ty.to_string(),
-            None => "Record<string, never>".to_string(),
+            None => no_props.to_string(),
         };
         let _ = write!(
             buf,
@@ -459,7 +468,7 @@ pub(crate) fn emit_render_body_return(
     }
     let props_ty: String = prop_type_source
         .map(|ty| ty.to_string())
-        .unwrap_or_else(|| "Record<string, never>".to_string());
+        .unwrap_or_else(|| no_props.to_string());
     let _ = write!(
         buf,
         "    return {{ props: undefined as any as ({props_ty}), events: undefined as any as {events_field}, slots: ",

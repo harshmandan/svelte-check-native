@@ -2613,7 +2613,21 @@ fn check_project(
             let rejections = svn_enhance::parse_rejections(workspace, &rejected, |p| {
                 config_resolver_ref.for_path(p).preprocess_configured
             });
-            for rejection in rejections.into_iter().flatten() {
+            let (rejections, accepted) = rejections
+                .map(|r| (r.rejected, r.accepted))
+                .unwrap_or_default();
+            // Our parser could not read a component the compiler parses,
+            // so it stays out of the run; svelte-check would check it, and
+            // a clean result must not hide that it was not.
+            for file in &accepted {
+                let shown = file.strip_prefix(workspace).unwrap_or(file);
+                eprintln!(
+                    "svelte-check-native: {} was not checked: svelte/compiler parses it, \
+                     but svelte-check-native's parser rejects it",
+                    shown.display()
+                );
+            }
+            for rejection in rejections {
                 dropped_files.remove(&rejection.file);
                 diagnostics.extend(
                     rejection

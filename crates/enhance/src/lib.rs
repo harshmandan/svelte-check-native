@@ -70,5 +70,7 @@ pub use missing_svelte_imports::{
     missing_svelte_import_diagnostics_in_script, module_stubs,
 };
 pub use package_imports::package_import_aliases;
-pub use parse_rejection::{ParseRejection, RejectionDiagnostic, RejectionKind, parse_rejections};
+pub use parse_rejection::{
+    ParseRejection, ParseRejections, RejectionDiagnostic, RejectionKind, parse_rejections,
+};
 pub use rejected_imports::{RejectedImports, rejected_import_diagnostics};

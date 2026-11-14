@@ -59,21 +59,35 @@ pub enum RejectionKind {
     Conversion { ts: bool },
 }
 
+/// What the compiler says of the components our parser expects
+/// svelte2tsx to reject.
+pub struct ParseRejections {
+    /// The ones svelte2tsx does reject.
+    pub rejected: Vec<ParseRejection>,
+    /// The ones it converts after all: svelte-check type-checks them,
+    /// where our parser could not read them.
+    pub accepted: Vec<PathBuf>,
+}
+
 /// Ask the compiler about `files` (components our parser expects
-/// svelte2tsx to reject) and return the ones svelte2tsx does reject.
-/// `preprocess_configured` says whether the Svelte config governing a
-/// file supplies its own `preprocess`. `None` when the compiler couldn't
-/// be run: the caller then keeps `--tsgo`'s behaviour.
+/// svelte2tsx to reject). `preprocess_configured` says whether the Svelte
+/// config governing a file supplies its own `preprocess`. `None` when the
+/// compiler couldn't be run: the caller then keeps `--tsgo`'s behaviour.
+/// A file the compiler gave no answer for is in neither list.
 pub fn parse_rejections(
     workspace: &Path,
     files: &[(PathBuf, String)],
     preprocess_configured: impl Fn(&Path) -> bool,
-) -> Option<Vec<ParseRejection>> {
+) -> Option<ParseRejections> {
     let answers = svn_svelte_compiler::rejections(workspace, files).ok()?;
-    let rejections = answers
+    let mut accepted = Vec::new();
+    let rejected = answers
         .into_iter()
         .filter_map(|(file, answer)| {
-            let parse_error = answer.parse_error?;
+            let Some(parse_error) = answer.parse_error else {
+                accepted.push(file);
+                return None;
+            };
             let source = files.iter().find(|(f, _)| *f == file).map(|(_, s)| s)?;
             let (doc, _) = svn_parser::parse_sections(source);
             let mut diagnostics = Vec::with_capacity(2);
@@ -95,7 +109,7 @@ pub fn parse_rejections(
             Some(ParseRejection { file, diagnostics })
         })
         .collect();
-    Some(rejections)
+    Some(ParseRejections { rejected, accepted })
 }
 
 fn svelte_pass_diagnostic(

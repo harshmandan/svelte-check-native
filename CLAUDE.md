@@ -721,7 +721,9 @@ runnable; bench-wide sweeps stay interactive (bench isn't part of
 - `0` — no errors (and no warnings if `--fail-on-warnings`)
 - `1` — errors detected (or warnings with `--fail-on-warnings`), or the
   TypeScript compiler did not complete (killed, or exited without a
-  diagnostic) or was not found, as svelte-check reports it
+  diagnostic) or was not found, as svelte-check reports it; or
+  `--svelte-warnings=bridge` could not run `svelte/compiler` (no JS
+  runtime, no `svelte` package, or the worker died)
 - `2` — invocation error (bad flag, missing tsconfig)
 
 ## Release workflow

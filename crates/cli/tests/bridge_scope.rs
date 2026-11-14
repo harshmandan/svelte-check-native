@@ -147,15 +147,34 @@ fn a_tsconfig_with_no_components_still_gets_their_warnings() {
     );
 }
 
+/// A bridge that cannot answer leaves the run without the diagnostics
+/// it was asked for. That is a failed run, not a clean one: the reason
+/// goes to stderr, nothing is reported, and the exit code is 1.
 #[test]
-fn a_bridge_that_stops_answering_is_reported() {
+fn a_bridge_that_stops_answering_fails_the_run() {
     let dir = workspace(&[
         ("src/A.svelte", WARNS),
         ("src/B.svelte", "<p>MOCK_CRASH</p>\n"),
     ]);
-    let (_, _, stderr) = check(dir.path());
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = crate_dir.parent().and_then(Path::parent).unwrap();
+    let tsgo = svn_typecheck::discover(repo_root)
+        .expect("could not locate native TypeScript; install dependencies or set TSGO_BIN");
+    let output = Command::new(env!("CARGO_BIN_EXE_svelte-check-native"))
+        .args(["--workspace", dir.path().to_str().unwrap()])
+        .args(["--output", "machine-verbose"])
+        .args(["--svelte-warnings", "bridge"])
+        .env("TSGO_BIN", tsgo.path)
+        .env("SVN_BRIDGE_WORKERS", "1")
+        .output()
+        .expect("run svelte-check-native");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "stderr: {stderr}");
     assert!(
-        stderr.contains("svelte/compiler"),
-        "a bridge failure must be reported on stderr, got: {stderr:?}"
+        stderr.contains("Error: --svelte-warnings=bridge could not run svelte/compiler"),
+        "{stderr}"
     );
+    assert!(stderr.contains("svelte-check failed"), "{stderr}");
+    assert!(!stdout.contains("COMPLETED"), "{stdout}");
 }

@@ -2654,13 +2654,16 @@ fn check_project(
                     }
                 }
                 Err(e) => {
-                    // Proceed with the other diagnostics, but say that
-                    // none of the compiler's could be collected rather
-                    // than report a clean run.
-                    eprintln!(
-                        "svelte-check-native: could not run svelte/compiler for compiler \
-                         warnings ({e}); no compiler diagnostics are reported"
-                    );
+                    // The run was asked for the compiler's own
+                    // diagnostics and has none of them. Reporting the
+                    // rest would pass for a clean run where nothing on
+                    // the Svelte side was checked, so the run fails, the
+                    // way it does when the TypeScript compiler cannot
+                    // complete: the reason on stderr, nothing on stdout,
+                    // exit 1.
+                    eprintln!("Error: --svelte-warnings=bridge could not run svelte/compiler: {e}");
+                    eprintln!("svelte-check failed");
+                    return Err(ExitCode::from(1));
                 }
             }
         }

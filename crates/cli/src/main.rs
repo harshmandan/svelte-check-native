@@ -236,7 +236,32 @@ struct Cli {
     disable_enhance: bool,
 }
 
+/// Stack for the thread the check runs on and for each worker thread.
+/// The script parser and the tree walks recurse once per level of
+/// nesting, and a generated type or expression can nest thousands deep.
+/// The memory is reserved, not used, until a thread goes that deep.
+const DEEP_STACK: usize = 256 * 1024 * 1024;
+
 fn main() -> ExitCode {
+    // Before the first parallel iteration, which would start the pool
+    // with the platform's small default stacks.
+    let _ = rayon::ThreadPoolBuilder::new()
+        .stack_size(DEEP_STACK)
+        .build_global();
+    let run = std::thread::Builder::new()
+        .name("main".into())
+        .stack_size(DEEP_STACK)
+        .spawn(run);
+    match run.map(std::thread::JoinHandle::join) {
+        Ok(Ok(code)) => code,
+        // The check panicked; the panic has been printed.
+        Ok(Err(_)) => ExitCode::from(101),
+        // No thread to be had: run where we stand.
+        Err(_) => self::run(),
+    }
+}
+
+fn run() -> ExitCode {
     let cli = Cli::parse();
 
     // Reject recognised-but-unsupported upstream flags with a clear

@@ -515,6 +515,23 @@ fn synthesize_props_type_from_export_let(
     if parts.is_empty() {
         return None;
     }
+    // A name exported twice (a redeclared `export let`) is one prop:
+    // upstream keeps its exports in a map keyed by name, so the last
+    // declaration's entry stands, at the first one's position.
+    let mut deduped: Vec<(&str, &String)> = Vec::with_capacity(parts.len());
+    for part in &parts {
+        let key = part
+            .split(':')
+            .next()
+            .unwrap_or(part)
+            .trim_end_matches('?')
+            .trim();
+        match deduped.iter_mut().find(|(k, _)| *k == key) {
+            Some(slot) => slot.1 = part,
+            None => deduped.push((key, part)),
+        }
+    }
+    let parts: Vec<&String> = deduped.into_iter().map(|(_, part)| part).collect();
     let mut out = String::with_capacity(parts.iter().map(|p| p.len() + 2).sum::<usize>() + 4);
     out.push_str("{ ");
     for (i, part) in parts.iter().enumerate() {
@@ -532,9 +549,10 @@ fn synthesize_props_type_from_export_let(
 /// to pick up its type annotation and initializer (which decides the
 /// optional marker). When `local` has no annotation but does have an
 /// annotation, the prop is typed `typeof <local>` — for a `let`, a
-/// `function`, a `class` or an import alike — and is always optional:
-/// upstream registers a named export with `required = false`
-/// (`ExportedNames.addExport`), so consumers may omit it. The alias
+/// `function`, a `class` or an import alike. It is required when
+/// `local` is a variable declared without an initializer, optional
+/// otherwise (upstream's `addExport` takes `required` from the
+/// declaration). The alias
 /// becomes the public key so consumers write `<Foo {alias}=...>`.
 fn append_prop_from_export_specifier(
     spec: &oxc_ast::ast::ExportSpecifier<'_>,

@@ -128,6 +128,12 @@ pub struct ScopeTree {
     /// read in the scope that declares it, unlike any other read in the
     /// template.
     pub(crate) declaration_tag_inits: Vec<Range>,
+    /// The initializers of the template's `{@const}` tags. The compiler
+    /// reads one a function deeper than the template around it, which
+    /// is the depth of the template's outermost scope: a read there of
+    /// state a declaration tag declares in that scope counts as a read
+    /// in the scope that declares it.
+    pub(crate) const_tag_inits: Vec<Range>,
     /// The first error the compiler's scope builder raises while
     /// declaring bindings (`validate_identifier_name`): a `$` or
     /// `$`-prefixed name declared at the module / instance level.
@@ -268,11 +274,13 @@ impl ScopeTree {
             .enumerate()
             .filter_map(|(i, s)| {
                 // An empty range holds no offset.
-                s.range.filter(|r| r.start < r.end).map(|range| IndexedScope {
-                    range,
-                    id: ScopeId(i as u32),
-                    parent: None,
-                })
+                s.range
+                    .filter(|r| r.start < r.end)
+                    .map(|range| IndexedScope {
+                        range,
+                        id: ScopeId(i as u32),
+                        parent: None,
+                    })
             })
             .collect();
         // Between scopes with one range the later-created is the inner.
@@ -280,7 +288,10 @@ impl ScopeTree {
         let mut open: Vec<usize> = Vec::new();
         for i in 0..index.len() {
             let range = index[i].range;
-            while open.last().is_some_and(|&o| index[o].range.end <= range.start) {
+            while open
+                .last()
+                .is_some_and(|&o| index[o].range.end <= range.start)
+            {
                 open.pop();
             }
             if let Some(&o) = open.last() {
@@ -659,6 +670,8 @@ struct TreeBuilder {
     template_rule_events: Vec<ScriptRuleEvent>,
     /// See [`ScopeTree::declaration_tag_inits`].
     declaration_tag_inits: Vec<Range>,
+    /// See [`ScopeTree::const_tag_inits`].
+    const_tag_inits: Vec<Range>,
     /// See [`ScopeTree::declaration_error`].
     declaration_error: Option<(Code, String, Range)>,
     /// The literals the compiler's stateful bidi search reports (see
@@ -794,6 +807,7 @@ impl TreeBuilder {
             script_rule_events: Vec::new(),
             template_rule_events: Vec::new(),
             declaration_tag_inits: Vec::new(),
+            const_tag_inits: Vec::new(),
             declaration_error: None,
             runes: false,
             preprocess_ts: false,
@@ -1136,7 +1150,19 @@ impl TreeBuilder {
                     },
                 ))
             });
+            // `{let …}` declares names that may be assigned to; `{const …}`
+            // and `{@const …}` do not.
+            let declared_with_let = ctx.source[..range.start as usize]
+                .rsplit('{')
+                .next()
+                .unwrap_or_default()
+                .trim_start()
+                .strip_prefix("let")
+                .is_some_and(|rest| rest.trim().is_empty());
             for idx in new_id_start..new_id_end {
+                if declared_with_let {
+                    self.bindings[idx as usize].declaration_kind = DeclarationKind::Let;
+                }
                 if matches!(self.bindings[idx as usize].kind, BindingKind::Each) {
                     self.bindings[idx as usize].kind = BindingKind::Template;
                     if let Some((kind, initial)) = &rune_kind {
@@ -1165,6 +1191,8 @@ impl TreeBuilder {
                 self.declaration_tag_init = !tag_head.trim_start().starts_with('@');
                 if self.declaration_tag_init {
                     self.declaration_tag_inits.push(abs);
+                } else {
+                    self.const_tag_inits.push(abs);
                 }
                 self.walk_expr_range(abs, ctx, RefFlags::default());
                 self.declaration_tag_init = false;
@@ -2069,6 +2097,7 @@ impl TreeBuilder {
             reactive_statements: self.reactive_statements,
             reactive_assignment_targets: self.reactive_assignment_targets.into_iter().collect(),
             declaration_tag_inits: self.declaration_tag_inits,
+            const_tag_inits: self.const_tag_inits,
             template_rule_events: {
                 let mut events = self.template_rule_events;
                 events.sort_by_key(|e| e.range().start);

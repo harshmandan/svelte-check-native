@@ -331,19 +331,37 @@ fn state_referenced_locally(tree: &ScopeTree, pending: &mut Vec<(svn_core::Range
             ) {
                 continue;
             }
-            if r.function_depth_at_use != binding_depth {
-                continue;
-            }
-            // State declared in the template (`{let a = $state(0)}`) is
-            // read reactively everywhere in the template but in another
-            // declaration tag's initializer.
-            if r.in_template
-                && !tree
-                    .declaration_tag_inits
+            let within = |inits: &[svn_core::Range]| {
+                inits
                     .iter()
                     .any(|init| init.start <= r.range.start && r.range.end <= init.end)
-            {
-                continue;
+            };
+            // The compiler reads a `{@const}` initializer one function
+            // deeper than the template around it, which is the depth of
+            // the template's outermost scope. So a read there, outside
+            // any function of its own, of state a declaration tag
+            // declares in that outermost scope is a read in place,
+            // however deep in blocks the `{@const}` stands.
+            let in_const_tag = r.in_template && within(&tree.const_tag_inits) && {
+                let around = tree.scope(tree.innermost_template_scope_at(r.range.start));
+                let declared_in = tree.scope(binding.scope);
+                // A template scope that no other template scope holds.
+                let outermost = declared_in.range.is_some()
+                    && declared_in
+                        .parent
+                        .is_none_or(|parent| tree.scope(parent).range.is_none());
+                outermost && r.function_depth_at_use == around.function_depth
+            };
+            if !in_const_tag {
+                if r.function_depth_at_use != binding_depth {
+                    continue;
+                }
+                // State declared in the template (`{let a = $state(0)}`)
+                // is read reactively everywhere in the template but in
+                // another declaration tag's initializer.
+                if r.in_template && !within(&tree.declaration_tag_inits) {
+                    continue;
+                }
             }
             if ref_ignores(r, Code::state_referenced_locally) {
                 continue;

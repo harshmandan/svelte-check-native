@@ -212,6 +212,75 @@ const CASES: &[(&str, &[Reported])] = &[
         "<div aria-hidden=\"tr&#117;e\" tabindex=\"0\">x</div>",
         &[("a11y_no_noninteractive_tabindex", 0, 49, false)],
     ),
+    // State declared in the template, read in a {@const} initializer.
+    (
+        "{let a = $state(0)}{#if true}{@const b = a}{b}{/if}<button onclick={() => a++}>x</button>",
+        &[("state_referenced_locally", 41, 42, false)],
+    ),
+    (
+        "{#if true}{let a = $state(0)}{@const b = a}{b}<button onclick={() => a++}>x</button>{/if}",
+        &[],
+    ),
+    (
+        "{let a = $state(0)}{#if true}{@const b = () => a}{b}{/if}<button onclick={() => a++}>x</button>",
+        &[],
+    ),
+    (
+        "{let a = $state(0)}{#each [1] as i}{@const b = a + i}{b}{/each}<button onclick={() => a++}>x</button>",
+        &[("state_referenced_locally", 47, 48, false)],
+    ),
+    (
+        "{let a = $state(0)}{#if true}{#if true}{@const b = a}{b}{/if}{/if}<button onclick={() => a++}>x</button>",
+        &[("state_referenced_locally", 51, 52, false)],
+    ),
+    (
+        "<script>let a = $state(0);</script>{#if true}{@const b = a}{b}{/if}<button onclick={() => a++}>x</button>",
+        &[],
+    ),
+    (
+        "{let a = $state(0)}{#snippet s()}{@const b = a}{b}{/snippet}{@render s()}<button onclick={() => a++}>x</button>",
+        &[("state_referenced_locally", 45, 46, false)],
+    ),
+    (
+        "{let a = $state(0)}{let c = a}{c}<button onclick={() => a++}>x</button>",
+        &[("state_referenced_locally", 28, 29, false)],
+    ),
+    (
+        "{let a = $derived(1)}{#if true}{@const b = a}{b}{/if}",
+        &[("state_referenced_locally", 43, 44, false)],
+    ),
+    (
+        "{let a = $state(0)}{#if true}{@const b = a.x}{b}{/if}<button onclick={() => a++}>x</button>",
+        &[("state_referenced_locally", 41, 42, false)],
+    ),
+    // A name a {let} tag declares may be assigned to; one a {const} or
+    // {@const} tag declares may not.
+    (
+        "{let a = $state(0)}<button onclick={() => a++}>x</button>",
+        &[],
+    ),
+    (
+        "{const a = $state(0)}<button onclick={() => a++}>x</button>",
+        &[("constant_assignment", 44, 47, true)],
+    ),
+    ("{let a = 0}<button onclick={() => a++}>x</button>{a}", &[]),
+    (
+        "{#if true}{@const a = 0}<button onclick={() => a++}>x</button>{/if}",
+        &[("constant_assignment", 47, 50, true)],
+    ),
+    (
+        "{let a = $derived(1)}<button onclick={() => a++}>x</button>",
+        &[],
+    ),
+    (
+        "{let {a} = $state({a:1})}<button onclick={() => a++}>x</button>",
+        &[],
+    ),
+    ("{let a = $state(0)}<input bind:value={a} />", &[]),
+    (
+        "{const a = $state(0)}<input bind:value={a} />",
+        &[("constant_binding", 28, 42, true)],
+    ),
 ];
 
 #[test]

@@ -34,7 +34,9 @@ use svn_parser::ScriptLang;
 
 use crate::props_emit::inject_component_props_annotation;
 use crate::svelte2tsx_nodes::component_events::rewrite_dispatcher_typing;
+// SVELTE-4-COMPAT: `export let` prop types.
 use crate::svelte4::compat::assert_exported_prop_types_in_place;
+// SVELTE-4-COMPAT: `$:` reactive statements.
 use crate::svelte4::reactive::rewrite;
 use crate::util::blank_dollar_generic_decls;
 use crate::{common_affix_spans, process_instance_script_content::split_imports};
@@ -99,6 +101,7 @@ fn reactive_rewrite_preserves_line_count() {
                $: doubled = count * 2;\n\
                $: count = doubled - count;\n\
                $: {\n\tconsole.log(count);\n}\n";
+    // SVELTE-4-COMPAT: `$:` reactive statements.
     let out = rewrite(src, ScriptLang::Ts);
     assert_line_preserving_rewrite(src, &out);
 }
@@ -161,6 +164,7 @@ fn split_imports_body_preserves_length_and_lines() {
 fn prop_type_assertion_edits_reconstruct() {
     let input = "let foo;\nlet size: string = 'medium';\nlet on = false;\n";
     let mut out = input.to_string();
+    // SVELTE-4-COMPAT: `export let` prop types.
     let edits = assert_exported_prop_types_in_place(
         &mut out,
         &(0..input.len()),

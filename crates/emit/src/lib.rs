@@ -74,12 +74,12 @@ mod rewrite_invariants;
 mod script_body_rewrites;
 mod script_template_analysis;
 mod store_subscriptions;
-mod void_block;
-// SVELTE-4-COMPAT: droppable submodule for Svelte-4 emit rewrites.
-// See design/phase_g/DESIGN.md.
 mod svelte2tsx_nodes;
 mod svelte2tsx_rejects;
 mod svelte2tsx_utils;
+mod void_block;
+// SVELTE-4-COMPAT: droppable submodule for Svelte-4 emit rewrites.
+// See design/phase_g/DESIGN.md.
 mod svelte4;
 mod sveltekit;
 mod util;
@@ -97,6 +97,7 @@ use props_emit::{
     build_exports_object, inject_component_props_annotation, inject_jsdoc_props_cast,
     synthesise_js_props_typedef_body,
 };
+// SVELTE-4-COMPAT: legacy ambients, `strictEvents`, runes-mode detection.
 use svelte4::compat::{emit_svelte4_ambients, has_strict_events_attr, is_runes_mode};
 use svn_analyze::should_synthesise_js_props;
 
@@ -521,13 +522,16 @@ fn emit_document_with_render_name(
     // whitespace before `=`) / `type $$Events<T>=…` (generic).
     // Computed once and threaded through to every gate that used to
     // call `has_strict_events_decl`.
+    // SVELTE-4-COMPAT: declared `$$Events`.
     let has_strict_events_decl =
         svelte4::compat::has_strict_events_ast(parsed_instance.as_ref(), parsed_module.as_ref());
     // SlotHandler PLAN Stage 5: instance-script-only `$$Slots`
     // detection. When the user declared `interface $$Slots` or
     // `type $$Slots`, the render-fn return uses that as the slots
     // surface; the synthesised slot-defs are ignored.
+    // SVELTE-4-COMPAT: declared `$$Slots`.
     let has_strict_slots_decl = svelte4::compat::has_strict_slots_ast(parsed_instance.as_ref());
+    // SVELTE-4-COMPAT: runes mode decides between the Svelte 4 and 5 shapes.
     let runes_mode = is_runes_mode(doc, fragment, parsed_instance.as_ref());
     let ambients = svn_analyze::find_ambient_refs(
         fragment,
@@ -668,6 +672,7 @@ fn emit_document_with_render_name(
     // narrowing those without opt-in produced 18 legitimate-but-new
     // errors on a Svelte-4 bench in the reverted commit 3c24f18.
     let narrow_events = has_strict_events_decl
+        // SVELTE-4-COMPAT: `<script strictEvents>`.
         || has_strict_events_attr(doc, fragment)
         || (runes_mode && generics.is_some());
     // If the component doesn't already declare `$$Events` but opted in
@@ -1090,6 +1095,7 @@ fn emit_document_with_render_name(
         .is_some_and(|s| s.generics.is_none())
         && generics.is_some();
     let rewritten_content: Option<String> = doc.instance_script.as_ref().map(|s| {
+        // SVELTE-4-COMPAT: `$:` reactive statements.
         let after_reactive = svelte4::reactive::rewrite(s.content, s.lang);
         let after_reactive = if strip_dollar_generic {
             blank_dollar_generic_decls(&after_reactive)
@@ -1584,6 +1590,7 @@ fn emit_document_with_render_name(
         }
     }
     let ambients_start = buf.as_str().len() as u32;
+    // SVELTE-4-COMPAT: `$$slots`, `$$props`, `$$restProps`.
     emit_svelte4_ambients(buf.raw_string_mut(), ambients, is_ts, &slot_names);
     // Upstream writes these declarations into the text that replaces the
     // instance `<script ...>` tag, so a diagnostic on one reports at the
@@ -1788,6 +1795,7 @@ fn emit_document_with_render_name(
     // only event source when present, and counts the events it names;
     // otherwise dispatcher and bubbled events count.
     let has_events = if has_strict_events_decl {
+        // SVELTE-4-COMPAT: events named by a declared `$$Events`.
         svelte4::compat::strict_events_decl_has_events(parsed_instance.as_ref())
     } else {
         has_concrete_dispatcher_events || has_bubbled_events
@@ -2453,6 +2461,7 @@ mod style_tag_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // SVELTE-4-COMPAT: `export let` prop types.
     use crate::svelte4::compat::assert_exported_prop_types_in_place;
     use std::path::PathBuf;
     use svn_analyze::walk_template;
@@ -2473,6 +2482,7 @@ mod tests {
         let mut out = split.body;
         let targets: Vec<SmolStr> = targets.iter().map(|s| SmolStr::from(*s)).collect();
         let body = 0..out.len();
+        // SVELTE-4-COMPAT: `export let` prop types.
         assert_exported_prop_types_in_place(
             &mut out,
             &body,

@@ -26,6 +26,7 @@ use crate::emit_template_body;
 use crate::nodes::action::emit_legacy_action_attrs;
 use crate::process_instance_script_content::ExportedLocalInfo;
 use crate::props_emit::write_slots_field_type;
+// SVELTE-4-COMPAT: `<slot>` detection.
 use crate::svelte4;
 use svn_analyze::TemplateSummary;
 
@@ -63,6 +64,7 @@ pub(crate) fn emit_template_check_fn(
     // `interface $$Slots` declared, the helper's generic narrows to it;
     // without, the `Record<string, Record<string, any>>` default keeps
     // Svelte-4 components silent.
+    // SVELTE-4-COMPAT: `<slot>` detection.
     if svelte4::compat::fragment_contains_slot(full_fragment) {
         if is_ts && has_strict_slots_decl {
             buf.push_str("    const __svn_create_slot = __svn_create_create_slot<$$Slots>();\n");

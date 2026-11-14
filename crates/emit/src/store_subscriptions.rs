@@ -21,6 +21,7 @@ use smol_str::SmolStr;
 use svn_parser::ScriptLang;
 
 use crate::process_instance_script_content::collect_binding_pattern_names;
+// SVELTE-4-COMPAT: the insertion splicer lives in the Svelte-4 module; keep it when that module goes.
 use crate::svelte4::compat::splice_insertions;
 
 /// `;let $a = __svn_store_get(a);;let $b = __svn_store_get(b);` between
@@ -112,5 +113,6 @@ pub(crate) fn attach_to_declarations(
         pending.retain(|p| !stores.contains(&p.as_str()));
         insertions.push((at, text));
     }
+    // SVELTE-4-COMPAT: the insertion splicer lives in the Svelte-4 module; keep it when that module goes.
     splice_insertions(out, &insertions)
 }

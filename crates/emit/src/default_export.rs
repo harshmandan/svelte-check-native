@@ -19,6 +19,7 @@ use smol_str::SmolStr;
 use svn_parser::Fragment;
 
 use crate::emit_buffer::EmitBuffer;
+// SVELTE-4-COMPAT: `<slot>` detection.
 use crate::svelte4::compat::{fragment_contains_default_slot, fragment_contains_slot};
 use crate::util::{generic_arg_names, render_class_name};
 use svn_analyze::AmbientRefs;
@@ -52,6 +53,7 @@ pub(crate) fn emit_default_export_declarations_js(
     ambients: AmbientRefs,
 ) {
     let render = format!("Awaited<ReturnType<typeof {render_name}>>");
+    // SVELTE-4-COMPAT: a template with a `<slot>` keeps the class component shape.
     if runes_mode && !fragment_contains_slot(fragment) && !has_events {
         let _ = writeln!(
             buf,
@@ -81,6 +83,7 @@ pub(crate) fn emit_default_export_declarations_js(
     } else {
         props.clone()
     };
+    // SVELTE-4-COMPAT: a default `<slot>` adds the slotted children to the props.
     let props_arg = if fragment_contains_default_slot(fragment, source) {
         format!("__SvnSvelte4SlotedProps<{props}, {widened}>")
     } else {
@@ -212,6 +215,7 @@ pub(crate) fn emit_default_export_declarations_ts(
             String::new()
         }
     };
+    // SVELTE-4-COMPAT: default `<slot>` detection.
     // Upstream's `__sveltets_2_PropsWithChildren<Props, Slots>` adds
     // `children?: any` only when the slots type has a `default` key.
     let has_default_slot = fragment_contains_default_slot(fragment, source);
@@ -312,6 +316,7 @@ pub(crate) fn emit_default_export_declarations_ts(
             &bindings_src,
             &exports_src,
             GenericSurface {
+                // SVELTE-4-COMPAT: `<slot>` detection.
                 uses_slots: fragment_contains_slot(fragment),
                 has_events,
                 runes_mode,
@@ -397,6 +402,7 @@ fn should_emit_fn_component_shape(
     if !runes_mode {
         return false;
     }
+    // SVELTE-4-COMPAT: a template with a `<slot>` keeps the class component shape.
     if fragment_contains_slot(fragment) {
         return false;
     }

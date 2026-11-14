@@ -26,6 +26,7 @@ use crate::emit_buffer::EmitBuffer;
 use crate::emit_is_ts;
 use crate::process_instance_script_content;
 use crate::store_subscriptions;
+// SVELTE-4-COMPAT: `export let` prop types, and the exported kit consts annotated alongside them.
 use crate::svelte4::compat::{
     annotate_exported_kit_consts_in_place, assert_exported_prop_types_in_place,
 };
@@ -70,6 +71,7 @@ pub(crate) fn apply_script_body_rewrites(
     };
     body.start += module_inserted;
     body.end += module_inserted;
+    // SVELTE-4-COMPAT: `export let` prop types.
     let edits = assert_exported_prop_types_in_place(
         buf.raw_string_mut(),
         &body,
@@ -85,6 +87,7 @@ pub(crate) fn apply_script_body_rewrites(
         .filter(|info| !info.is_let)
         .map(|info| info.name.clone())
         .collect();
+    // SVELTE-4-COMPAT: exported kit consts are annotated from the Svelte-4 module.
     let edits = annotate_exported_kit_consts_in_place(
         buf.raw_string_mut(),
         &body,

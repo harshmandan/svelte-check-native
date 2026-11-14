@@ -9,6 +9,7 @@ version.workspace = true
 workspace = true
 
 [dependencies]
+svn-acorn = { path = "../acorn" }
 svn-core = { path = "../core" }
 svn-analyze = { path = "../analyze" }
 svn-parser = { path = "../parser" }

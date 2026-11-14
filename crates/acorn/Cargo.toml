@@ -1,0 +1,19 @@
+[package]
+name = "svn-acorn"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+stacker.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+# No doctests in this crate (see the note in the other crates' manifests).
+[lib]
+doctest = false

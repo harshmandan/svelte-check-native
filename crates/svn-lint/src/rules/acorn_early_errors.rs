@@ -924,7 +924,7 @@ fn ambient_const_initializer(init: &Expression<'_>) -> bool {
 pub(crate) fn regexp_pattern_error(raw: &str) -> Option<String> {
     let close = raw.rfind('/').filter(|&i| i > 0)?;
     let (pattern, flags) = (&raw[1..close], &raw[close + 1..]);
-    let reason = crate::rules::acorn_regexp::pattern_error(pattern, flags)?;
+    let reason = svn_acorn::regexp_pattern_error(pattern, flags)?;
     Some(format!("Invalid regular expression: /{pattern}/: {reason}"))
 }
 

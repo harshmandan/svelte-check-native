@@ -19,11 +19,11 @@ use std::collections::HashMap;
 
 /// acorn's reason for rejecting `pattern` under `flags`, or `None` when
 /// it accepts it. The flags themselves are taken as valid.
-pub(crate) fn pattern_error(pattern: &str, flags: &str) -> Option<&'static str> {
+pub(crate) fn pattern_error(pattern: &[u16], flags: &str) -> Option<&'static str> {
     let unicode_sets = flags.contains('v');
     let unicode = flags.contains('u');
     let mut state = State {
-        source: pattern.encode_utf16().collect(),
+        source: pattern.to_vec(),
         switch_u: unicode_sets || unicode,
         switch_v: unicode_sets,
         switch_n: unicode_sets || unicode,
@@ -113,9 +113,7 @@ fn as_char(c: i32) -> Option<char> {
 }
 
 fn is_identifier_start(c: i32) -> bool {
-    c == ch('$')
-        || c == ch('_')
-        || as_char(c).is_some_and(oxc_syntax::identifier::is_identifier_start)
+    c == ch('$') || c == ch('_') || crate::identifier::is_identifier_start(c)
 }
 
 fn is_identifier_part(c: i32) -> bool {
@@ -123,7 +121,7 @@ fn is_identifier_part(c: i32) -> bool {
         || c == ch('_')
         || c == 0x200C
         || c == 0x200D
-        || as_char(c).is_some_and(oxc_syntax::identifier::is_identifier_part)
+        || crate::identifier::is_identifier_char(c)
 }
 
 fn is_control_letter(c: i32) -> bool {

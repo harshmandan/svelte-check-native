@@ -552,10 +552,22 @@ fn append_prop_from_export_specifier(
     let Some(local) = module_export_name_str(&spec.local) else {
         return;
     };
-    let ty_src = find_local_type_annotation(program, source, local)
+    let declarator = find_local_declarator(program, local);
+    let ty_src = declarator
+        .and_then(|d| d.type_annotation.as_ref())
+        .map(|ty| ty.type_annotation.span())
+        .and_then(|span| source.get(span.start as usize..span.end as usize))
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| format!("typeof {local}"));
-    out.push(format!("{alias}?: {ty_src};"));
+    // A variable declared without an initializer (`let name;`) is a
+    // required prop, as upstream records `required: !initializer` for
+    // every top-level declaration it may later see exported.
+    let optional = if declarator.is_some_and(|d| d.init.is_none()) {
+        ""
+    } else {
+        "?"
+    };
+    out.push(format!("{alias}{optional}: {ty_src};"));
 }
 
 /// Readable `str` from a `ModuleExportName` variant. Returns `None` for
@@ -570,29 +582,20 @@ fn module_export_name_str<'a>(name: &'a ModuleExportName<'_>) -> Option<&'a str>
     }
 }
 
-/// The type annotation of the top-level `let`/`const`/`var` declarator
-/// that binds `name`, as its source slice.
-fn find_local_type_annotation<'s>(
-    program: &oxc_ast::ast::Program<'_>,
-    source: &'s str,
+/// The top-level `let`/`const`/`var` declarator that binds `name` by
+/// itself (not through a destructuring).
+fn find_local_declarator<'p, 'a>(
+    program: &'p oxc_ast::ast::Program<'a>,
     name: &str,
-) -> Option<&'s str> {
-    for stmt in &program.body {
+) -> Option<&'p oxc_ast::ast::VariableDeclarator<'a>> {
+    program.body.iter().find_map(|stmt| {
         let Statement::VariableDeclaration(decl) = stmt else {
-            continue;
+            return None;
         };
-        for declarator in &decl.declarations {
-            let BindingPattern::BindingIdentifier(id) = &declarator.id else {
-                continue;
-            };
-            if id.name.as_str() != name {
-                continue;
-            }
-            let span = declarator.type_annotation.as_ref()?.type_annotation.span();
-            return source.get(span.start as usize..span.end as usize);
-        }
-    }
-    None
+        decl.declarations.iter().find(|declarator| {
+            matches!(&declarator.id, BindingPattern::BindingIdentifier(id) if id.name.as_str() == name)
+        })
+    })
 }
 
 fn append_props_from_var_decl(

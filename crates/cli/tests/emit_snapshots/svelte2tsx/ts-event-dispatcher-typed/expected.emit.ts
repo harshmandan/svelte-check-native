@@ -35,31 +35,19 @@ function $$render_e40e2c10() {
         }
     });
     return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {({ [__svn_K in keyof (({
-    /**
-     * A DOC
-     */
+    
     hi: boolean; 
-    /**
-     * not this
-     */
-    /**
-     * ANOTHER DOC
-     */
+    
+    
     [bla]: boolean;
-    // not this
+    
     btn: string;}))]: CustomEvent<(({
-    /**
-     * A DOC
-     */
+    
     hi: boolean; 
-    /**
-     * not this
-     */
-    /**
-     * ANOTHER DOC
-     */
+    
+    
     [bla]: boolean;
-    // not this
+    
     btn: string;}))[__svn_K]> }) & { [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;

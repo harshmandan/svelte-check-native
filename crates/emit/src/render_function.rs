@@ -269,7 +269,10 @@ pub(crate) fn emit_render_body_return(
             })
             .map(|ty| ty.trim().to_string());
         let never = "/** @type {Record<string, never>} */ ({})".to_string();
-        let as_type = |body: String| format!("/** @type {{{body}}} */({{}})");
+        let as_type = |body: String| {
+            let body = crate::util::jsdoc_safe_type(&body);
+            format!("/** @type {{{body}}} */({{}})")
+        };
         let props_expr = if runes_mode {
             if js_props_typedef_synthesised {
                 as_type("$$ComponentProps".to_string())
@@ -303,10 +306,15 @@ pub(crate) fn emit_render_body_return(
         // stated as a JSDoc type; with nothing collected it is the
         // lax index signature.
         let exports_expr = match exports_object {
-            Some(o) => format!("/** @type {{{o}}} */ ({{}})"),
+            Some(o) => {
+                let o = crate::util::jsdoc_safe_type(o);
+                format!("/** @type {{{o}}} */ ({{}})")
+            }
             None => "{}".to_string(),
         };
-        let events_ty = synth_events_alias_body.unwrap_or("{ [evt: string]: CustomEvent<any> }");
+        let events_ty = crate::util::jsdoc_safe_type(
+            synth_events_alias_body.unwrap_or("{ [evt: string]: CustomEvent<any> }"),
+        );
         let bindings_field = build_bindings_field(props_info, false);
         let _ = write!(
             buf,

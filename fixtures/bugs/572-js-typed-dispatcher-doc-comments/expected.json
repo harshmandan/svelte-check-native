@@ -1,0 +1,10 @@
+{
+    "errors": [
+        { "file": "input.svelte", "line": 9, "column": 15, "code": "js_parse_error" },
+        { "file": "input.svelte", "line": 9, "column": 15, "code": 1005 },
+        { "file": "input.svelte", "line": 16, "column": 18, "code": 1005 },
+        { "file": "input.svelte", "line": 18, "column": 15, "code": 1005 },
+        { "file": "input.svelte", "line": 18, "column": 19, "code": 1109 }
+    ],
+    "_note": "A JavaScript component that writes `createEventDispatcher<{ … }>()` with JSDoc comments inside the type argument. The type argument is TypeScript syntax in a JavaScript script, so the compiler rejects the script and TypeScript reports the same syntax errors on the user's own text in svelte2tsx's overlay and in ours; with them in the program TypeScript checks nothing else, so the type error in Other.svelte goes unreported by svelte-check --tsgo too. What must not happen on top of that is an error of our own: our render result states the dispatcher's events as a JSDoc type, and a `*/` from the copied comments used to close that comment early, leaving generated text TypeScript cannot parse. The comments are now left out of the JSDoc type."
+}

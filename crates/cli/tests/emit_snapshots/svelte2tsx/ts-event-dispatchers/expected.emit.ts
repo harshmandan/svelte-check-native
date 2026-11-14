@@ -24,14 +24,10 @@ function $$render_e40e2c10() {
         }
     });
     return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {(Omit<Omit<{ [__svn_K in keyof (Omit<({
-    /**
-     * A DOC
-     */
+    
     hi: boolean;
     }), keyof ({btn: string;})> & ({btn: string;}))]: CustomEvent<(Omit<({
-    /**
-     * A DOC
-     */
+    
     hi: boolean;
     }), keyof ({btn: string;})> & ({btn: string;}))[__svn_K]> }, keyof ({ "click": HTMLElementEventMap["click"] })> & ({ "click": HTMLElementEventMap["click"] }), keyof ({ "bye": CustomEvent<any> })> & ({ "bye": CustomEvent<any> })) & { [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }

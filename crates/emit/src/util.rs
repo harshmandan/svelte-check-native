@@ -120,6 +120,45 @@ pub(crate) fn sequence_expression_text(expr: &str) -> Option<std::ops::Range<usi
     (end <= expr.len()).then_some(start..end)
 }
 
+/// `ty`, a type the emit writes inside a JSDoc comment
+/// (`/** @type {…} */`), made safe to write there: a type copied from
+/// the user's script can carry comments (`{ /** doc */ a: string }`),
+/// and the first `*/` in them would close the JSDoc comment early,
+/// leaving the rest of the type as code TypeScript cannot parse. When
+/// the type contains `*/`, its comments are left out; they say nothing
+/// about the type. A type that does not parse as one is returned as is.
+pub(crate) fn jsdoc_safe_type(ty: &str) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+    if !ty.contains("*/") {
+        return Cow::Borrowed(ty);
+    }
+    const PREFIX: &str = "type __svn_T = (\n";
+    let wrapped = format!("{PREFIX}{ty}\n);");
+    let alloc = oxc_allocator::Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+    if !parsed.errors.is_empty() {
+        return Cow::Borrowed(ty);
+    }
+    let mut out = String::with_capacity(ty.len());
+    let mut at = 0usize;
+    for comment in parsed.program.comments.iter() {
+        let span = comment.span;
+        let (Some(start), Some(end)) = (
+            (span.start as usize).checked_sub(PREFIX.len()),
+            (span.end as usize).checked_sub(PREFIX.len()),
+        ) else {
+            continue;
+        };
+        if start < at || end > ty.len() {
+            continue;
+        }
+        out.push_str(&ty[at..start]);
+        at = end;
+    }
+    out.push_str(&ty[at..]);
+    Cow::Owned(out)
+}
+
 /// Derive a per-file render function name. Hash of the source path
 /// prevents collisions when multiple components in the same overlay
 /// project would otherwise both produce `function $$render()`

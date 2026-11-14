@@ -335,6 +335,78 @@ function blankComments(text) {
     return out;
 }
 
+const SNIPPET_RETURN = /^ReturnType<import\(['"]svelte['"]\)\.Snippet>/;
+const SNIPPET_JSDOC = /^\/\*\*\s*@returns\s*\{ReturnType<import\(['"]svelte['"]\)\.Snippet>\}\s*\*\//;
+
+/**
+ * Every snippet declaration: `const name = <T>(params): ReturnType<
+ * import('svelte').Snippet> => …` in a TypeScript file, `const name =
+ * /** @returns {ReturnType<import('svelte').Snippet>} *\/ (params) => …`
+ * in a JavaScript one. The construct is the type parameters and the
+ * parameter list (with any JSDoc types in it), plus which of the two
+ * return annotations it carries; the label is the snippet's name.
+ * `text` is `original` with comments blanked, so offsets agree.
+ */
+function snippets(original, text) {
+    const out = [];
+    const decl = /\bconst\s+([\w$]+)\s*=/g;
+    let m;
+    while ((m = decl.exec(text))) {
+        let p = m.index + m[0].length;
+        // Real white space only: the JSDoc is blanked in `text`.
+        while (/\s/.test(original[p] ?? '')) p++;
+        const jsdoc = SNIPPET_JSDOC.exec(original.slice(p));
+        if (jsdoc) {
+            p += jsdoc[0].length;
+            while (/\s/.test(text[p] ?? '')) p++;
+        }
+        const start = p;
+        if (text[p] === '<') {
+            // Type parameters: `<` … `>` at bracket depth zero, strings
+            // skipped (`<T extends "<">`), `=>` not a closing angle.
+            let depth = 0;
+            while (p < text.length) {
+                const skip = skipNonCode(text, p);
+                if (skip >= 0) {
+                    p = skip;
+                    continue;
+                }
+                const c = text[p];
+                if ('([{'.includes(c)) p = matchClose(text, p);
+                else if (c === '<') depth++;
+                else if (c === '>' && text[p - 1] !== '=') depth--;
+                p++;
+                if (depth === 0) break;
+            }
+            while (/\s/.test(text[p] ?? '')) p++;
+        }
+        if (text[p] !== '(') continue;
+        const close = matchClose(text, p);
+        let q = close + 1;
+        while (/\s/.test(text[q] ?? '')) q++;
+        let form = null;
+        if (jsdoc && text.startsWith('=>', q)) form = 'jsdoc';
+        else if (!jsdoc && text[q] === ':') {
+            q++;
+            while (/\s/.test(text[q] ?? '')) q++;
+            const ret = SNIPPET_RETURN.exec(text.slice(q));
+            if (ret) {
+                q += ret[0].length;
+                while (/\s/.test(text[q] ?? '')) q++;
+                if (text.startsWith('=>', q)) form = 'annotation';
+            }
+        }
+        if (!form) continue;
+        out.push({
+            kind: 'snippet',
+            at: m.index,
+            label: m[1],
+            text: `${form}:${normalize(original.slice(start, close + 1))}`,
+        });
+    }
+    return out;
+}
+
 function extract(original) {
     // Match on code only (a comment can mention `createElement(` too);
     // spans read from the original, comments included, since a JSDoc
@@ -428,11 +500,7 @@ function extract(original) {
     for (const c of found) {
         if (c.kind === 'on') c.text = splitTop(c.text).map(stripOuterParens).join(',');
     }
-    parenContent(
-        /\bconst\s+([\w$]+)\s*(?:\/\*Ωignore_positionΩ\*\/)?\s*=\s*\/\*\*\s*@returns\s*\{ReturnType<import\('svelte'\)\.Snippet>\}\s*\*\/\s*\(/g,
-        'snippet',
-        (mm) => mm[1]
-    );
+    for (const s of snippets(original, text)) found.push(s);
     const iso = /interface \$\$IsomorphicComponent\s*\{/g;
     while ((m = iso.exec(text))) {
         const open = m.index + m[0].length - 1;
@@ -464,6 +532,8 @@ function compareSample(corpus, name) {
     if (!fs.existsSync(theirs) || !fs.existsSync(ours)) return null;
     const a = extract(fs.readFileSync(ours, 'utf8'));
     const b = extract(fs.readFileSync(theirs, 'utf8'));
+    for (const c of b) stats.kinds[c.kind] = (stats.kinds[c.kind] ?? 0) + 1;
+    if (a.length === 0 && b.length === 0) stats.empty.push(`${corpus}/${name}`);
     const out = [];
     for (const kind of [
         'element',
@@ -542,6 +612,9 @@ const divergences = [];
 const knownBugs = [];
 const missing = [];
 let compared = 0;
+// Constructs found on the upstream side, per kind, and the samples
+// where neither side has any (for `--stats`).
+const stats = { kinds: {}, empty: [] };
 for (const corpus of Object.keys(CORPORA)) {
     const dir = path.join(SNAP, corpus);
     if (!fs.existsSync(dir)) continue;
@@ -571,6 +644,11 @@ const stale = only ? [] : allow.filter((e) => e.hits === 0);
 
 if (flag('--json')) {
     console.log(JSON.stringify({ compared, divergences, knownBugs, stale }, null, 2));
+} else if (flag('--stats')) {
+    console.log(`${compared} samples compared; upstream constructs per kind:`);
+    for (const [k, n] of Object.entries(stats.kinds).sort()) console.log(`  ${k}: ${n}`);
+    console.log(`${stats.empty.length} samples reduce to no construct on either side`);
+    if (flag('--verbose')) for (const s of stats.empty) console.log(`  ${s}`);
 } else if (flag('--kinds')) {
     const by = {};
     for (const d of divergences) by[d.kind] = (by[d.kind] ?? 0) + 1;

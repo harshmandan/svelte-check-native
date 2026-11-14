@@ -61,6 +61,7 @@ pub(crate) fn first_template_parse_error_at(
 ) -> Option<(u32, ParseFinding)> {
     let mut finder = Finder {
         source,
+        acorn_text: std::cell::OnceCell::new(),
         // The compiler decides once, from the component's first `<script
         // lang>`, how acorn reads every expression.
         ts: svn_parser::tag_read::compiler_reads_typescript(source),
@@ -77,6 +78,9 @@ pub(crate) fn first_template_parse_error_at(
 
 struct Finder<'s> {
     source: &'s str,
+    /// The source as acorn reads it, prepared when the first expression
+    /// is read with the whole template in view.
+    acorn_text: std::cell::OnceCell<svn_acorn::Text>,
     ts: bool,
     /// The earliest finding so far, keyed by where the parser throws it.
     found: Option<(u32, ParseFinding)>,
@@ -85,6 +89,11 @@ struct Finder<'s> {
 }
 
 impl Finder<'_> {
+    fn acorn_text(&self) -> &svn_acorn::Text {
+        self.acorn_text
+            .get_or_init(|| svn_acorn::Text::new(self.source))
+    }
+
     fn report(&mut self, at: u32, code: Code, message: String, range: Range) {
         if self.found.as_ref().is_none_or(|(key, _)| at < *key) {
             self.found = Some((
@@ -115,10 +124,15 @@ impl Finder<'_> {
         };
         let mut end = self.source.len();
         loop {
-            let Some(template) = self.source.get(..end) else {
+            if !self.source.is_char_boundary(end) {
                 return false;
+            }
+            let read = if end == self.source.len() {
+                self.acorn_text().parse_expression_at(start, language)
+            } else {
+                svn_acorn::parse_expression_within(self.source, start, end as u32, language)
             };
-            let error = match svn_acorn::parse_expression_at(template, start, language) {
+            let error = match read {
                 Ok(_) => return false,
                 Err(error) => error,
             };
@@ -223,27 +237,26 @@ impl Finder<'_> {
             svn_acorn::Language::JavaScript
         };
         let result = match read.shape {
-            AcornReadShape::Expression => {
-                let template = if whole_template {
-                    self.source
-                } else {
-                    self.source
-                        .get(..read.range.end as usize)
-                        .unwrap_or(self.source)
-                };
-                svn_acorn::parse_expression_at(template, read.range.start, language)
-            }
+            AcornReadShape::Expression if whole_template => self
+                .acorn_text()
+                .parse_expression_at(read.range.start, language),
+            AcornReadShape::Expression => svn_acorn::parse_expression_within(
+                self.source,
+                read.range.start,
+                read.range.end,
+                language,
+            ),
             // The compiler reads a pattern as the left side of an
             // assignment it writes after it: the template up to the
             // pattern's end, then ` = 1`.
+            // acorn never looks behind where it starts: the text before
+            // the pattern is left out, and the offsets moved back.
             AcornReadShape::Pattern => {
-                let mut template = self
-                    .source
-                    .get(..read.range.end as usize)
-                    .unwrap_or(self.source)
-                    .to_string();
-                template.push_str(" = 1");
-                svn_acorn::parse_expression_at(&template, read.range.start, language)
+                let pattern = format!("{} = 1", read.range.slice(self.source));
+                svn_acorn::parse_expression_at(&pattern, 0, language).map_err(|mut error| {
+                    error.pos += read.range.start;
+                    error
+                })
             }
             shape => {
                 let (wrapped, origin) = read.wrapped(self.source);

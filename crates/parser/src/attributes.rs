@@ -143,8 +143,10 @@ pub fn parse_attributes(
                             range: Range::new(at, at + 1),
                         });
                     }
-                    // Recovery: advance one byte to avoid infinite loops.
-                    scanner.advance_byte();
+                    // Recovery: step over one character to avoid
+                    // infinite loops. A whole one: the next read slices
+                    // the text from where this leaves off.
+                    scanner.advance_char();
                 }
             }
         }
@@ -375,7 +377,9 @@ fn parse_named_attribute(
     if scanner.pos() == name_start {
         return None;
     }
-    let name = &scanner.source()[name_start as usize..scanner.pos() as usize];
+    let name = scanner
+        .source()
+        .get(name_start as usize..scanner.pos() as usize)?;
 
     // Split directive prefix.
     let directive_prefix = name

@@ -701,7 +701,12 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         let (body_nodes, term) = self.parse_fragment_until(None);
         let body = Fragment {
             nodes: body_nodes,
-            range: Range::new(expr_range.end + 1, self.scanner.pos()),
+            // A tag the file ends in has no body: the range is empty,
+            // never inverted.
+            range: Range::new(
+                (expr_range.end + 1).min(self.scanner.pos()),
+                self.scanner.pos(),
+            ),
         };
 
         let mut alternate: Option<Fragment> = None;

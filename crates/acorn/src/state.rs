@@ -502,9 +502,9 @@ pub(crate) fn with_stack<T>(f: impl FnOnce() -> T) -> T {
 }
 
 impl Parser {
-    pub(crate) fn new(input: Vec<u16>, start_pos: usize) -> Parser {
+    pub(crate) fn new(input: std::rc::Rc<[u16]>, start_pos: usize) -> Parser {
         let mut parser = Parser {
-            input: input.into(),
+            input,
             pos: start_pos,
             ty: Tok::Eof,
             value: String::new(),

@@ -572,7 +572,9 @@ impl<'s> TagReader<'s> {
             return Ok(at);
         };
         if !self.ts {
-            return Ok(origin + 1);
+            // One character past where the `_` was written. The compiler
+            // counts those five characters in UTF-16 units.
+            return Ok(self.units_before(after, acorn::ANNOTATION_PREFIX_LEN - 1));
         }
         let rest = self
             .source
@@ -581,13 +583,35 @@ impl<'s> TagReader<'s> {
         let annotation = acorn::read_type_annotation(rest);
         match annotation.read {
             Read::Error { at, message } => Err(TagReadError::new(
-                origin + at,
+                match acorn::ANNOTATION_PREFIX_LEN.checked_sub(at) {
+                    // Inside the text written over the template.
+                    Some(back) if back > 0 => self.units_before(after, back),
+                    _ => origin + at,
+                },
                 TagReadErrorKind::JsParse(message),
             )),
             Read::Expression { end, lookahead } => {
                 self.collect_comments(&annotation.text, origin, lookahead, comments);
                 Ok(origin + end)
             }
+        }
+    }
+
+    /// The offset `units` UTF-16 code units before `at`, or the start
+    /// of the character that unit lies in.
+    fn units_before(&self, at: u32, units: u32) -> u32 {
+        let before = self.source.get(..at as usize).unwrap_or("");
+        let mut left = units;
+        for (i, c) in before.char_indices().rev() {
+            if left == 0 {
+                return (i + c.len_utf8()) as u32;
+            }
+            left = left.saturating_sub(c.len_utf16() as u32);
+        }
+        if left == 0 {
+            0
+        } else {
+            at.saturating_sub(units)
         }
     }
 

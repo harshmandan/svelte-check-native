@@ -48,7 +48,7 @@ pub struct SyntaxError {
 
 /// A text as UTF-16 code units, with the byte offset of each.
 struct Units {
-    units: Vec<u16>,
+    units: std::rc::Rc<[u16]>,
     /// `byte_of[i]` is where unit `i` starts; one more entry gives the
     /// text's length.
     byte_of: Vec<u32>,
@@ -56,17 +56,26 @@ struct Units {
 
 impl Units {
     fn new(text: &str) -> Units {
+        Units::window(text, 0)
+    }
+
+    /// `text`, which starts at byte `base` of the text offsets are
+    /// counted in.
+    fn window(text: &str, base: u32) -> Units {
         let mut units = Vec::with_capacity(text.len());
         let mut byte_of = Vec::with_capacity(text.len() + 1);
         for (offset, c) in text.char_indices() {
             let mut buffer = [0u16; 2];
             for unit in c.encode_utf16(&mut buffer) {
                 units.push(*unit);
-                byte_of.push(offset as u32);
+                byte_of.push(base + offset as u32);
             }
         }
-        byte_of.push(text.len() as u32);
-        Units { units, byte_of }
+        byte_of.push(base + text.len() as u32);
+        Units {
+            units: units.into(),
+            byte_of,
+        }
     }
 
     fn byte(&self, unit: u32) -> u32 {
@@ -155,14 +164,51 @@ pub fn parse(source: &str, reading: Reading, language: Language) -> Result<(), S
 /// acorn reads the longest expression it can and one token past it, so
 /// an error in that next token is an error here too.
 pub fn parse_expression_at(source: &str, pos: u32, language: Language) -> Result<u32, SyntaxError> {
-    let text = Units::new(source);
-    let mut parser = parser_for(&text, text.unit(pos), language);
-    parser.preserve_parens = true;
-    parser
-        .next_token()
-        .and_then(|()| parser.parse_expression(ForInit::No, None))
-        .map(|node| text.byte(node.end))
-        .map_err(|stop| text.error(stop))
+    Text::new(source).parse_expression_at(pos, language)
+}
+
+/// [`parse_expression_at`] on the text that ends at `end`: what
+/// `parseExpressionAt(source.slice(0, end), pos)` answers.
+///
+/// acorn never looks behind where it starts, so only the text between
+/// the two is prepared. Offsets stay those of `source`.
+pub fn parse_expression_within(
+    source: &str,
+    pos: u32,
+    end: u32,
+    language: Language,
+) -> Result<u32, SyntaxError> {
+    let window = source.get(pos as usize..end as usize).unwrap_or("");
+    Text {
+        units: Units::window(window, pos),
+    }
+    .parse_expression_at(pos, language)
+}
+
+/// A text prepared for reading at any number of places. Preparing it
+/// costs as much as the text is long; a read then costs what it reads.
+pub struct Text {
+    units: Units,
+}
+
+impl Text {
+    pub fn new(source: &str) -> Text {
+        Text {
+            units: Units::new(source),
+        }
+    }
+
+    /// [`parse_expression_at`] on this text.
+    pub fn parse_expression_at(&self, pos: u32, language: Language) -> Result<u32, SyntaxError> {
+        let text = &self.units;
+        let mut parser = parser_for(text, text.unit(pos), language);
+        parser.preserve_parens = true;
+        parser
+            .next_token()
+            .and_then(|()| parser.parse_expression(ForInit::No, None))
+            .map(|node| text.byte(node.end))
+            .map_err(|stop| text.error(stop))
+    }
 }
 
 /// `parseExpressionAt` on a text from its start, for a caller that has

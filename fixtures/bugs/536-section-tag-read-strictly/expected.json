@@ -1,7 +1,4 @@
 {
-    "errors": [
-        { "file": "SelfClosing.svelte", "line": 0, "column": 18, "code": "expected_token" },
-        { "file": "input.svelte", "line": 0, "column": 13, "code": "expected_token" }
-    ],
-    "_note": "The compiler reads the attributes of a top-level `<script>` or `<style>` tag with `read_static_attribute`, which is stricter than an element's reading: `=` must follow the attribute name directly, and the tag cannot close with `/>`. `<script lang = \"ts\">` is the attribute `lang` followed by an `=` that starts no attribute, so `parse()` throws `expected_token >` there, and `<script lang=\"ts\" />` throws it at the `/`. svelte-check drops both components; reading the tags like an element's checked them, reporting the type error in the script."
+    "clean": true,
+    "_note": "The compiler reads the attributes of a top-level `<script>` or `<style>` tag with `read_static_attribute`, which is stricter than an element's reading: `=` must follow the attribute name directly, and the tag cannot close with `/>`. `<script lang = \"ts\">` is the attribute `lang` followed by an `=` that starts no attribute, so `parse()` throws `expected_token >` there, and `<script lang=\"ts\" />` throws it at the `/`. svelte-check --tsgo drops both components: no diagnostic, not counted. (The default engine reports svelte2tsx's `Expected token >` for each, a TypeScript error because the language server's HTML reading finds `lang=\"ts\"`, and hides the compiler's own since its message says \"expected\", a `lang` is set and no preprocessor is configured; svelte-check-native does the same when the project has `svelte` installed for the bridge, which this fixture does not.) Reading the tags like an element's checked them and reported the type error in the script."
 }

@@ -2621,15 +2621,18 @@ fn check_project(
                             .any(|(file, line)| *file == d.source_path && *line == d.line))
                 });
             }
-            // What the compiler said of a name imported from a rejected
-            // component, it said of svelte's `*.svelte` declaration.
+            // What the compiler said of what a rejected component exports,
+            // it said of svelte's `*.svelte` declaration.
             if !at_imports.judged_names.is_empty() {
                 diagnostics.retain(|d| {
-                    !(d.source == svn_typecheck::DiagnosticSource::Ts
-                        || d.source == svn_typecheck::DiagnosticSource::Js)
-                        || !at_imports.judged_names.iter().any(|(file, line, column)| {
-                            *file == d.source_path && *line == d.line && *column == d.column
-                        })
+                    let ts = matches!(
+                        d.source,
+                        svn_typecheck::DiagnosticSource::Ts | svn_typecheck::DiagnosticSource::Js
+                    );
+                    let svn_typecheck::DiagnosticCode::Numeric(code) = d.code else {
+                        return true;
+                    };
+                    !(ts && at_imports.judged_wrongly(&d.source_path, d.line, d.column, code))
                 });
             }
             for d in at_imports.diagnostics {

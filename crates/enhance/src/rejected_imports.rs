@@ -68,7 +68,29 @@ pub struct RejectedImports {
     /// resolved the import to svelte's `*.svelte` declaration and judged
     /// the name against that; what it says there is about the wrong
     /// module, and `diagnostics` holds what holds of the right one.
+    /// Only its verdicts on what the module exports are about the
+    /// module (see [`RejectedImports::judged_wrongly`]).
     pub judged_names: Vec<(PathBuf, u32, u32)>,
+}
+
+/// The codes TypeScript gives at an imported name for what the module it
+/// names does or does not export: no default export, no such member (with
+/// or without a suggestion), and a member the module only declares.
+const EXPORT_VERDICTS: [u32; 6] = [1192, 2305, 2459, 2460, 2614, 2724];
+
+impl RejectedImports {
+    /// Whether a diagnostic with `code` at `file`, `line`, `column`
+    /// (1-based) is the compiler's verdict on a name imported from a
+    /// rejected component, judged against svelte's `*.svelte`
+    /// declaration. What it says there that does not depend on the
+    /// module, such as an unused import, stands.
+    pub fn judged_wrongly(&self, file: &Path, line: u32, column: u32, code: u32) -> bool {
+        EXPORT_VERDICTS.contains(&code)
+            && self
+                .judged_names
+                .iter()
+                .any(|(f, l, c)| f == file && *l == line && *c == column)
+    }
 }
 
 /// The comment directives in `file`'s source as TypeScript's scanner

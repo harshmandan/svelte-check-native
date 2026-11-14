@@ -61,6 +61,9 @@ pub use crate::scope_types::*;
 pub struct ScopeTree {
     scopes: Vec<Scope>,
     bindings: Vec<Binding>,
+    /// The template scopes ordered for [`Self::innermost_template_scope_at`],
+    /// built on its first call.
+    template_scope_index: std::sync::OnceLock<Option<Vec<IndexedScope>>>,
     /// Root of the module script (if any), else equal to `instance_root`.
     pub module_root: ScopeId,
     /// Root of the instance script. Always present (may be an empty
@@ -209,6 +212,32 @@ impl ScopeTree {
     /// scope wins (innermost); between scopes with the same range the
     /// later-created one is nested inside the earlier, so it wins.
     pub fn innermost_template_scope_at(&self, offset: u32) -> ScopeId {
+        let Some(index) = self
+            .template_scope_index
+            .get_or_init(|| self.index_template_scopes())
+        else {
+            return self.innermost_template_scope_by_scan(offset);
+        };
+        // The last scope that starts at or before the offset either
+        // holds it or lies wholly before it; in that case the scopes
+        // around it, innermost first, are the only others that can.
+        let mut at = index
+            .partition_point(|s| s.range.start <= offset)
+            .checked_sub(1);
+        let mut found = self.instance_root;
+        while let Some(i) = at {
+            if offset < index[i].range.end {
+                found = index[i].id;
+                break;
+            }
+            at = index[i].parent;
+        }
+        debug_assert!(found == self.innermost_template_scope_by_scan(offset));
+        found
+    }
+
+    /// Every scope with a range, checked one by one.
+    fn innermost_template_scope_by_scan(&self, offset: u32) -> ScopeId {
         let mut best = self.instance_root;
         let mut best_len = u32::MAX;
         for (i, s) in self.scopes.iter().enumerate() {
@@ -223,6 +252,54 @@ impl ScopeTree {
         }
         best
     }
+
+    /// The scopes that have a range, outermost first where they start
+    /// together, each with the scope around it. A template with one
+    /// scope per element has as many scopes as elements, and looking
+    /// through them all for every element takes time quadratic in the
+    /// template's size.
+    ///
+    /// `None` when two scopes overlap without one holding the other,
+    /// which the order below cannot express.
+    fn index_template_scopes(&self) -> Option<Vec<IndexedScope>> {
+        let mut index: Vec<IndexedScope> = self
+            .scopes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| {
+                // An empty range holds no offset.
+                s.range.filter(|r| r.start < r.end).map(|range| IndexedScope {
+                    range,
+                    id: ScopeId(i as u32),
+                    parent: None,
+                })
+            })
+            .collect();
+        // Between scopes with one range the later-created is the inner.
+        index.sort_by_key(|s| (s.range.start, std::cmp::Reverse(s.range.end), s.id.0));
+        let mut open: Vec<usize> = Vec::new();
+        for i in 0..index.len() {
+            let range = index[i].range;
+            while open.last().is_some_and(|&o| index[o].range.end <= range.start) {
+                open.pop();
+            }
+            if let Some(&o) = open.last() {
+                if range.end > index[o].range.end {
+                    return None;
+                }
+                index[i].parent = Some(o);
+            }
+            open.push(i);
+        }
+        Some(index)
+    }
+}
+
+/// A scope with a range, and where the scope around it is in the index.
+struct IndexedScope {
+    range: Range,
+    id: ScopeId,
+    parent: Option<usize>,
 }
 
 /// Should the file be treated as runes mode for post-walk bookkeeping?
@@ -1972,6 +2049,7 @@ impl TreeBuilder {
         synthesize_store_subs(&mut self, &mut unresolved, instance_root);
 
         ScopeTree {
+            template_scope_index: std::sync::OnceLock::new(),
             scopes: self.scopes,
             bindings: self.bindings,
             module_root,

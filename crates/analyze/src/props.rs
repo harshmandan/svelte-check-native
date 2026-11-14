@@ -603,19 +603,12 @@ fn append_props_from_var_decl(
     for declarator in &var_decl.declarations {
         let id = match &declarator.id {
             BindingPattern::BindingIdentifier(id) => id,
-            // `export let { a, b } = obj`: each name the pattern binds
-            // directly becomes an optional prop of its own inferred type
-            // (upstream `handleExportedVariableDeclarationList`).
-            BindingPattern::ObjectPattern(o) => {
-                for prop in &o.properties {
-                    push_pattern_leaf_prop(&prop.value, out);
-                }
-                continue;
-            }
-            BindingPattern::ArrayPattern(a) => {
-                for el in a.elements.iter().flatten() {
-                    push_pattern_leaf_prop(el, out);
-                }
+            // `export let { a, b: [c, ...d] } = obj`: each name the
+            // pattern binds, at any depth and rest elements included,
+            // becomes an optional prop of its own inferred type
+            // (upstream `addExportForBindingPattern`).
+            BindingPattern::ObjectPattern(_) | BindingPattern::ArrayPattern(_) => {
+                push_pattern_leaf_props(&declarator.id, out);
                 continue;
             }
             BindingPattern::AssignmentPattern(_) => continue,
@@ -664,17 +657,32 @@ fn append_props_from_var_decl(
     }
 }
 
-/// One prop for a name a destructuring `export let` binds directly;
-/// nested patterns contribute nothing, as upstream reads only the
-/// pattern's own elements.
-fn push_pattern_leaf_prop(pat: &BindingPattern<'_>, out: &mut Vec<String>) {
-    let pat = match pat {
-        BindingPattern::AssignmentPattern(a) => &a.left,
-        other => other,
-    };
-    if let BindingPattern::BindingIdentifier(id) = pat {
-        let name = id.name.as_str();
-        out.push(format!("{name}?: typeof {name};"));
+/// One prop for each name a destructuring `export let` / `export const`
+/// binds, at any depth: upstream's `addExportForBindingPattern` walks
+/// nested patterns and rest elements, skipping only array holes.
+fn push_pattern_leaf_props(pat: &BindingPattern<'_>, out: &mut Vec<String>) {
+    match pat {
+        BindingPattern::BindingIdentifier(id) => {
+            let name = id.name.as_str();
+            out.push(format!("{name}?: typeof {name};"));
+        }
+        BindingPattern::AssignmentPattern(a) => push_pattern_leaf_props(&a.left, out),
+        BindingPattern::ObjectPattern(o) => {
+            for prop in &o.properties {
+                push_pattern_leaf_props(&prop.value, out);
+            }
+            if let Some(rest) = &o.rest {
+                push_pattern_leaf_props(&rest.argument, out);
+            }
+        }
+        BindingPattern::ArrayPattern(a) => {
+            for el in a.elements.iter().flatten() {
+                push_pattern_leaf_props(el, out);
+            }
+            if let Some(rest) = &a.rest {
+                push_pattern_leaf_props(&rest.argument, out);
+            }
+        }
     }
 }
 

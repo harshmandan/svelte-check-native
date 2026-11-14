@@ -117,7 +117,7 @@
       "label": "slots",
       "ours": ["\"first line\\nsecond line\"", "undefinedasanyas(string)"],
       "upstream": ["\"first line\nsecond line\"", "\"__svelte_ts_string\""],
-      "reason": "A slot attribute whose text spans a line: svelte2tsx copies the line break raw into a double-quoted string, an unterminated string literal in its overlay; we escape it (`\\n`). (The text-with-mustache attributes differ only in spelling: svelte2tsx's placeholder `\"__svelte_ts_string\"` widens to `string`, the type we cast to.)"
+      "reason": "A slot attribute whose text spans a line: svelte2tsx copies the line break raw into a double-quoted string, an unterminated string literal in its overlay; we escape it (`\\n`). (The text-with-mustache attributes differ only in spelling: svelte2tsx's placeholder `\"__svelte_ts_string\"` widens to `string`, the type we cast to.) Matching it would hide every diagnostic in the program, not just this file's: TypeScript stops at the syntax error, which maps to no source text, and svelte-check --tsgo reports nothing at all (checked with svelte-check 4.7.6, whose overlay has the same raw line break, beside a component with a plain type error). Left open for a decision."
     },
     {
       "status": "bug",

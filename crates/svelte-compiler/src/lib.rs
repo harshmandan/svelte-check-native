@@ -634,49 +634,29 @@ pub fn compile_batch(
     Ok(ordered.into_iter().flatten().collect())
 }
 
-/// [`Rejection`] for each file. One worker: callers pass the few files
-/// they already expect to fail. A file the bridge couldn't answer for is
-/// left out.
+/// [`Rejection`] for each file, from the JS runtime the bridge picks
+/// (see the crate docs), or from Node when `on_node` is set. One worker
+/// per `svelte` install: callers pass the few files they already expect
+/// to fail. A file the bridge couldn't answer for is left out.
 pub fn rejections(
     workspace: &Path,
     inputs: &[(PathBuf, String)],
+    on_node: bool,
 ) -> Result<Vec<(PathBuf, Rejection)>, BridgeError> {
     if inputs.is_empty() {
         return Ok(Vec::new());
     }
-    let runtime = pick_runtime()?;
-    let mut out = rejections_on(workspace, inputs, &runtime)?;
-
-    // A JavaScript exception's message is the engine's own wording, and
-    // svelte-check runs on Node: the same broken read is "Cannot read
-    // properties of undefined" there and "undefined is not an object"
-    // on another engine. Where the compiler broke with one and the
-    // runtime is not Node, Node is asked again for those components.
-    let broke = |r: &Rejection| {
-        [&r.compile_error, &r.parse_error]
-            .into_iter()
-            .flatten()
-            .any(|e| e.exception)
+    let runtime = if on_node {
+        which_in_path("node").map_err(|_| BridgeError::NoRuntime)?
+    } else {
+        pick_runtime()?
     };
-    let is_node = |path: &Path| path.file_stem().is_some_and(|stem| stem == "node");
-    if !is_node(&runtime)
-        && out.iter().any(|(_, r)| broke(r))
-        && let Ok(node) = which_in_path("node")
-    {
-        let again: Vec<(PathBuf, String)> = inputs
-            .iter()
-            .filter(|(path, _)| out.iter().any(|(p, r)| p == path && broke(r)))
-            .cloned()
-            .collect();
-        if let Ok(answers) = rejections_on(workspace, &again, &node) {
-            for (path, answer) in answers {
-                if let Some(slot) = out.iter_mut().find(|(p, _)| *p == path) {
-                    slot.1 = answer;
-                }
-            }
-        }
-    }
-    Ok(out)
+    rejections_on(workspace, inputs, &runtime)
+}
+
+/// Whether the JS runtime the bridge picks is Node.
+pub fn runtime_is_node() -> bool {
+    pick_runtime().is_ok_and(|path| path.file_stem().is_some_and(|stem| stem == "node"))
 }
 
 /// [`rejections`] on the JS runtime at `runtime`.

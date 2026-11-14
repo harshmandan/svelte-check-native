@@ -79,7 +79,32 @@ pub fn parse_rejections(
     files: &[(PathBuf, String)],
     preprocess_configured: impl Fn(&Path) -> bool,
 ) -> Option<ParseRejections> {
-    let answers = svn_svelte_compiler::rejections(workspace, files).ok()?;
+    let mut answers = svn_svelte_compiler::rejections(workspace, files, false).ok()?;
+    // A JavaScript exception's message is the engine's own wording, and
+    // svelte-check runs on Node: the same broken read is "Cannot read
+    // properties of undefined" there and "undefined is not an object"
+    // on another engine. Where the compiler broke with one and the
+    // runtime is not Node, Node is asked again for those components.
+    let broke = |r: &svn_svelte_compiler::Rejection| {
+        [&r.compile_error, &r.parse_error]
+            .into_iter()
+            .flatten()
+            .any(|e| e.exception)
+    };
+    if answers.iter().any(|(_, r)| broke(r)) && !svn_svelte_compiler::runtime_is_node() {
+        let again: Vec<(PathBuf, String)> = files
+            .iter()
+            .filter(|(path, _)| answers.iter().any(|(p, r)| p == path && broke(r)))
+            .cloned()
+            .collect();
+        if let Ok(on_node) = svn_svelte_compiler::rejections(workspace, &again, true) {
+            for (path, answer) in on_node {
+                if let Some(slot) = answers.iter_mut().find(|(p, _)| *p == path) {
+                    slot.1 = answer;
+                }
+            }
+        }
+    }
     let mut accepted = Vec::new();
     let rejected = answers
         .into_iter()

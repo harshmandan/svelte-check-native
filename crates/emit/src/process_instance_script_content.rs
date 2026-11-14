@@ -213,6 +213,11 @@ pub fn split_imports(content: &str, _lang: ScriptLang, hoist: &HoistContext) -> 
     // top-level `let`/`var` is known.
     let mut named_exports: Vec<(SmolStr, SmolStr)> = Vec::new();
     let mut top_level_lets: HashSet<SmolStr> = HashSet::new();
+    // Each top-level variable declared by name: its type annotation and
+    // whether it has an initializer, which an `export { name }` list
+    // takes over (upstream's `possibleExports`).
+    let mut top_level_declarators: std::collections::HashMap<SmolStr, (Option<String>, bool)> =
+        std::collections::HashMap::new();
     let mut jsdoc_typed: Vec<SmolStr> = Vec::new();
 
     let mut prev_stmt_end = 0usize;
@@ -237,6 +242,20 @@ pub fn split_imports(content: &str, _lang: ScriptLang, hoist: &HoistContext) -> 
                     &parsed.program.comments,
                     &mut jsdoc_typed,
                 );
+                for d in &decl.declarations {
+                    if let BindingPattern::BindingIdentifier(id) = &d.id {
+                        let type_source = d.type_annotation.as_deref().and_then(|ta| {
+                            let span = GetSpan::span(&ta.type_annotation);
+                            content
+                                .get(span.start as usize..span.end as usize)
+                                .map(str::to_string)
+                        });
+                        top_level_declarators.insert(
+                            SmolStr::from(id.name.as_str()),
+                            (type_source, d.init.is_some()),
+                        );
+                    }
+                }
                 // Body-level `let`/`var` — stays in body; remembered so an
                 // `export { name }` list can tell a prop from a constant.
                 if matches!(
@@ -370,14 +389,20 @@ pub fn split_imports(content: &str, _lang: ScriptLang, hoist: &HoistContext) -> 
 
     // `export { local as exported }` (`ExportedNames.handleExportDeclaration`):
     // it counts as a `let` export exactly when `local` is a top-level
-    // `let`/`var`, and is always optional.
+    // `let`/`var`, and takes the type annotation and initializer of the
+    // variable it names (none for a function, class or import, which
+    // counts as initialized).
     for (local, exported) in named_exports {
+        let (type_source, has_init) = top_level_declarators
+            .get(&local)
+            .cloned()
+            .unwrap_or((None, true));
         export_type_infos.push(ExportedLocalInfo {
             is_let: top_level_lets.contains(&local),
             exported_as: (exported != local).then_some(exported),
             name: local,
-            type_source: None,
-            has_init: true,
+            type_source,
+            has_init,
             is_named_export: true,
         });
     }

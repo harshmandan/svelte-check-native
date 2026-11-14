@@ -430,15 +430,25 @@ pub(crate) fn emit_render_body_return(
     // declaration, but the `--tsgo` path has no language service to do
     // so and discards the unmapped diagnostic.
     if matches!(props_info.source, svn_analyze::PropsSource::LegacyInterface) {
-        let lets_shape: String = build_exported_lets_shape(export_type_infos);
+        let (lets, others): (Vec<&ExportedLocalInfo>, Vec<&ExportedLocalInfo>) =
+            export_type_infos.iter().partition(|info| info.is_let);
+        let lets_shape: String = build_exported_names_shape(&lets);
         let _ = write!(
             buf,
             "    return {{ props: {{ ...__svn_ensure_right_props<{lets_shape}>("
         );
         buf.push_str("__svn_any(\"\") as $$Props");
+        // The component's other exports (functions, classes, consts)
+        // join the props type beside `$$Props`, so `bind:` reaches them
+        // (upstream `createPropsStr`).
+        let others_shape = if others.is_empty() {
+            String::new()
+        } else {
+            format!("{} & ", build_exported_names_shape(&others))
+        };
         let _ = write!(
             buf,
-            ") }} as $$Props, events: undefined as any as {events_field}, slots: ",
+            ") }} as {others_shape}$$Props, events: undefined as any as {events_field}, slots: ",
         );
         write_slots_field(buf.raw_string_mut());
         let _ = writeln!(
@@ -528,35 +538,32 @@ fn build_bindings_field(props_info: &svn_analyze::PropsInfo, is_ts: bool) -> Str
     out
 }
 
-/// Build the `{ X: T, Y?: U, ... }` type literal for every `export let`
-/// declaration. Mirrors upstream svelte2tsx's
-/// `createReturnElementsType(lets)` (`ExportedNames.ts:759-784`):
+/// Build the `{ X: T, Y?: U, ... }` type literal for some of a
+/// component's exports. Mirrors upstream svelte2tsx's
+/// `createReturnElementsType` (`ExportedNames.ts`):
 ///
-/// - Only `isLet` entries participate; `export const` / `export
-///   function` go through the separate `exports` field.
+/// - Keyed by the name the component exposes (`export { a as b }` → `b`).
 /// - Has-init → optional (`?:`); no-init → required (`:`).
-/// - Type source: declared annotation > `typeof <name>` when there is
-///   no annotation. `typeof <name>` resolves inside the render-fn scope
+/// - Type source: declared annotation > `typeof <local>` when there is
+///   no annotation. `typeof <local>` resolves inside the render-fn scope
 ///   where the stripped-`export` `let X = …` lives, picking up the
 ///   literal inferred type.
 ///
-/// Returns `{}` when no `export let`s exist — the
-/// `__svn_ensure_right_props<{}>` form upstream emits for
-/// `interface $$Props` components with no `export let`s
-/// (see `ts-$$Props-interface-only-props/expectedv2.ts:14`).
-fn build_exported_lets_shape(infos: &[ExportedLocalInfo]) -> String {
-    let lets: Vec<&ExportedLocalInfo> = infos.iter().filter(|i| i.is_let).collect();
-    if lets.is_empty() {
+/// Returns `{}` for no exports — the `__svn_ensure_right_props<{}>`
+/// form upstream emits for `interface $$Props` components with no
+/// `export let`s (see `ts-$$Props-interface-only-props/expectedv2.ts:14`).
+fn build_exported_names_shape(infos: &[&ExportedLocalInfo]) -> String {
+    if infos.is_empty() {
         return "{}".to_string();
     }
     let mut out = String::from("{");
     let mut first = true;
-    for info in lets {
+    for info in infos {
         if !first {
             out.push(',');
         }
         first = false;
-        out.push_str(info.name.as_str());
+        out.push_str(info.exported_as.as_deref().unwrap_or(&info.name));
         if info.has_init {
             out.push('?');
         }

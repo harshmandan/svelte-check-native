@@ -17,7 +17,7 @@ function $$render_e40e2c10() {
         $$props;
     });
     void c;
-    return { props: { ...__svn_ensure_right_props<{}>(__svn_any("") as $$Props) } as $$Props, events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ c: typeof c; }) };
+    return { props: { ...__svn_ensure_right_props<{}>(__svn_any("") as $$Props) } as {c?: typeof c} & $$Props, events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ c: typeof c; }) };
 }
 $$render_e40e2c10;
 interface $$IsomorphicComponent {

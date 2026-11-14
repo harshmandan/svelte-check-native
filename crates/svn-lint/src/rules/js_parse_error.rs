@@ -195,10 +195,10 @@ pub(crate) fn first_error_in(
             .map_or(0, |l| l.span().start);
         let before = early_error_before(text, stop, mode);
         let same_line = early_error_in_typescript_reading(text, stop, mode);
-        match (before, same_line) {
-            (Some(a), Some(b)) => Some(if b.detect < a.detect { b } else { a }),
-            (a, b) => a.or(b),
-        }
+        [before, same_line, regexp_error_before(text, mode)]
+            .into_iter()
+            .flatten()
+            .min_by_key(|c| c.detect)
     } else {
         first_early_error(program, text, mode)
     };
@@ -241,6 +241,54 @@ fn early_error_before(text: &str, stop: u32, mode: Mode) -> Option<Candidate> {
         return first_early_error(&parsed.program, prefix, mode);
     }
     None
+}
+
+/// The first invalid regular expression in a text oxc gave up on.
+///
+/// acorn checks a regular expression's pattern when it has read the
+/// literal, before the next token, so a bad pattern comes before the
+/// syntax error that follows it. oxc keeps no tree here to find the
+/// literals in. Asked to check patterns too, it reports the ones it
+/// rejects, and keeps those reports when it gives up later. Each one
+/// points into a literal, which acorn's own check then judges.
+fn regexp_error_before(text: &str, mode: Mode) -> Option<Candidate> {
+    if !text.contains('/') {
+        return None;
+    }
+    let source_type = oxc_span::SourceType::default()
+        .with_module(true)
+        .with_typescript(mode.ts);
+    let labels_of = |text: &str, check_patterns: bool, wanted: &str| {
+        let allocator = oxc_allocator::Allocator::default();
+        let options = oxc_parser::ParseOptions {
+            parse_regular_expression: check_patterns,
+            ..oxc_parser::ParseOptions::default()
+        };
+        oxc_parser::Parser::new(&allocator, text, source_type)
+            .with_options(options)
+            .parse()
+            .diagnostics
+            .iter()
+            .filter(|d| d.message.starts_with(wanted))
+            .filter_map(|d| d.labels.first().map(|label| label.span().start))
+            .collect::<Vec<_>>()
+    };
+    labels_of(text, true, "Invalid regular expression:")
+        .into_iter()
+        .find_map(|inside| {
+            // Cut inside the pattern, the literal is the last token oxc
+            // reaches and cannot read: its last report is at the `/`
+            // that opens it.
+            let cut = text.get(..inside as usize)?;
+            let slash = labels_of(cut, false, "").into_iter().max()?;
+            if text.as_bytes().get(slash as usize) != Some(&b'/') {
+                return None;
+            }
+            let end = svn_parser::typescript_regex_end(text, slash as usize);
+            let raw = text.get(slash as usize..end)?;
+            let message = crate::rules::acorn_early_errors::regexp_pattern_error(raw)?;
+            Some(Candidate::at(slash + 1, message).in_token(slash))
+        })
 }
 
 /// The early errors before `stop` in a JavaScript script oxc gave up on

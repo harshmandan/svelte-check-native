@@ -876,35 +876,13 @@ fn ambient_const_initializer(init: &Expression<'_>) -> bool {
     }
 }
 
-/// acorn's wording (V8's) for why a regular expression pattern is
-/// invalid, from oxc's.
-fn regexp_reason(message: &str) -> String {
-    let reason = message
-        .strip_prefix("Invalid regular expression:")
-        .unwrap_or(message)
-        .trim();
-    let acorn = match reason {
-        "Unterminated capturing group"
-        | "Unterminated ignore group"
-        | "Unterminated lookaround assertion" => "Unterminated group",
-        "Unterminated character class"
-        | "Unterminated nested class"
-        | "Unterminated class string disjunction" => "Unterminated character class",
-        "Unterminated capturing group name" | "Group specifier is empty" => {
-            "Invalid capture group name"
-        }
-        "Duplicated capturing group names" => "Duplicate capture group name",
-        "Invalid named reference" => "Invalid named capture referenced",
-        "Character class range out of order" => "Range out of order in character class",
-        "Numbers out of order in braced quantifier" => "numbers out of order in {} quantifier",
-        "Invalid unicode escape sequence" => "Invalid unicode escape",
-        "Invalid extended atom escape" | "Invalid indexed reference" => "Invalid escape",
-        "Could not parse the entire pattern" => "Unmatched ')'",
-        _ if reason.starts_with("Lone quantifier") => "Nothing to repeat",
-        _ if reason.starts_with("Invalid unicode property") => "Invalid property name",
-        _ => reason,
-    };
-    acorn.to_string()
+/// acorn's message for the regular expression literal `raw` (from its
+/// opening `/` through its flags) when the pattern is invalid.
+pub(crate) fn regexp_pattern_error(raw: &str) -> Option<String> {
+    let close = raw.rfind('/').filter(|&i| i > 0)?;
+    let (pattern, flags) = (&raw[1..close], &raw[close + 1..]);
+    let reason = crate::rules::acorn_regexp::pattern_error(pattern, flags)?;
+    Some(format!("Invalid regular expression: /{pattern}/: {reason}"))
 }
 
 /// The binding identifiers of a pattern, in source order.
@@ -1568,29 +1546,8 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
     }
 
     fn visit_reg_exp_literal(&mut self, it: &RegExpLiteral<'a>) {
-        let raw = self.span_text(it.span);
-        let Some(close) = raw.rfind('/').filter(|&i| i > 0) else {
-            return;
-        };
-        let (pattern, flags) = (&raw[1..close], &raw[close + 1..]);
-        let allocator = oxc_allocator::Allocator::default();
-        let parsed = oxc_regular_expression::LiteralParser::new(
-            &allocator,
-            pattern,
-            Some(flags),
-            oxc_regular_expression::Options::default(),
-        )
-        .parse();
-        if let Err(error) = parsed {
-            let reason = regexp_reason(&error.message);
-            let at = it.span.start + 1;
-            self.record(
-                Candidate::at(
-                    at,
-                    format!("Invalid regular expression: /{pattern}/: {reason}"),
-                )
-                .in_token(it.span.start),
-            );
+        if let Some(message) = regexp_pattern_error(self.span_text(it.span)) {
+            self.record(Candidate::at(it.span.start + 1, message).in_token(it.span.start));
         }
     }
 

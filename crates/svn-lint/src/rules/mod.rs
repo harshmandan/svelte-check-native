@@ -14,6 +14,7 @@
 
 pub mod a11y_rules;
 pub(crate) mod acorn_early_errors;
+pub(crate) mod acorn_regexp;
 pub(crate) mod bidi_state;
 pub mod bind_properties;
 pub mod binding_rules;

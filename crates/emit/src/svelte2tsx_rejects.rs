@@ -21,6 +21,9 @@
 //! - module script: a `generics` attribute on its tag, or any
 //!   `$$Generic` alias or `$$Events` / `$$Slots` / `$$Props` interface
 //!   or alias (`processModuleScriptTag.ts`);
+//! - instance script: an `export *` with no `as` name
+//!   (`nodes/ExportedNames.ts` `handleExportDeclaration` asks the kind
+//!   of an export clause that is not there);
 //! - template: a `<slot>` whose first attribute called `name` is a bare
 //!   `name` or a directive (`slot.ts` `handleSlot` reads
 //!   `value[0].raw` off a value that is `true` or missing);
@@ -292,6 +295,12 @@ impl<'a> Visit<'a> for InstanceProbe<'_, 'a> {
         }
         walk::walk_ts_interface_declaration(self, it);
     }
+
+    fn visit_export_all_declaration(&mut self, it: &oxc_ast::ast::ExportAllDeclaration<'a>) {
+        if it.exported.is_none() {
+            self.rejected = true;
+        }
+    }
 }
 
 impl InstanceProbe<'_, '_> {
@@ -446,6 +455,26 @@ mod tests {
         ));
         assert!(rejects(
             "<script lang=\"ts\">type $$Events = Base & { 1: Event };</script>"
+        ));
+    }
+
+    #[test]
+    fn export_of_everything_from_a_module() {
+        assert!(rejects(
+            "<script lang=\"ts\">export * from \"./x\";</script>"
+        ));
+        assert!(rejects("<script>export * from \"./x\";</script>"));
+        assert!(rejects(
+            "<script lang=\"ts\">export type * from \"./x\";</script>"
+        ));
+        assert!(rejects(
+            "<script lang=\"ts\">namespace N { export * from \"./x\"; }</script>"
+        ));
+        assert!(!rejects(
+            "<script lang=\"ts\">export * as ns from \"./x\";</script>"
+        ));
+        assert!(!rejects(
+            "<script lang=\"ts\" module>export * from \"./x\";</script>"
         ));
     }
 }

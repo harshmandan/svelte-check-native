@@ -1105,8 +1105,25 @@ impl NativeLint<'_> {
 struct RealTranspile {
     /// The components, by index, each with its script tags.
     wanted: Vec<(usize, Vec<fallback_transpile::ScriptTag>)>,
-    /// Every transpiled script of those components, in order.
-    printed: std::thread::JoinHandle<Vec<Option<fallback_transpile::PrintedScript>>>,
+    /// Every transpiled script of those components, in order. Taken
+    /// by [`RealTranspile::join`].
+    printed: Option<std::thread::JoinHandle<Vec<Option<fallback_transpile::PrintedScript>>>>,
+}
+
+impl RealTranspile {
+    /// The printed scripts, once the thread printing them is done.
+    fn join(&mut self) -> Option<Vec<Option<fallback_transpile::PrintedScript>>> {
+        self.printed.take()?.join().ok()
+    }
+}
+
+impl Drop for RealTranspile {
+    /// A run that ends before picking the prints up still waits for
+    /// them: the thread drives JS and tsgo processes and their scratch
+    /// directories, which an exit would leave running and behind.
+    fn drop(&mut self) {
+        let _ = self.join();
+    }
 }
 
 /// Start printing the scripts of every component whose lint result
@@ -1150,7 +1167,10 @@ fn start_real_transpile(
             fallback_transpile::print_scripts(&workspace, &scripts)
         })
         .ok()?;
-    Some(RealTranspile { wanted, printed })
+    Some(RealTranspile {
+        wanted,
+        printed: Some(printed),
+    })
 }
 
 /// Re-lint the components [`start_real_transpile`] printed the scripts
@@ -1165,10 +1185,11 @@ fn relint_with_real_transpile(
     native: &NativeLint<'_>,
 ) -> std::collections::HashMap<usize, fallback_transpile::Preprocessed> {
     let mut preprocessed = std::collections::HashMap::new();
-    let Some(RealTranspile { wanted, printed }) = transpile else {
+    let Some(mut transpile) = transpile else {
         return preprocessed;
     };
-    let Ok(printed) = printed.join() else {
+    let wanted = std::mem::take(&mut transpile.wanted);
+    let Some(printed) = transpile.join() else {
         return preprocessed;
     };
     let mut printed = printed.into_iter();

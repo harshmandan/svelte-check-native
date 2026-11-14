@@ -217,10 +217,59 @@ function objectKey(obj, key) {
 
 // ----------------------------------------------------------- normalising
 
-// Helper names that differ beyond spelling: our name → upstream's.
+// Helper names that differ beyond spelling: our name → upstream's, with
+// the declarations whose parameters must agree for the two to be read as
+// one helper (checked by `checkHelperAliases`; the return types differ:
+// ours yields the item type the loop needs, upstream's an array type
+// with the same item).
 const HELPER_ALIASES = {
     eachitems: 'ensurearray',
 };
+const HELPER_DECLS = {
+    eachitems: ['__svn_each_items', '__sveltets_2_ensureArray'],
+};
+const SHIM_OURS = path.join(ROOT, 'crates/typecheck/src/svelte_shims_core.d.ts');
+const SHIM_UPSTREAM = path.join(ROOT, 'language-tools/packages/svelte2tsx/svelte-shims-v4.d.ts');
+
+/**
+ * The type parameters and parameter types of `declare function name`
+ * in a shim, normalised, parameter names left out.
+ */
+function declaredParams(file, name) {
+    const text = blankComments(fs.readFileSync(file, 'utf8'));
+    const m = new RegExp(`declare function ${name.replace(/[$]/g, '\\$')}\\s*<`).exec(text);
+    if (!m) return null;
+    let i = m.index + m[0].length - 1;
+    let depth = 0;
+    const start = i;
+    for (; i < text.length; i++) {
+        if (text[i] === '<') depth++;
+        else if (text[i] === '>' && text[i - 1] !== '=') depth--;
+        if (depth === 0) break;
+    }
+    const open = text.indexOf('(', i);
+    const close = matchClose(text, open);
+    const params = splitTop(text.slice(open + 1, close))
+        .map((p) => p.replace(/^\s*[\w$]+\s*\??\s*:/, ''))
+        .filter((p) => p.trim());
+    return normalize(text.slice(start, i + 1) + '(' + params.join(',') + ')');
+}
+
+/**
+ * A helper alias reads two calls as one: it holds only while the two
+ * declarations take the same arguments. Each difference is a divergence
+ * of kind `helper`.
+ */
+function checkHelperAliases() {
+    const out = [];
+    for (const [alias, [ours, theirs]] of Object.entries(HELPER_DECLS)) {
+        const a = declaredParams(SHIM_OURS, ours);
+        const b = declaredParams(SHIM_UPSTREAM, theirs);
+        if (a !== null && a === b) continue;
+        out.push({ sample: '(shims)', file: '', kind: 'helper', index: 0, label: alias, ours: a, upstream: b });
+    }
+    return out;
+}
 
 function canonHelper(name) {
     const c = name.toLowerCase().replace(/_/g, '');
@@ -1047,6 +1096,14 @@ for (const corpus of Object.keys(CORPORA)) {
             if (!entry) divergences.push(d);
             else if (entry.status === 'bug') knownBugs.push(d);
         }
+    }
+}
+
+if (!only) {
+    for (const d of checkHelperAliases()) {
+        const entry = allowed(d, allow);
+        if (!entry) divergences.push(d);
+        else if (entry.status === 'bug') knownBugs.push(d);
     }
 }
 

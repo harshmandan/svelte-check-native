@@ -404,16 +404,16 @@ declare function $host<El extends HTMLElement = HTMLElement>(): El;
 
 /**
  * Iterable wrapper for `{#each}` blocks. Mirrors upstream's
- * `__sveltets_2_ensureArray<T extends ArrayLike<unknown> |
- * Iterable<unknown>>(array: T | undefined | null)`
- * (`svelte-shims-v4.d.ts:253-256`). The constraint fires TS2345 on
- * non-arraylike non-iterable expressions (`{#each {}}`,
- * `{#each 1}`); the `T | undefined | null` parameter widening lets
- * `Foo[] | undefined` narrow to `Foo[]` for item typing without
- * losing the runtime null-tolerance.
+ * `__sveltets_2_ensureArray` parameter exactly: the constraint fires
+ * TS2345 on non-arraylike non-iterable expressions (`{#each {}}`,
+ * `{#each 1}`). Svelte 5 iterates nothing for `undefined` / `null`, so
+ * when the installed `svelte` exports `mount` the parameter widens to
+ * accept them, and `Foo[] | undefined` infers `T` as `Foo[]` for item
+ * typing. Svelte 4 throws on them, so there the widening is `never` and
+ * a possibly undefined value fires TS2345.
  */
 declare function __svn_each_items<T extends ArrayLike<unknown> | Iterable<unknown>>(
-    value: T | undefined | null,
+    value: T | (typeof import('svelte') extends { mount: any } ? (undefined | null) : never),
 ): Iterable<__SvnEachItem<T>>;
 
 /** Resolved item type for `__svn_each_items`. The `0 extends 1 & T` guard preserves `any` (avoids the conditional-type-distribution-collapses-to-unknown trap). */

@@ -359,12 +359,17 @@ function extract(original) {
         if (props === undefined) continue;
         // The component expression handed to ensureComponent for this local.
         const local = m[1].replace(/[$]/g, '\\$');
-        const decl = new RegExp(
-            `const\\s+${local}\\s*=\\s*(?:__sveltets_2_ensureComponent|__svn_ensure_component)\\(`
-        ).exec(original.slice(0, m.index).split('\n').slice(-6).join('\n'));
+        // The nearest one before the `new`: svelte2tsx reuses a local's
+        // name for every `<svelte:component>`.
+        const before = original.slice(0, m.index).split('\n').slice(-6).join('\n');
+        const decls = new RegExp(
+            `const\\s+${local}\\s*=\\s*(?:__sveltets_2_ensureComponent|__svn_ensure_component)\\(`,
+            'g'
+        );
+        let decl = null;
+        for (let d; (d = decls.exec(before)); ) decl = d;
         let label = '';
         if (decl) {
-            const before = original.slice(0, m.index).split('\n').slice(-6).join('\n');
             const o = decl.index + decl[0].length - 1;
             label = normalize(before.slice(o + 1, matchClose(before, o)));
         }

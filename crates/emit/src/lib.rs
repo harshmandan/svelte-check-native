@@ -962,16 +962,18 @@ fn emit_document_with_render_name(
             all.push((ev.position, ev.name.as_str(), BubbleSource::Dom(ev.scope)));
         }
         for ev in &summary.bubbled_component_events {
-            // Skip `<svelte:component>` expression roots — `typeof
-            // (<expr>)` isn't a well-formed `typeof` for arbitrary user
-            // code.
+            // The root goes into a `typeof <root>`, which takes a name
+            // or a dotted path and nothing else. A `<svelte:component
+            // this={a ? B : C}>` has an expression there: skip it.
             let root = ev.component_root.as_str();
-            if root.starts_with('(')
-                || !root
-                    .chars()
+            let is_path = root.split('.').all(|part| {
+                let mut chars = part.chars();
+                chars
                     .next()
                     .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
-            {
+                    && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+            });
+            if !is_path {
                 continue;
             }
             all.push((

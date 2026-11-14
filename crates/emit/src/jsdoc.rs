@@ -44,7 +44,8 @@ pub(crate) fn attached_jsdoc_tags<'s>(
 /// parser (`parseJSDocCommentWorker` / `parseTagComments`) starts them.
 /// An `@` followed by a name opens a tag when it:
 ///
-/// - starts a line, after optional whitespace and one `*` margin;
+/// - starts a line, after optional whitespace and one `*` margin (on
+///   the first line the `/**` is that margin);
 /// - follows whitespace — in a tag's text only outside a backtick span
 ///   (a line break closes one) and when a name follows directly;
 /// - directly follows the name a `@see`, `@param`-like or `@author` tag
@@ -60,7 +61,9 @@ fn jsdoc_block_tags(block: &str) -> Vec<(&str, &str)> {
     let bytes = body.as_bytes();
     let mut starts: Vec<(usize, usize)> = Vec::new();
     let mut line_start = true;
-    let mut margin_seen = false;
+    // The opening `/**` is the first line's margin: a `*` after it on
+    // that line is text.
+    let mut margin_seen = true;
     let mut after_whitespace = true;
     let mut in_tag = false;
     let mut in_backticks = false;
@@ -239,6 +242,14 @@ mod tests {
     fn tags_start_where_typescript_starts_them() {
         let cases: &[(&str, &[&str])] = &[
             (" @type {string} ", &["type"]),
+            ("@type {string} ", &["type"]),
+            // The `/**` counts as the first line's margin: a `*` after
+            // it is text, and an `@` glued to text opens no tag.
+            ("*@type {string} ", &[]),
+            (" *@type {string} ", &[]),
+            ("**@type {string} ", &[]),
+            ("\n **@type {string} ", &[]),
+            ("*\n * @type {string} ", &["type"]),
             (" x @type {string} ", &["type"]),
             (" x@type {string} ", &[]),
             (" {@link x @type} ", &[]),

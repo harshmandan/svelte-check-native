@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "An `on:event` with no handler on a component forwards the component's event, typed from `typeof <component>`. `typeof` takes a name or a dotted path only. `<svelte:component this={wide ? First : Second} on:change>` has an expression where the name would be; we wrote it after `typeof` anyway and the overlay no longer parsed, which hides every type error in the program. An expression there is now left out of the forwarded events."
+}

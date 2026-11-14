@@ -325,8 +325,9 @@ pub(crate) fn emit_plain(
             buf.push_str(key_prefix);
             write_attribute_key(buf, &key_name, name_range, true);
             buf.push(' ');
-            emit_plain_value(buf, source, v);
-            let _ = writeln!(buf, "{line_suffix}");
+            let after_value = emit_plain_value(buf, source, v);
+            write_value_suffix(buf, line_suffix, after_value);
+            buf.push('\n');
         }
     }
 }
@@ -365,7 +366,14 @@ pub(crate) fn plain_value_is_dropped(source: &str, v: &svn_parser::AttrValue) ->
 ///
 /// Emits nothing when [`plain_value_is_dropped`] is true — callers
 /// that write a prefix first must gate on it.
-pub(crate) fn emit_plain_value(buf: &mut EmitBuffer, source: &str, v: &svn_parser::AttrValue) {
+///
+/// Returns where the text written after the value belongs in the
+/// source when the value is a comma sequence (see [`write_value`]).
+pub(crate) fn emit_plain_value(
+    buf: &mut EmitBuffer,
+    source: &str,
+    v: &svn_parser::AttrValue,
+) -> Option<u32> {
     match v.parts.as_slice() {
         [] => buf.push_str("\"\""),
         [svn_parser::AttrValuePart::Text { range }] => {
@@ -380,18 +388,15 @@ pub(crate) fn emit_plain_value(buf: &mut EmitBuffer, source: &str, v: &svn_parse
                 expression_range, ..
             },
         ] => {
-            let Some(expr) =
-                source.get(expression_range.start as usize..expression_range.end as usize)
-            else {
-                return;
-            };
+            let expr =
+                source.get(expression_range.start as usize..expression_range.end as usize)?;
             let trimmed = expr.trim();
             if trimmed.is_empty() {
-                return;
+                return None;
             }
             let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
             let start = expression_range.start + leading_ws;
-            write_value(buf, trimmed, start);
+            return write_value(buf, trimmed, start);
         }
         parts => {
             // Multi-part (text + interpolations). Template literal
@@ -430,6 +435,7 @@ pub(crate) fn emit_plain_value(buf: &mut EmitBuffer, source: &str, v: &svn_parse
             buf.push('`');
         }
     }
+    None
 }
 
 pub(crate) fn emit_expression(
@@ -463,41 +469,58 @@ pub(crate) fn emit_expression(
     let key_name = transform_attribute_case(name, should_lowercase);
     write_attribute_key(buf, &key_name, name_range, true);
     buf.push_str(" ");
-    write_value(buf, trimmed, start);
-    // svelte2tsx writes the separator after a value over the
-    // attribute's closing `}`, so an error the value leaves open (a
-    // bare comma sequence, say) is reported at that brace.
-    let brace = source
-        .get(e.expression_range.end as usize..)
-        .and_then(|rest| rest.find('}'))
-        .map(|at| e.expression_range.end + at as u32);
-    match (brace, line_suffix.strip_prefix('}')) {
-        (Some(at), None) => {
-            buf.append_with_source(line_suffix, svn_core::Range::new(at, at + 1));
-            buf.push_str("\n");
+    let after_sequence = write_value(buf, trimmed, start);
+    // Any other value is followed by the attribute's closing `}`, where
+    // svelte2tsx writes the separator.
+    let brace = || {
+        if line_suffix.starts_with('}') {
+            return None;
         }
-        _ => {
-            let _ = writeln!(buf, "{line_suffix}");
-        }
-    }
+        source
+            .get(e.expression_range.end as usize..)
+            .and_then(|rest| rest.find('}'))
+            .map(|at| e.expression_range.end + at as u32)
+    };
+    write_value_suffix(buf, line_suffix, after_sequence.or_else(brace));
+    buf.push('\n');
 }
 
 /// Writes an attribute value, whose text `expr` starts at `start` in
 /// the source. Every value is wrapped in parentheses except a comma
 /// sequence, of which only its own text is written, bare (see
 /// [`crate::util::sequence_expression_text`]).
-pub(crate) fn write_value(buf: &mut EmitBuffer, expr: &str, start: u32) {
+///
+/// For a sequence, returns the source offset of the first character
+/// after the sequence's own text — the `)` of `{(a, b)}`, the `}` of
+/// `{a, b}`. svelte2tsx writes the text that follows the value (the
+/// `,` separator, or `})` closing a `data-` attribute's wrapper) over
+/// that character, and the bare sequence's comma leaves the member
+/// unfinished, so TypeScript reports `':' expected` on that text: pass
+/// the offset to [`write_value_suffix`] so the error lands there.
+pub(crate) fn write_value(buf: &mut EmitBuffer, expr: &str, start: u32) -> Option<u32> {
     match crate::util::sequence_expression_text(expr) {
         Some(sequence) => {
             let range =
                 svn_core::Range::new(start + sequence.start as u32, start + sequence.end as u32);
             buf.append_with_source(&expr[sequence], range);
+            Some(range.end)
         }
         None => {
             buf.push_str("(");
             buf.append_with_source(expr, svn_core::Range::new(start, start + expr.len() as u32));
             buf.push_str(")");
+            None
         }
+    }
+}
+
+/// Writes `suffix`, the text that follows an attribute value, over the
+/// single source character at `at` when there is one (see
+/// [`write_value`]), unmapped otherwise.
+pub(crate) fn write_value_suffix(buf: &mut EmitBuffer, suffix: &str, at: Option<u32>) {
+    match at {
+        Some(at) => buf.append_with_source(suffix, svn_core::Range::new(at, at + 1)),
+        None => buf.push_str(suffix),
     }
 }
 

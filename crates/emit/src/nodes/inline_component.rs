@@ -311,18 +311,20 @@ pub(crate) fn emit_component_call(
         let _ = write!(buf, "{inner}{ctor_lhs}");
         let call_start = buf.len() as u32;
         write_props_open(buf, inst, &local);
-        let mut first = true;
+        // A property that wrote its own separator is followed directly
+        // by the next one, as svelte2tsx writes them: the end of an
+        // error on that separator maps to where the next one starts.
+        let mut separated = true;
         if emit_implicit_children {
             write_implicit_children_key(buf, inst);
             buf.push_str(" () => __svn_snippet_return()");
-            first = false;
+            separated = false;
         }
         for p in &inst.props {
-            if !first {
+            if !separated {
                 let _ = write!(buf, ", ");
             }
-            first = false;
-            write_prop_shape(buf, source, inst, p);
+            separated = write_prop_shape(buf, source, inst, p);
         }
         write_props_close(buf, inst);
         push_component_call_token_map(buf, call_start, inst.node_start);
@@ -361,15 +363,28 @@ pub(crate) fn emit_component_call(
         write_implicit_children_key(buf, inst);
         let _ = writeln!(buf, " () => __svn_snippet_return(),");
     }
+    // As in the one-line form, a property that wrote its own separator
+    // is followed directly by the next one, on the same line.
+    let mut separated = false;
     for p in &inst.props {
-        buf.push_str(&props_inner);
-        write_prop_shape(buf, source, inst, p);
-        let _ = writeln!(buf, ",");
+        if !separated {
+            buf.push_str(&props_inner);
+        }
+        separated = write_prop_shape(buf, source, inst, p);
+        if !separated {
+            let _ = writeln!(buf, ",");
+        }
     }
     for s in snippet_children {
-        buf.push_str(&props_inner);
+        if !separated {
+            buf.push_str(&props_inner);
+        }
+        separated = false;
         write_snippet_arrow_prop(buf, source, s, depth + 3, insts, action_counter);
         let _ = writeln!(buf, ",");
+    }
+    if separated {
+        buf.push('\n');
     }
     if !self_any {
         let _ = writeln!(buf, "{opts_inner}}},");
@@ -753,13 +768,18 @@ fn emit_bind_this_assignment(
 }
 
 /// Write a single property of a component-prop-check object literal,
-/// dispatching on the analyze-side `PropShape` variant.
+/// dispatching on the analyze-side `PropShape` variant. Returns whether
+/// it also wrote the `,` that separates it from the next property,
+/// which it does for a comma sequence value: svelte2tsx writes that
+/// separator over the character after the sequence, where TypeScript
+/// reports the `':' expected` the bare sequence leaves open (see
+/// [`crate::nodes::attribute::write_value`]).
 fn write_prop_shape(
     buf: &mut EmitBuffer,
     source: &str,
     inst: &svn_analyze::ComponentInstantiation,
     p: &svn_analyze::PropShape,
-) {
+) -> bool {
     let attr_range = p.attr_range();
     let comments = inst
         .prop_comments
@@ -773,13 +793,27 @@ fn write_prop_shape(
     {
         crate::nodes::comment::write_leading_comments(buf, source, thread);
     }
-    write_prop_shape_value(buf, source, p);
+    let after_sequence = write_prop_shape_value(buf, source, p);
     if let Some(thread) = comments {
         crate::nodes::comment::write_trailing_comments(buf, source, thread);
+        return false;
+    }
+    match after_sequence {
+        Some(at) => {
+            crate::nodes::attribute::write_value_suffix(buf, ",", Some(at));
+            true
+        }
+        None => false,
     }
 }
 
-fn write_prop_shape_value(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropShape) {
+/// Writes a property's key and value. Returns what
+/// [`crate::nodes::attribute::write_value`] returns for its value.
+fn write_prop_shape_value(
+    buf: &mut EmitBuffer,
+    source: &str,
+    p: &svn_analyze::PropShape,
+) -> Option<u32> {
     let attr_range = p.attr_range();
     match p {
         svn_analyze::PropShape::Literal { name, value, .. } => {
@@ -793,7 +827,7 @@ fn write_prop_shape_value(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::P
                 buf.push_str(" ");
                 write_js_string_literal_to(buf, value);
                 buf.push_str("})");
-                return;
+                return None;
             }
             write_quoted_prop_key_with_source(buf, name, attr_range);
             buf.push_str(" ");
@@ -811,11 +845,11 @@ fn write_prop_shape_value(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::P
                 buf.push_str(" (");
                 buf.append_with_source(expr, *expr_range);
                 buf.push_str(")})");
-                return;
+                return None;
             }
             write_quoted_prop_key_with_source(buf, name, attr_range);
             buf.push_str(" ");
-            crate::nodes::attribute::write_value(buf, expr, expr_range.start);
+            return crate::nodes::attribute::write_value(buf, expr, expr_range.start);
         }
         svn_analyze::PropShape::Shorthand { name, .. } => {
             // `{foo}` shorthand is only valid when the key is also a
@@ -844,7 +878,7 @@ fn write_prop_shape_value(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::P
                 buf.push_str("...__svn_css_prop({");
                 write_quoted_prop_key_with_source(buf, name, attr_range);
                 buf.push_str(" true})");
-                return;
+                return None;
             }
             write_quoted_prop_key_with_source(buf, name, attr_range);
             buf.push_str(" true");
@@ -952,6 +986,7 @@ fn write_prop_shape_value(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::P
             }
         }
     }
+    None
 }
 
 /// Quoted-key emit for component prop literals — matches upstream

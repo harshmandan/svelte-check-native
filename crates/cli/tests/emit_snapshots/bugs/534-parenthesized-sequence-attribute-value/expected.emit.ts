@@ -31,11 +31,11 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         {
             const __svn_C_64 = __svn_ensure_component(Comp);
-            new __svn_C_64({ target: __svn_any(), props: {"x": a, b} });
+            new __svn_C_64({ target: __svn_any(), props: {"x": a, b,} });
         }
         {
             const __svn_C_78 = __svn_ensure_component(Comp);
-            new __svn_C_78({ target: __svn_any(), props: {"x": b, a} });
+            new __svn_C_78({ target: __svn_any(), props: {"x": b, a,} });
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

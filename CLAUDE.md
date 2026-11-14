@@ -543,20 +543,22 @@ The committed bench script (`scripts/bench.mjs`) takes
 `--target <path>` or `$BENCH_TARGET` — no project name hardcoded
 so the scenario is reproducible against any workspace.
 
-**Cache hygiene before every parity measurement.** Wipe THREE
-locations under the target workspace:
-`.svelte-check/`, `.svelte-kit/`, and
-`node_modules/.cache/svelte-check-native/`. The third is our
-shim cache; the first is our overlay cache; the second is
-SvelteKit's generated `$types`/route metadata. State from a
-prior run (or a different SvelteKit version) can persist in
-`.svelte-kit/types/` and silently poison our overlay's type
-references — observed on c4 admin-app where a stale
-`.svelte-kit/` caused our binary to fire 80+ spurious errors
-that vanished after wiping. As of HEAD `bench.mjs::wipeCaches`
-only wipes the first and third — wipe `.svelte-kit` manually
-when comparing against historical baselines. See
-`notes/BENCH.md` for the full recipe.
+**Cache hygiene before every parity measurement.** Two caches are
+ours and are wiped by `bench.mjs` on every run: `.svelte-check/`
+(the overlay cache) and `node_modules/.cache/svelte-check-native/`
+(the shim cache). The third location, `.svelte-kit/`, is
+SvelteKit's generated `$types`/route metadata, and `bench.mjs`
+leaves it alone. State from a prior run (or a different SvelteKit
+version) can persist in `.svelte-kit/types/` and silently poison
+our overlay's type references — observed on c4 admin-app where a
+stale `.svelte-kit/` caused our binary to fire 80+ spurious errors
+that vanished after regenerating it. So when comparing against a
+historical baseline, or after changing a rig's dependencies, wipe
+`.svelte-kit` too — and then run `svelte-kit sync` before any
+check. The control rigs' `tsconfig.json` extends
+`./.svelte-kit/tsconfig.json`, so a wiped and un-synced
+`.svelte-kit` breaks the config and produces spurious errors of
+its own. See `notes/BENCH.md` for the full recipe.
 
 **Per-diagnostic parity (`--diagnostic-detail`).** `bench.mjs --mode
 parity --diagnostic-detail` runs ours + upstream + upstream

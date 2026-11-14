@@ -125,7 +125,7 @@
       "kind": "style",
       "ours": "\"string{mixed}\"",
       "upstream": "` ${mixed}`",
-      "reason": "`style:attr=string{mixed}` (unquoted text followed by a mustache): svelte2tsx reads the mustache as an expression; we keep `{mixed}` as literal text, so `mixed` is never checked."
+      "reason": "`style:attr=string{mixed}` (unquoted text followed by a mustache): svelte2tsx reads the mustache as an expression; we keep `{mixed}` as literal text, so `mixed` is never checked. The cause is in our parser, not the emit: it reads an unquoted directive value as one text run without looking for mustaches (the unquoted branch of the directive value reader in crates/parser/src/attributes.rs), where the compiler reads `string` then an expression tag."
     },
     {
       "status": "intended",

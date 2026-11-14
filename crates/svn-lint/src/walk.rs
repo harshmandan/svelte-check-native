@@ -318,18 +318,32 @@ pub fn walk_parsed(
         {
             report_template_error(ctx);
         }
+        let script_errors = script_error.is_some();
         if let Some((message, range, _)) = script_error {
             ctx.emit_error(Code::js_parse_error, message, range);
-            // Where a syntax error lands depends on the transpiled
-            // layout, or on the source map around it.
-            if ctx.ts_scripts_transpiled
-                && !ctx.preprocess_configured
-                && scripts.iter().any(|s| {
-                    crate::rules::typescript_features::script_is_transpiled(s.section, true)
-                })
-            {
-                ctx.needs_real_transpile = true;
-            }
+        }
+        // What the compiler reads of a script the language server's
+        // fallback preprocessor transpiles is TypeScript's print of it.
+        // For a script with nothing wrong that print is known; for one
+        // TypeScript has to repair, or one acorn would refuse as
+        // written, only the print itself says what the compiler meets
+        // and where.
+        if ctx.ts_scripts_transpiled
+            && !ctx.preprocess_configured
+            && scripts.iter().any(|s| {
+                crate::rules::typescript_features::script_is_transpiled(s.section, true)
+                    && (script_errors
+                        || s.panicked
+                        || !s.errors.is_empty()
+                        || svn_acorn::parse(
+                            s.section.content,
+                            svn_acorn::Reading::Script,
+                            svn_acorn::Language::TypeScript,
+                        )
+                        .is_err())
+            })
+        {
+            ctx.needs_real_transpile = true;
         }
         report_template_error(ctx);
     }

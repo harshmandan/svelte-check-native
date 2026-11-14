@@ -235,18 +235,7 @@ fn parse_opaque_section<'src>(
     );
     scanner.advance(lead.len() as u32);
 
-    let (attrs, self_closing, open_end) = parse_tag_attributes(scanner)?;
-
-    if self_closing {
-        // `<script />` — empty section. Allowed.
-        return Ok(RawSection {
-            open_tag_range: Range::new(open_start, open_end),
-            content_range: Range::empty_at(open_end),
-            close_tag_range: Range::empty_at(open_end),
-            content: "",
-            attrs,
-        });
-    }
+    let (attrs, open_end) = parse_tag_attributes(scanner)?;
 
     let content_start = open_end;
 
@@ -308,127 +297,135 @@ fn find_close_tag(scanner: &Scanner<'_>, close_literal: &str) -> Option<u32> {
     None
 }
 
-/// Parse attributes of an opening tag, returning `(attrs, self_closing, end_pos)`.
-/// The scanner must be positioned right after the tag name; on return it's
-/// positioned just past `>` (or `/>`).
-fn parse_tag_attributes(
-    scanner: &mut Scanner<'_>,
-) -> Result<(Vec<ScriptAttr>, bool, u32), ParseError> {
-    let mut attrs = Vec::new();
-    let start = scanner.pos();
-
+/// Read the attributes of a top-level `<script>` / `<style>` opening tag
+/// and its `>`, as the compiler's `read_static_attribute` loop does;
+/// returns the attributes and the offset just past the `>`. The scanner
+/// must be positioned right after the tag name.
+///
+/// The compiler reads these tags more strictly than an element's: a
+/// name ends at white space, `/`, `>`, a quote or `=`; `=` must follow
+/// the name directly (`lang = "ts"` is the attribute `lang`, then an
+/// `=` no attribute starts with); the value is a quoted string or a run
+/// up to white space or `>`; and the tag cannot close with `/>`.
+fn parse_tag_attributes(scanner: &mut Scanner<'_>) -> Result<(Vec<ScriptAttr>, u32), ParseError> {
+    let mut attrs: Vec<ScriptAttr> = Vec::new();
+    scanner.skip_svelte_whitespace();
     loop {
-        scanner.skip_svelte_whitespace();
-        match scanner.peek_byte() {
-            None => {
-                // EOF in opening tag.
-                return Err(ParseError::MalformedOpenTag {
-                    range: Range::new(start - 1, scanner.pos()),
-                });
-            }
-            Some(b'>') => {
-                scanner.advance_byte();
-                return Ok((attrs, false, scanner.pos()));
-            }
-            Some(b'/') => {
-                scanner.advance_byte();
-                scanner.skip_svelte_whitespace();
-                if scanner.peek_byte() == Some(b'>') {
-                    scanner.advance_byte();
-                    return Ok((attrs, true, scanner.pos()));
-                }
-                // Stray `/` — treat as malformed but don't loop forever.
-                return Err(ParseError::MalformedOpenTag {
-                    range: Range::new(start - 1, scanner.pos()),
-                });
-            }
-            Some(_) => {
-                let attr = parse_one_attr(scanner)?;
-                attrs.push(attr);
-            }
+        if scanner.eof() {
+            let at = scanner.source().len() as u32;
+            return Err(ParseError::UnexpectedEof {
+                range: Range::new(at, at),
+            });
         }
+        let Some(attr) = parse_one_attr(scanner)? else {
+            break;
+        };
+        if attrs.iter().any(|seen| seen.name == attr.name) {
+            return Err(compiler_error(
+                "attribute_duplicate",
+                "Attributes need to be unique",
+                attr.range.start,
+            ));
+        }
+        attrs.push(attr);
+        scanner.skip_svelte_whitespace();
+    }
+    if scanner.peek_byte() != Some(b'>') {
+        return Err(compiler_error(
+            "expected_token",
+            "Expected token >",
+            scanner.pos(),
+        ));
+    }
+    scanner.advance_byte();
+    Ok((attrs, scanner.pos()))
+}
+
+/// The compiler error `code` with `message`, at `at`.
+fn compiler_error(code: &'static str, message: &str, at: u32) -> ParseError {
+    ParseError::Compiler {
+        code,
+        message: format!("{message}\nhttps://svelte.dev/e/{code}"),
+        range: Range::new(at, at),
     }
 }
 
-/// Parse a single attribute. Supports: `name`, `name=value`, `name="value"`,
-/// `name='value'`. Svelte's `{expr}` shorthand and directives are rare on
-/// `<script>`/`<style>` so we don't interpret them here — they get collected
-/// as raw text if we see `{`.
-fn parse_one_attr(scanner: &mut Scanner<'_>) -> Result<ScriptAttr, ParseError> {
+/// Read one attribute of a top-level `<script>` / `<style>` tag, or
+/// `None` where no name starts.
+fn parse_one_attr(scanner: &mut Scanner<'_>) -> Result<Option<ScriptAttr>, ParseError> {
     let start = scanner.pos();
-    let name_start = start;
-
-    // Read name: everything up to whitespace, `=`, `>`, `/`.
     while let Some(b) = scanner.peek_byte() {
         if is_svelte_whitespace_at(scanner.source().as_bytes(), scanner.pos() as usize)
-            || matches!(b, b'=' | b'>' | b'/')
+            || matches!(b, b'/' | b'>' | b'"' | b'\'' | b'=')
         {
             break;
         }
         scanner.advance_char();
     }
-    if scanner.pos() == name_start {
-        return Err(ParseError::MalformedOpenTag {
-            range: Range::new(start, scanner.pos().max(start + 1)),
-        });
+    if scanner.pos() == start {
+        return Ok(None);
     }
-    let name = scanner.source()[name_start as usize..scanner.pos() as usize].to_string();
+    let name = scanner.source()[start as usize..scanner.pos() as usize].to_string();
 
-    // Optional `= value`.
-    let saved_before_ws = scanner.pos();
-    scanner.skip_svelte_whitespace();
     let value = if scanner.peek_byte() == Some(b'=') {
         scanner.advance_byte();
         scanner.skip_svelte_whitespace();
         Some(parse_attr_value(scanner)?)
     } else {
-        scanner.set_pos(saved_before_ws);
         None
     };
+    if matches!(scanner.peek_byte(), Some(b'"' | b'\'')) {
+        return Err(compiler_error(
+            "expected_token",
+            "Expected token =",
+            scanner.pos(),
+        ));
+    }
 
-    Ok(ScriptAttr {
+    Ok(Some(ScriptAttr {
         name,
         value,
         range: Range::new(start, scanner.pos()),
-    })
+    }))
 }
 
+/// `(?:"([^"]*)"|'([^'])*'|([^>\s]+))` at the scanner: a quoted string
+/// without its quotes, or a run up to white space or `>`. A quote that
+/// is never closed starts a run, whose first and last characters are
+/// then dropped as if they were the quotes.
 fn parse_attr_value(scanner: &mut Scanner<'_>) -> Result<String, ParseError> {
-    let start = scanner.pos();
-    match scanner.peek_byte() {
-        Some(quote @ (b'"' | b'\'')) => {
-            scanner.advance_byte();
-            let value_start = scanner.pos();
-            while let Some(b) = scanner.peek_byte() {
-                if b == quote {
-                    let value =
-                        scanner.source()[value_start as usize..scanner.pos() as usize].to_string();
-                    scanner.advance_byte();
-                    return Ok(value);
-                }
-                scanner.advance_char();
-            }
-            Err(ParseError::MalformedOpenTag {
-                range: Range::new(start, scanner.pos()),
-            })
+    let source = scanner.source();
+    let start = scanner.pos() as usize;
+    let quoted_end = match source.as_bytes().get(start) {
+        Some(&quote @ (b'"' | b'\'')) => source[start + 1..]
+            .find(quote as char)
+            .map(|i| start + 1 + i + 1),
+        _ => None,
+    };
+    let end = quoted_end.unwrap_or_else(|| {
+        let mut i = start;
+        let bytes = source.as_bytes();
+        while i < bytes.len() && bytes[i] != b'>' && !is_svelte_whitespace_at(bytes, i) {
+            i += 1;
         }
-        Some(_) => {
-            // Unquoted value — read until whitespace or `>` or `/`.
-            let value_start = scanner.pos();
-            while let Some(b) = scanner.peek_byte() {
-                if is_svelte_whitespace_at(scanner.source().as_bytes(), scanner.pos() as usize)
-                    || matches!(b, b'>' | b'/')
-                {
-                    break;
-                }
-                scanner.advance_char();
-            }
-            Ok(scanner.source()[value_start as usize..scanner.pos() as usize].to_string())
-        }
-        None => Err(ParseError::MalformedOpenTag {
-            range: Range::new(start, scanner.pos()),
-        }),
+        i
+    });
+    if end == start {
+        return Err(compiler_error(
+            "expected_attribute_value",
+            "Expected attribute value",
+            scanner.pos(),
+        ));
     }
+    scanner.set_pos(end as u32);
+    let raw = &source[start..end];
+    let quoted = raw.starts_with(['"', '\'']);
+    Ok(if quoted {
+        // A run of one quote leaves nothing between the quotes.
+        raw.get(1..raw.len() - 1).unwrap_or("").to_string()
+    } else {
+        raw.to_string()
+    })
 }
 
 fn build_script_section<'src>(
@@ -744,12 +741,58 @@ let x: number = 1;
         assert!(style.content.contains("color: red"));
     }
 
+    /// The compiler reads a top-level script or style tag's attributes
+    /// strictly: no `/>`, no white space before `=`, a value right after
+    /// the name's `=`. Each case is what svelte 5.57.3's `parse()` throws:
+    /// code and offset.
     #[test]
-    fn self_closing_script() {
-        let src = r#"<script src="./main.js" />"#;
-        let doc = parse_ok(src);
-        let s = doc.instance_script.expect("instance script");
-        assert_eq!(s.content, "");
+    fn section_tags_the_compiler_rejects() {
+        for (src, code, at) in [
+            (r#"<script src="./main.js" />"#, "expected_token", 24),
+            ("<script/>", "expected_token", 7),
+            ("<style />", "expected_token", 7),
+            (
+                r#"<script lang = "ts">let a;</script>"#,
+                "expected_token",
+                13,
+            ),
+            (r#"<script lang"ts">let a;</script>"#, "expected_token", 12),
+            (
+                r#"<script lang=>let a;</script>"#,
+                "expected_attribute_value",
+                13,
+            ),
+            (
+                r#"<script lang="ts" lang="ts">let a;</script>"#,
+                "attribute_duplicate",
+                18,
+            ),
+        ] {
+            let (_, errors) = parse_sections(src);
+            let got: Vec<_> = errors
+                .iter()
+                .map(|e| (e.code_slug(), e.range().start))
+                .collect();
+            assert_eq!(got, vec![(code, at)], "{src}");
+        }
+    }
+
+    #[test]
+    fn section_tags_the_compiler_reads() {
+        for (src, lang) in [
+            (r#"<script lang= "ts">let a;</script>"#, ScriptLang::Ts),
+            ("<script lang=ts x>let a;</script>", ScriptLang::Ts),
+            ("<script a=b=c lang='ts'>let a;</script>", ScriptLang::Ts),
+            (
+                "<script\u{a0}lang=\"ts\"\u{3000}>let a;</script\u{a0}>",
+                ScriptLang::Ts,
+            ),
+        ] {
+            let doc = parse_ok(src);
+            let script = doc.instance_script.expect("instance script");
+            assert_eq!(script.lang, lang, "{src}");
+            assert_eq!(script.content, "let a;", "{src}");
+        }
     }
 
     #[test]

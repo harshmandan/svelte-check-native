@@ -84,6 +84,9 @@ pub struct Position {
 #[derive(Debug, Clone)]
 pub struct CompilerDiagnostic {
     pub code: String,
+    /// The compiler did not raise this: it broke with a JavaScript
+    /// exception, which has no code (`code` is then a placeholder).
+    pub exception: bool,
     pub message: String,
     pub severity: Severity,
     pub start: Position,
@@ -110,7 +113,11 @@ impl Worker {
     /// Spawn the bridge subprocess. `workspace` is used to locate the
     /// user's `svelte/compiler` install.
     pub fn spawn(workspace: &Path) -> Result<Self, BridgeError> {
-        let runtime = pick_runtime()?;
+        Self::spawn_on(workspace, pick_runtime()?)
+    }
+
+    /// [`Self::spawn`] on the JS runtime at `runtime`.
+    fn spawn_on(workspace: &Path, runtime: PathBuf) -> Result<Self, BridgeError> {
         let svelte_pkg = locate_svelte(workspace)
             .ok_or_else(|| BridgeError::SvelteNotFound(workspace.to_path_buf()))?;
         let bridge_path = write_bridge_to_temp()?;
@@ -366,6 +373,7 @@ impl From<RawWarning> for CompilerDiagnostic {
             _ => Severity::Warning,
         };
         Self {
+            exception: w.code.is_none(),
             code: w.code.unwrap_or_else(|| "unknown".to_string()),
             message: w.message.unwrap_or_default(),
             severity,
@@ -563,7 +571,48 @@ pub fn rejections(
     if inputs.is_empty() {
         return Ok(Vec::new());
     }
-    let mut worker = Worker::spawn(workspace)?;
+    let runtime = pick_runtime()?;
+    let mut out = rejections_on(workspace, inputs, runtime.clone())?;
+
+    // A JavaScript exception's message is the engine's own wording, and
+    // svelte-check runs on Node: the same broken read is "Cannot read
+    // properties of undefined" there and "undefined is not an object"
+    // on another engine. Where the compiler broke with one and the
+    // runtime is not Node, Node is asked again for those components.
+    let broke = |r: &Rejection| {
+        [&r.compile_error, &r.parse_error]
+            .into_iter()
+            .flatten()
+            .any(|e| e.exception)
+    };
+    let is_node = |path: &Path| path.file_stem().is_some_and(|stem| stem == "node");
+    if !is_node(&runtime)
+        && out.iter().any(|(_, r)| broke(r))
+        && let Ok(node) = which_in_path("node")
+    {
+        let again: Vec<(PathBuf, String)> = inputs
+            .iter()
+            .filter(|(path, _)| out.iter().any(|(p, r)| p == path && broke(r)))
+            .cloned()
+            .collect();
+        if let Ok(answers) = rejections_on(workspace, &again, node) {
+            for (path, answer) in answers {
+                if let Some(slot) = out.iter_mut().find(|(p, _)| *p == path) {
+                    slot.1 = answer;
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// [`rejections`] on the JS runtime at `runtime`.
+fn rejections_on(
+    workspace: &Path,
+    inputs: &[(PathBuf, String)],
+    runtime: PathBuf,
+) -> Result<Vec<(PathBuf, Rejection)>, BridgeError> {
+    let mut worker = Worker::spawn_on(workspace, runtime)?;
     let mut out = Vec::with_capacity(inputs.len());
     for (path, source) in inputs {
         match worker.rejection(path, source) {

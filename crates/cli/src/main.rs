@@ -1170,6 +1170,11 @@ fn rejection_diagnostic(
             compiler_code_docs_url(&code, severity),
             svn_typecheck::DiagnosticSource::Svelte,
         ),
+        svn_enhance::RejectionKind::Exception => (
+            svn_typecheck::DiagnosticCode::Missing,
+            None,
+            svn_typecheck::DiagnosticSource::Svelte,
+        ),
         svn_enhance::RejectionKind::Conversion { ts } => (
             svn_typecheck::DiagnosticCode::ConversionFailed,
             None,

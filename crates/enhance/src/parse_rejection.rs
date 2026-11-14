@@ -51,6 +51,9 @@ pub struct RejectionDiagnostic {
 pub enum RejectionKind {
     /// The compiler's error from the Svelte pass, with its code.
     Compiler(String),
+    /// A JavaScript exception the compiler broke with in the Svelte
+    /// pass. It has no code.
+    Exception,
     /// svelte2tsx's error from the TypeScript pass; `ts` says whether the
     /// component's script is TypeScript (source `ts`, else `js`).
     Conversion { ts: bool },
@@ -132,7 +135,11 @@ fn svelte_pass_diagnostic(
     Some(diagnostic(
         error.start,
         error.end,
-        RejectionKind::Compiler(error.code),
+        if error.exception {
+            RejectionKind::Exception
+        } else {
+            RejectionKind::Compiler(error.code)
+        },
         message,
     ))
 }
@@ -203,6 +210,7 @@ mod tests {
     fn error(message: &str, line: u32, column: u32) -> CompilerDiagnostic {
         CompilerDiagnostic {
             code: "js_parse_error".to_string(),
+            exception: false,
             message: message.to_string(),
             severity: Severity::Error,
             start: At { line, column },

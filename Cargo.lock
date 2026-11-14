@@ -1458,6 +1458,7 @@ dependencies = [
  "oxc_span",
  "oxc_syntax",
  "smol_str",
+ "svn-acorn",
  "svn-core",
  "thiserror",
 ]

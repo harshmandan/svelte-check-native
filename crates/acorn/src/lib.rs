@@ -152,6 +152,21 @@ pub fn parse_expression_at(source: &str, pos: u32, language: Language) -> Result
         .map_err(|stop| text.error(stop))
 }
 
+/// `parseExpressionAt` on a text from its start, for a caller that has
+/// to carry on where acorn stopped: where the expression ends, and
+/// where the token after it starts (acorn has read that far, comments
+/// included).
+pub fn read_expression(source: &str, language: Language) -> Result<(u32, u32), SyntaxError> {
+    let text = Units::new(source);
+    let mut parser = parser_for(&text, 0, language);
+    parser.preserve_parens = true;
+    parser
+        .next_token()
+        .and_then(|()| parser.parse_expression(ForInit::No, None))
+        .map(|node| (text.byte(node.end), text.byte(parser.start as u32)))
+        .map_err(|stop| text.error(stop))
+}
+
 /// The compiler's `parse_statement_at`: one statement read at `pos` as
 /// a module's top-level statement. Returns where it ends.
 pub fn parse_statement_at(source: &str, pos: u32, language: Language) -> Result<u32, SyntaxError> {

@@ -1,16 +1,17 @@
-//! acorn's reads of template JavaScript, replayed with oxc.
+//! acorn's reads of template JavaScript.
 //!
 //! The Svelte compiler hands parts of a tag to acorn (acorn-typescript in
 //! a TypeScript component) at a position, and acorn reads the longest
 //! expression it can from there: `parseExpressionAt`. Where that read
 //! stops decides where the compiler's own character-level reading
 //! carries on, so both our parser (to split a tag the way the compiler
-//! does) and the lint (to report the compiler's errors) replay it.
+//! does) and the lint (to report the compiler's errors) need the same
+//! read.
 //!
-//! oxc's `parse_expression` reads the same longest expression and then
-//! reports the token after it as unexpected. So an error after which the
-//! text read so far is a complete expression is where acorn stops; any
-//! other error is one acorn throws.
+//! [`read_expression`] is that read, made by the port of acorn in
+//! `svn-acorn`. The helpers around it look inside what was read (an
+//! assignment's `=`, a sequence's first expression, the comments) with
+//! oxc, on text acorn has already accepted.
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Expression;
@@ -18,7 +19,7 @@ use oxc_span::{GetSpan, SourceType};
 
 /// What acorn's `parseExpressionAt` does with the text at the start of a
 /// string, in that string's positions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Read {
     /// It read an expression ending at `end`, having looked ahead to the
     /// token at `lookahead`: the comments before that token are among
@@ -26,19 +27,7 @@ pub enum Read {
     Expression { end: u32, lookahead: u32 },
     /// It threw `message` at `at`, having collected the comments before
     /// it.
-    Error { at: u32, message: &'static str },
-}
-
-/// oxc's message for a TypeScript cast it read without TypeScript.
-const CAST_WITHOUT_TYPESCRIPT: &str =
-    "Type assertion expressions can only be used in TypeScript files.";
-
-/// acorn's message for the error oxc reports as `oxc`.
-fn acorn_message(oxc: &str) -> &'static str {
-    match oxc {
-        "Cannot assign to this expression" => "Assigning to rvalue",
-        _ => "Unexpected token",
-    }
+    Error { at: u32, message: String },
 }
 
 fn source_type(ts: bool) -> SourceType {
@@ -63,110 +52,18 @@ pub fn complete_expression_end(text: &str, ts: bool) -> Option<u32> {
 
 /// acorn's read of the expression at the start of `text`.
 pub fn read_expression(text: &str, ts: bool) -> Read {
-    if !ts
-        && let Some(at) = cast_keyword(text, 0, ts)
-        && let Some(end) = complete_expression_end(&text[..at as usize], ts)
-    {
-        // Without TypeScript `as` is no operator, so acorn stops at the
-        // first one after a complete expression. oxc would read a cast
-        // there.
-        return Read::Expression { end, lookahead: at };
-    }
-    let alloc = Allocator::default();
-    let errors = match oxc_parser::Parser::new(&alloc, text, source_type(ts)).parse_expression() {
-        Ok(expression) => {
-            let end = expression.span().end;
-            return Read::Expression {
-                end,
-                lookahead: next_token_start(text, end),
-            };
-        }
-        Err(errors) => errors,
+    let language = if ts {
+        svn_acorn::Language::TypeScript
+    } else {
+        svn_acorn::Language::JavaScript
     };
-    let len = text.len() as u32;
-    let Some(first) = errors.first() else {
-        return Read::Error {
-            at: len,
-            message: "Unexpected token",
-        };
-    };
-    let mut label = first.labels.first().map_or(len, |l| l.span().start);
-    let mut message = first.message.as_ref();
-    // A fatal error drops the tokenizer's errors from `parse_expression`;
-    // one before it is the one acorn meets first.
-    let earlier = tokenizer_error(text, ts).filter(|&(at, _)| at <= label);
-    if let Some((at, tokenizer_message)) = earlier {
-        label = at;
-        message = tokenizer_message;
-    }
-    // Errors of acorn's tokenizer, thrown where the token starts.
-    match message {
-        "Unterminated string" if text[label as usize..].starts_with(['`', '}']) => {
-            let (at, message) = unterminated_template(text, label, ts);
-            return Read::Error { at, message };
-        }
-        "Unterminated string" => {
-            return Read::Error {
-                at: label,
-                message: "Unterminated string constant",
-            };
-        }
-        "Unterminated multiline comment" => {
-            return Read::Error {
-                at: label,
-                message: "Unterminated comment",
-            };
-        }
-        // Thrown after the `/` that opens it.
-        "Unterminated regular expression" => {
-            return Read::Error {
-                at: label + 1,
-                message: "Unterminated regular expression",
-            };
-        }
-        _ => {}
-    }
-    let at = match message {
-        // acorn throws at the start of the assignment's left side.
-        "Cannot assign to this expression" => {
-            return Read::Error {
-                at: label,
-                message: acorn_message(message),
-            };
-        }
-        // Without TypeScript acorn meets the cast's `as` where it expects
-        // the rest of the expression around it.
-        CAST_WITHOUT_TYPESCRIPT => cast_keyword(text, label, ts).unwrap_or(label),
-        _ => next_token_start(text, label).min(len),
-    };
-    match complete_expression_end(&text[..at as usize], ts) {
-        Some(end) => Read::Expression { end, lookahead: at },
-        None => Read::Error {
-            at,
-            message: acorn_message(message),
+    match svn_acorn::read_expression(text, language) {
+        Ok((end, lookahead)) => Read::Expression { end, lookahead },
+        Err(error) => Read::Error {
+            at: error.pos,
+            message: error.message,
         },
     }
-}
-
-/// The first error oxc's tokenizer reports in `text` read as an
-/// expression: where, and its message.
-fn tokenizer_error(text: &str, ts: bool) -> Option<(u32, &'static str)> {
-    if !text.contains(['"', '\'', '`', '/']) {
-        return None;
-    }
-    let wrapped = format!("({text}");
-    let alloc = Allocator::default();
-    let parsed = oxc_parser::Parser::new(&alloc, &wrapped, source_type(ts)).parse();
-    parsed.diagnostics.iter().find_map(|d| {
-        let message = match d.message.as_ref() {
-            "Unterminated string" => "Unterminated string",
-            "Unterminated multiline comment" => "Unterminated multiline comment",
-            "Unterminated regular expression" => "Unterminated regular expression",
-            _ => return None,
-        };
-        let at = d.labels.first()?.span().start.checked_sub(1)?;
-        Some((at, message))
-    })
 }
 
 /// Where acorn throws for a template literal in `text` that does not
@@ -179,7 +76,7 @@ fn tokenizer_error(text: &str, ts: bool) -> Option<(u32, &'static str)> {
 /// the text ends right after a `${…}`, there is no chunk to start, and
 /// the parser throws `Unterminated template literal` at the end. An
 /// error inside a `${…}` that does not close is that expression's own.
-pub fn unterminated_template(text: &str, tick: u32, ts: bool) -> (u32, &'static str) {
+pub fn unterminated_template(text: &str, tick: u32, ts: bool) -> (u32, String) {
     let bytes = text.as_bytes();
     let len = bytes.len();
     let after_interpolation = bytes.get(tick as usize) == Some(&b'}');
@@ -198,7 +95,7 @@ pub fn unterminated_template(text: &str, tick: u32, ts: bool) -> (u32, &'static 
                     return match read_expression(&text[inner..], ts) {
                         Read::Error { at, message } => (inner as u32 + at, message),
                         // acorn then expects the `}` and meets the end.
-                        Read::Expression { .. } => (len as u32, "Unexpected token"),
+                        Read::Expression { .. } => (len as u32, "Unexpected token".to_string()),
                     };
                 }
             },
@@ -206,32 +103,10 @@ pub fn unterminated_template(text: &str, tick: u32, ts: bool) -> (u32, &'static 
         }
     }
     if chunk == len && (after_interpolation || chunk > tick as usize + 1) {
-        (len as u32, "Unterminated template literal")
+        (len as u32, "Unterminated template literal".to_string())
     } else {
-        (chunk as u32, "Unterminated template")
+        (chunk as u32, "Unterminated template".to_string())
     }
-}
-
-/// The first `as` or `satisfies` keyword in `text` from `from` that is
-/// the next token after a complete expression starting there.
-fn cast_keyword(text: &str, from: u32, ts: bool) -> Option<u32> {
-    let rest = text.get(from as usize..)?;
-    let is_word = |c: Option<char>| c.is_some_and(oxc_syntax::identifier::is_identifier_part);
-    let mut found: Vec<(usize, usize)> = ["as", "satisfies"]
-        .into_iter()
-        .flat_map(|keyword| rest.match_indices(keyword).map(|(p, k)| (p, k.len())))
-        .collect();
-    found.sort_unstable();
-    found.into_iter().find_map(|(p, keyword_len)| {
-        let before = rest[..p].chars().next_back();
-        let after = rest[p + keyword_len..].chars().next();
-        if p == 0 || is_word(before) || is_word(after) {
-            return None;
-        }
-        let end = complete_expression_end(&rest[..p], ts)?;
-        // A keyword inside a comment after the expression is no token.
-        (next_token_start(rest, end) == p as u32).then_some(from + p as u32)
-    })
 }
 
 /// The comments acorn lexes in `text` before `to`, in order, as
@@ -481,21 +356,21 @@ mod tests {
             read_expression("[] as {a b}", true),
             Read::Error {
                 at: 9,
-                message: "Unexpected token"
+                message: "Unexpected token".to_string()
             }
         );
         assert_eq!(
             read_expression("f(x as any) as q", false),
             Read::Error {
                 at: 4,
-                message: "Unexpected token"
+                message: "Unexpected token".to_string()
             }
         );
         assert_eq!(
             read_expression("[] as q = 1", true),
             Read::Error {
                 at: 0,
-                message: "Assigning to rvalue"
+                message: "Assigning to rvalue".to_string()
             }
         );
     }
@@ -506,21 +381,21 @@ mod tests {
             read_expression("(/* ) => {}", false),
             Read::Error {
                 at: 1,
-                message: "Unterminated comment"
+                message: "Unterminated comment".to_string()
             }
         );
         assert_eq!(
             read_expression("(a = \") => {}", false),
             Read::Error {
                 at: 5,
-                message: "Unterminated string constant"
+                message: "Unterminated string constant".to_string()
             }
         );
         assert_eq!(
             read_expression("(a = `) => {}", false),
             Read::Error {
                 at: 6,
-                message: "Unterminated template"
+                message: "Unterminated template".to_string()
             }
         );
     }

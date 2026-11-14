@@ -114,7 +114,7 @@ pub enum TagReadErrorKind {
         location: &'static str,
     },
     /// `js_parse_error` with acorn's message.
-    JsParse(&'static str),
+    JsParse(String),
 }
 
 impl TagReadError {
@@ -840,10 +840,11 @@ impl<'s> TagReader<'s> {
                     .map(|l| l.span().start)
                     .or_else(|| first.map(|statement| statement.span().end))
                     .unwrap_or(text.len() as u32);
-                Err(
-                    TagReadError::new(start + at, TagReadErrorKind::JsParse("Unexpected token"))
-                        .reading(read),
+                Err(TagReadError::new(
+                    start + at,
+                    TagReadErrorKind::JsParse("Unexpected token".to_string()),
                 )
+                .reading(read))
             }
         }
     }

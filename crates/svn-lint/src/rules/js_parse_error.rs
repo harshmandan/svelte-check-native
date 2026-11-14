@@ -39,7 +39,6 @@ use svn_parser::{Document, ScriptSection};
 use crate::rules::acorn_early_errors::{
     Candidate, Mode, Position, first_early_error, next_token_start,
 };
-use crate::rules::acorn_typescript_attempts::settled_error;
 
 /// The hint svelte-check appends to a parse error inside the script
 /// tag whose message contains "expected".
@@ -233,40 +232,10 @@ pub(crate) fn first_error_in(
     } else {
         first_early_error(program, text, mode)
     };
-    let found = match (from_oxc, early) {
-        (Some(a), Some(b)) => {
-            if b.detect < a.detect {
-                b
-            } else {
-                a
-            }
-        }
-        (a, b) => a.or(b)?,
-    };
-    // acorn-typescript reads an expression that starts with `<` twice,
-    // and the error it ends up with is not always this one.
-    if !mode.ts || mode.transpiled || !text.contains('<') {
-        return Some(found);
+    match (from_oxc, early) {
+        (Some(a), Some(b)) => Some(if b.detect < a.detect { b } else { a }),
+        (a, b) => a.or(b),
     }
-    if !panicked {
-        return Some(settled_error(text, program, text.len() as u32, mode, found));
-    }
-    let prefix = text.get(..gave_up_at as usize)?;
-    for seed in ["", " 0"] {
-        if let Some(completed) = completed_prefix(prefix, seed, mode) {
-            let allocator = oxc_allocator::Allocator::default();
-            let parsed =
-                oxc_parser::Parser::new(&allocator, &completed, source_type_of(mode)).parse();
-            return Some(settled_error(
-                text,
-                &parsed.program,
-                gave_up_at,
-                mode,
-                found,
-            ));
-        }
-    }
-    Some(found)
 }
 
 /// Errors TypeScript's transpile repairs by printing the construct anew.

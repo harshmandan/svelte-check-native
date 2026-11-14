@@ -353,3 +353,68 @@ fn ancestor_negative_cases_still_warn() {
         codes(&warnings)
     );
 }
+
+/// The CLI prints warnings in the order they are raised, so the order
+/// is part of the output. Each list is svelte 5.57.2's, in its order:
+/// the click check comes first after the attributes, the mouse checks
+/// after the role checks, the element's own checks last.
+#[test]
+fn warnings_come_in_the_compiler_order() {
+    let cases: &[(&str, &[&str])] = &[
+        (
+            "<div onclick={() => {}}>x</div>",
+            &[
+                "a11y_click_events_have_key_events",
+                "a11y_no_static_element_interactions",
+            ],
+        ),
+        (
+            "<div onclick={() => {}} tabindex=\"0\">x</div>",
+            &[
+                "a11y_click_events_have_key_events",
+                "a11y_no_noninteractive_tabindex",
+                "a11y_no_static_element_interactions",
+            ],
+        ),
+        (
+            "<marquee onmouseover={() => {}} onclick={() => {}}>x</marquee>",
+            &[
+                "a11y_click_events_have_key_events",
+                "a11y_no_noninteractive_element_interactions",
+                "a11y_mouse_events_have_key_events",
+                "a11y_distracting_elements",
+            ],
+        ),
+        (
+            "<label onclick={() => {}} onmouseout={() => {}}>x</label>",
+            &[
+                "a11y_click_events_have_key_events",
+                "a11y_no_noninteractive_element_interactions",
+                "a11y_mouse_events_have_key_events",
+                "a11y_label_has_associated_control",
+            ],
+        ),
+        (
+            "<h1 onclick={() => {}} aria-checked=\"true\"></h1>",
+            &[
+                "a11y_click_events_have_key_events",
+                "a11y_role_supports_aria_props_implicit",
+                "a11y_no_noninteractive_element_interactions",
+                "a11y_missing_content",
+            ],
+        ),
+        (
+            "<a onclick={() => {}} onmouseover={() => {}}>x</a>",
+            &[
+                "a11y_click_events_have_key_events",
+                "a11y_no_static_element_interactions",
+                "a11y_mouse_events_have_key_events",
+                "a11y_missing_attribute",
+            ],
+        ),
+    ];
+    for (src, want) in cases {
+        let warnings = lint(src);
+        assert_eq!(codes(&warnings), *want, "{src}");
+    }
+}

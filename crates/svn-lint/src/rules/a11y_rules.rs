@@ -137,166 +137,22 @@ fn check_element(
     // loop so role/interactivity fires come first in the warnings
     // sequence (upstream order).
 
-    // a11y_img_redundant_alt: <img alt> with alt containing
-    // "image"/"picture"/"photo" (word-boundary, case-insensitive).
-    // Skipped when aria-hidden="true".
-    if !is_dynamic && name == "img" {
-        // Upstream: `if (alt && !aria_hidden && !has_spread)` where
-        // `aria_hidden = get_static_value(...)` is TRUE for the bare form
-        // and for ANY non-empty static string (so `aria-hidden="false"`
-        // and `aria-hidden` both suppress), and falsy only for absent /
-        // empty / dynamic. The `!has_spread` gate (a spread may inject
-        // aria-hidden) was also missing.
-        if !aria_hidden_is_truthy(attribute_map.get("aria-hidden").copied(), source)
-            && !has_spread
-            && let Some(Attribute::Plain(p)) = attribute_map.get("alt")
-            && let Some(alt) = get_static_text_value(p, source)
-            && contains_redundant_img_word(&alt)
-        {
-            let msg = messages::a11y_img_redundant_alt();
-            ctx.emit(Code::a11y_img_redundant_alt, msg, range);
-        }
-    }
-
-    // a11y_missing_content: empty heading (h1-h6) with no textual
-    // content. Silenced by aria-hidden="true" (which then fires
-    // a11y_hidden instead).
-    if !is_dynamic && A11Y_REQUIRED_CONTENT.contains(&name) {
-        // a11y_hidden: ANY `aria-hidden` attribute on a heading (h1-h6),
-        // value-INDEPENDENT and independent of content/spread. Upstream
-        // fires this in the per-attribute loop purely on the attribute's
-        // name, decoupled from a11y_missing_content — so even
-        // `<h1 aria-hidden="false">` and `<h1 aria-hidden={x}>` warn.
-        if let Some(attr) = attribute_map.get("aria-hidden").copied() {
-            let attr_range = match attr {
-                Attribute::Plain(p) => p.range,
-                Attribute::Expression(e) => e.range,
-                _ => range,
-            };
-            let msg = messages::a11y_hidden(name);
-            ctx.emit(Code::a11y_hidden, msg, attr_range);
-        }
-        // a11y_missing_content: empty heading. Upstream gates on
-        // !has_spread, !is_labelled (aria-label / aria-labelledby /
-        // title) and !has_contenteditable_binding — but NOT on
-        // aria-hidden, so an empty `<h1 aria-hidden>` fires BOTH
-        // warnings.
-        if !has_spread
-            && !has_labelling_attr(&attribute_map)
-            && !has_contenteditable_binding
-            && !has_text_content(children, source)
-        {
-            let msg = messages::a11y_missing_content(name);
-            ctx.emit(Code::a11y_missing_content, msg, range);
-        }
-    }
-
-    // a11y_figcaption_parent / a11y_figcaption_index. Fires on
-    // <figcaption> based on ancestor + sibling relationships:
-    //   - figcaption NOT directly inside <figure> → parent warning
-    //   - figcaption directly inside <figure> but not first or last
-    //     child → index warning
-    // The index-check is done at the parent level (in fragment
-    // walking) because we need sibling order; parent-check can
-    // fire here when we know our immediate parent is not <figure>.
-    if !is_dynamic && name == "figcaption" && !is_parent(ancestors, &["figure"]) {
-        let msg = messages::a11y_figcaption_parent();
-        ctx.emit(Code::a11y_figcaption_parent, msg, range);
-    }
-
-    // a11y_consider_explicit_label: every <a> / <button> with no
-    // text content AND no aria-label / aria-labelledby / title.
-    // Upstream runs this in the shared `case 'a': case 'button':`
-    // block BEFORE any href handling, so an <a> without href gets it
-    // too. Skips when aria-hidden="true" or when `inert` is
-    // statically present (`get_static_value(inert) !== null`: bare or
-    // literal value — a dynamic `inert={expr}` does NOT suppress).
-    if !is_dynamic && (name == "button" || name == "a") && !has_spread {
-        let is_labelled = has_labelling_attr(&attribute_map);
-        let aria_hidden_true = attribute_map
-            .get("aria-hidden")
-            .and_then(|a| match a {
-                Attribute::Plain(p) => get_static_text_value(p, source),
-                _ => None,
-            })
-            .as_deref()
-            == Some("true");
-        let inert = attribute_map.get("inert").is_some_and(|a| match a {
-            Attribute::Plain(p) => p.value.is_none() || get_static_text_value(p, source).is_some(),
-            _ => false,
-        });
-        if !is_labelled && !aria_hidden_true && !inert && !has_text_content(children, source) {
-            let msg = messages::a11y_consider_explicit_label();
-            ctx.emit(Code::a11y_consider_explicit_label, msg, range);
-        }
-    }
-
-    // a11y_label_has_associated_control moved below the per-attribute
-    // loop to match upstream's ordering (role-based checks run before
-    // the per-element switch).
-
-    // a11y_media_has_caption: <video src="..."> must have a
-    // <track kind="captions"> child. Skipped on aria-hidden="true"
-    // or when src isn't set.
-    if !is_dynamic && name == "video" {
-        let aria_hidden_true = attribute_map
-            .get("aria-hidden")
-            .and_then(|a| match a {
-                Attribute::Plain(p) => get_static_text_value(p, source),
-                _ => None,
-            })
-            .as_deref()
-            == Some("true");
-        // Upstream returns early on `muted`, `aria-hidden="true"`, OR a
-        // spread (which may carry src/muted we can't see statically) —
-        // missing the muted/spread guards made us fire where upstream
-        // doesn't (a11y/index.js:490).
-        if !attribute_map.contains_key("muted")
-            && !has_spread
-            && !aria_hidden_true
-            && attribute_map.contains_key("src")
-            && !video_has_caption_track(children, source)
-        {
-            let msg = messages::a11y_media_has_caption();
-            ctx.emit(Code::a11y_media_has_caption, msg, range);
-        }
-    }
-
-    // click/mouse event rules moved to the post-loop section below
-    // so they fire AFTER the per-attribute role checks (matches
-    // upstream visitor order).
-
-    // a11y_figcaption_index: when this element is a <figure>, scan
-    // its direct children for <figcaption> not at the first or last
-    // position.
-    if !is_dynamic && name == "figure" {
-        let mut figcaption_indices: Vec<(usize, Range)> = Vec::new();
-        let mut direct: Vec<(usize, &Node)> = Vec::new();
-        for n in &children.nodes {
-            if matches!(n, Node::Comment(_)) {
-                continue;
-            }
-            if let Node::Text(t) = n
-                && !has_non_whitespace_text(t.range.slice(source))
-            {
-                continue;
-            }
-            direct.push((direct.len(), n));
-        }
-        for (idx, n) in &direct {
-            if let Node::Element(el) = n
-                && el.name.as_str() == "figcaption"
-            {
-                figcaption_indices.push((*idx, el.range));
-            }
-        }
-        let last_idx = direct.len().saturating_sub(1);
-        for (idx, r) in figcaption_indices {
-            if idx != 0 && idx != last_idx {
-                let msg = messages::a11y_figcaption_index();
-                ctx.emit(Code::a11y_figcaption_index, msg, r);
-            }
-        }
+    // a11y_hidden: ANY `aria-hidden` attribute on a heading (h1-h6),
+    // value-INDEPENDENT and independent of content/spread. Upstream
+    // fires this in the per-attribute loop purely on the attribute's
+    // name, decoupled from a11y_missing_content — so even
+    // `<h1 aria-hidden="false">` and `<h1 aria-hidden={x}>` warn.
+    if !is_dynamic
+        && A11Y_REQUIRED_CONTENT.contains(&name)
+        && let Some(attr) = attribute_map.get("aria-hidden").copied()
+    {
+        let attr_range = match attr {
+            Attribute::Plain(p) => p.range,
+            Attribute::Expression(e) => e.range,
+            _ => range,
+        };
+        let msg = messages::a11y_hidden(name);
+        ctx.emit(Code::a11y_hidden, msg, attr_range);
     }
 
     // Precompute role + interactivity so every downstream rule
@@ -593,6 +449,28 @@ fn check_element(
         }
     }
 
+    // a11y_click_events_have_key_events: the first check after the
+    // per-attribute loop, as in the compiler.
+    if !is_dynamic
+        && !has_spread
+        && handlers.iter().any(|h| h == "click")
+        && !is_hidden_from_screen_reader(name, &attribute_map, source)
+        && !is_interactive
+    {
+        let is_presentation = resolved_role.is_some_and(is_presentation_role);
+        let is_dynamic_role = role_attr.is_some() && role_static_value.is_none();
+        let role_ok = role_attr.is_none() || (role_static_value.is_some() && !is_presentation);
+        if role_ok && !is_dynamic_role {
+            let has_key = handlers
+                .iter()
+                .any(|h| matches!(h.as_str(), "keydown" | "keyup" | "keypress"));
+            if !has_key {
+                let msg = messages::a11y_click_events_have_key_events(name);
+                ctx.emit(Code::a11y_click_events_have_key_events, msg, range);
+            }
+        }
+    }
+
     // a11y_no_noninteractive_tabindex: runs after the per-attribute
     // loop (upstream `a11y/index.js`), looking the attribute up by its
     // exact name — `tabIndex={…}` is not `tabindex`. Fires on a
@@ -715,48 +593,6 @@ fn check_element(
         }
     }
 
-    // a11y_distracting_elements: `<blink>` / `<marquee>`. Fires
-    // after the role-attr handler so role-based fires come first.
-    if !is_dynamic && A11Y_DISTRACTING_ELEMENTS.contains(&name) {
-        let msg = messages::a11y_distracting_elements(name);
-        ctx.emit(Code::a11y_distracting_elements, msg, range);
-    }
-
-    // a11y_label_has_associated_control: <label> must have `for`
-    // or contain a form control / slot / svelte:element / component
-    // / @render somewhere in its subtree. Runs after the per-attr
-    // role handler so role-based fires come first (upstream order).
-    if !is_dynamic && name == "label" && !has_spread {
-        let has_for = attribute_map.contains_key("for");
-        let has_control = descendants_have_form_control(children, ctx.source);
-        if !has_for && !has_control {
-            let msg = messages::a11y_label_has_associated_control();
-            ctx.emit(Code::a11y_label_has_associated_control, msg, range);
-        }
-    }
-
-    // a11y_click_events_have_key_events: fires after all role-based
-    // checks so diagnostics sequence matches upstream visitor order.
-    if !is_dynamic
-        && !has_spread
-        && handlers.iter().any(|h| h == "click")
-        && !is_hidden_from_screen_reader(name, &attribute_map, source)
-        && !is_interactive
-    {
-        let is_presentation = resolved_role.is_some_and(is_presentation_role);
-        let is_dynamic_role = role_attr.is_some() && role_static_value.is_none();
-        let role_ok = role_attr.is_none() || (role_static_value.is_some() && !is_presentation);
-        if role_ok && !is_dynamic_role {
-            let has_key = handlers
-                .iter()
-                .any(|h| matches!(h.as_str(), "keydown" | "keyup" | "keypress"));
-            if !has_key {
-                let msg = messages::a11y_click_events_have_key_events(name);
-                ctx.emit(Code::a11y_click_events_have_key_events, msg, range);
-            }
-        }
-    }
-
     // a11y_mouse_events_have_key_events: mouseover w/o focus,
     // mouseout w/o blur. Not gated on is_dynamic_element upstream
     // (a11y/index.js:376-382).
@@ -775,6 +611,158 @@ fn check_element(
         {
             let msg = messages::a11y_mouse_events_have_key_events("mouseout", "blur");
             ctx.emit(Code::a11y_mouse_events_have_key_events, msg, range);
+        }
+    }
+
+    // The element's own checks, which the compiler makes after every
+    // check on its attributes, roles and handlers.
+
+    // a11y_img_redundant_alt: <img alt> with alt containing
+    // "image"/"picture"/"photo" (word-boundary, case-insensitive).
+    // Skipped when aria-hidden="true".
+    if !is_dynamic && name == "img" {
+        // Upstream: `if (alt && !aria_hidden && !has_spread)` where
+        // `aria_hidden = get_static_value(...)` is TRUE for the bare form
+        // and for ANY non-empty static string (so `aria-hidden="false"`
+        // and `aria-hidden` both suppress), and falsy only for absent /
+        // empty / dynamic. The `!has_spread` gate (a spread may inject
+        // aria-hidden) was also missing.
+        if !aria_hidden_is_truthy(attribute_map.get("aria-hidden").copied(), source)
+            && !has_spread
+            && let Some(Attribute::Plain(p)) = attribute_map.get("alt")
+            && let Some(alt) = get_static_text_value(p, source)
+            && contains_redundant_img_word(&alt)
+        {
+            let msg = messages::a11y_img_redundant_alt();
+            ctx.emit(Code::a11y_img_redundant_alt, msg, range);
+        }
+    }
+
+    // a11y_figcaption_parent / a11y_figcaption_index. Fires on
+    // <figcaption> based on ancestor + sibling relationships:
+    //   - figcaption NOT directly inside <figure> → parent warning
+    //   - figcaption directly inside <figure> but not first or last
+    //     child → index warning
+    // The index-check is done at the parent level (in fragment
+    // walking) because we need sibling order; parent-check can
+    // fire here when we know our immediate parent is not <figure>.
+    if !is_dynamic && name == "figcaption" && !is_parent(ancestors, &["figure"]) {
+        let msg = messages::a11y_figcaption_parent();
+        ctx.emit(Code::a11y_figcaption_parent, msg, range);
+    }
+
+    // a11y_consider_explicit_label: every <a> / <button> with no
+    // text content AND no aria-label / aria-labelledby / title.
+    // Upstream runs this in the shared `case 'a': case 'button':`
+    // block BEFORE any href handling, so an <a> without href gets it
+    // too. Skips when aria-hidden="true" or when `inert` is
+    // statically present (`get_static_value(inert) !== null`: bare or
+    // literal value — a dynamic `inert={expr}` does NOT suppress).
+    if !is_dynamic && (name == "button" || name == "a") && !has_spread {
+        let is_labelled = has_labelling_attr(&attribute_map);
+        let aria_hidden_true = attribute_map
+            .get("aria-hidden")
+            .and_then(|a| match a {
+                Attribute::Plain(p) => get_static_text_value(p, source),
+                _ => None,
+            })
+            .as_deref()
+            == Some("true");
+        let inert = attribute_map.get("inert").is_some_and(|a| match a {
+            Attribute::Plain(p) => p.value.is_none() || get_static_text_value(p, source).is_some(),
+            _ => false,
+        });
+        if !is_labelled && !aria_hidden_true && !inert && !has_text_content(children, source) {
+            let msg = messages::a11y_consider_explicit_label();
+            ctx.emit(Code::a11y_consider_explicit_label, msg, range);
+        }
+    }
+
+    // a11y_label_has_associated_control moved below the per-attribute
+    // loop to match upstream's ordering (role-based checks run before
+    // the per-element switch).
+
+    // a11y_media_has_caption: <video src="..."> must have a
+    // <track kind="captions"> child. Skipped on aria-hidden="true"
+    // or when src isn't set.
+    if !is_dynamic && name == "video" {
+        let aria_hidden_true = attribute_map
+            .get("aria-hidden")
+            .and_then(|a| match a {
+                Attribute::Plain(p) => get_static_text_value(p, source),
+                _ => None,
+            })
+            .as_deref()
+            == Some("true");
+        // Upstream returns early on `muted`, `aria-hidden="true"`, OR a
+        // spread (which may carry src/muted we can't see statically) —
+        // missing the muted/spread guards made us fire where upstream
+        // doesn't (a11y/index.js:490).
+        if !attribute_map.contains_key("muted")
+            && !has_spread
+            && !aria_hidden_true
+            && attribute_map.contains_key("src")
+            && !video_has_caption_track(children, source)
+        {
+            let msg = messages::a11y_media_has_caption();
+            ctx.emit(Code::a11y_media_has_caption, msg, range);
+        }
+    }
+
+    // click/mouse event rules moved to the post-loop section below
+    // so they fire AFTER the per-attribute role checks (matches
+    // upstream visitor order).
+
+    // a11y_figcaption_index: when this element is a <figure>, scan
+    // its direct children for <figcaption> not at the first or last
+    // position.
+    if !is_dynamic && name == "figure" {
+        let mut figcaption_indices: Vec<(usize, Range)> = Vec::new();
+        let mut direct: Vec<(usize, &Node)> = Vec::new();
+        for n in &children.nodes {
+            if matches!(n, Node::Comment(_)) {
+                continue;
+            }
+            if let Node::Text(t) = n
+                && !has_non_whitespace_text(t.range.slice(source))
+            {
+                continue;
+            }
+            direct.push((direct.len(), n));
+        }
+        for (idx, n) in &direct {
+            if let Node::Element(el) = n
+                && el.name.as_str() == "figcaption"
+            {
+                figcaption_indices.push((*idx, el.range));
+            }
+        }
+        let last_idx = direct.len().saturating_sub(1);
+        for (idx, r) in figcaption_indices {
+            if idx != 0 && idx != last_idx {
+                let msg = messages::a11y_figcaption_index();
+                ctx.emit(Code::a11y_figcaption_index, msg, r);
+            }
+        }
+    }
+
+    // a11y_distracting_elements: `<blink>` / `<marquee>`. Fires
+    // after the role-attr handler so role-based fires come first.
+    if !is_dynamic && A11Y_DISTRACTING_ELEMENTS.contains(&name) {
+        let msg = messages::a11y_distracting_elements(name);
+        ctx.emit(Code::a11y_distracting_elements, msg, range);
+    }
+
+    // a11y_label_has_associated_control: <label> must have `for`
+    // or contain a form control / slot / svelte:element / component
+    // / @render somewhere in its subtree. Runs after the per-attr
+    // role handler so role-based fires come first (upstream order).
+    if !is_dynamic && name == "label" && !has_spread {
+        let has_for = attribute_map.contains_key("for");
+        let has_control = descendants_have_form_control(children, ctx.source);
+        if !has_for && !has_control {
+            let msg = messages::a11y_label_has_associated_control();
+            ctx.emit(Code::a11y_label_has_associated_control, msg, range);
         }
     }
 
@@ -887,6 +875,22 @@ fn check_element(
                 }
             }
         }
+    }
+
+    // a11y_missing_content: empty heading (h1-h6) with no textual
+    // content, the compiler's last check for an element. Upstream gates
+    // on !has_spread, !is_labelled (aria-label / aria-labelledby /
+    // title) and !has_contenteditable_binding — but NOT on aria-hidden,
+    // so an empty `<h1 aria-hidden>` fires BOTH warnings.
+    if !is_dynamic
+        && A11Y_REQUIRED_CONTENT.contains(&name)
+        && !has_spread
+        && !has_labelling_attr(&attribute_map)
+        && !has_contenteditable_binding
+        && !has_text_content(children, source)
+    {
+        let msg = messages::a11y_missing_content(name);
+        ctx.emit(Code::a11y_missing_content, msg, range);
     }
 }
 

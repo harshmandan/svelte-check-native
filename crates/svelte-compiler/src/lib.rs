@@ -899,6 +899,16 @@ mod tests {
         let _ = prev; // documentation: test would set env var if allowed
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn scripts_are_written_to_a_directory_only_this_user_can_read() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, script) = write_script_to_temp("probe", "export {}").unwrap();
+        assert_eq!(script.parent(), Some(dir.path()));
+        let mode = std::fs::metadata(dir.path()).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
+
     #[test]
     fn locate_svelte_returns_none_for_empty_tree() {
         let tmp = std::env::temp_dir().join("svn-locate-svelte-test");

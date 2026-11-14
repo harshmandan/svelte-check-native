@@ -81,6 +81,11 @@ fn workspace_with_svelte_in(package: &str, files: &[(&str, &str)]) -> tempfile::
 
 /// The files the diagnostics name, the COMPLETED line, and stderr.
 fn check(root: &Path) -> (Vec<String>, String, String) {
+    check_with_env(root, &[])
+}
+
+/// [`check`] with extra environment variables for the run.
+fn check_with_env(root: &Path, env: &[(&str, &Path)]) -> (Vec<String>, String, String) {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let repo_root = crate_dir.parent().and_then(Path::parent).unwrap();
     let tsgo = svn_typecheck::discover(repo_root)
@@ -92,6 +97,7 @@ fn check(root: &Path) -> (Vec<String>, String, String) {
         .args(["--svelte-warnings", "bridge"])
         .env("TSGO_BIN", tsgo.path)
         .env("SVN_BRIDGE_WORKERS", "1")
+        .envs(env.iter().copied())
         .output()
         .expect("run svelte-check-native");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -162,6 +168,28 @@ fn a_component_is_compiled_by_the_svelte_its_package_installs() {
     let dir = workspace_with_svelte_in("packages/app", &[("packages/app/src/A.svelte", WARNS)]);
     let (files, completed, stderr) = check(dir.path());
     assert_eq!(files, ["packages/app/src/A.svelte"], "stderr: {stderr}");
+    assert_eq!(
+        completed,
+        "COMPLETED 1 FILES 0 ERRORS 1 WARNINGS 1 FILES_WITH_PROBLEMS"
+    );
+}
+
+/// The bridge's script is written to a directory of this run's own. A
+/// shared temporary directory may hold a `svelte-check-native` entry
+/// that belongs to another user, which this one cannot write to (and
+/// must not run scripts from).
+#[cfg(unix)]
+#[test]
+fn the_bridge_does_not_use_a_shared_directory_someone_else_owns() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = workspace(&[("src/In.svelte", WARNS)]);
+    let tmp = tempfile::tempdir().unwrap();
+    let taken = tmp.path().join("svelte-check-native");
+    fs::create_dir(&taken).unwrap();
+    fs::set_permissions(&taken, fs::Permissions::from_mode(0o555)).unwrap();
+    let (files, completed, stderr) = check_with_env(dir.path(), &[("TMPDIR", tmp.path())]);
+    fs::set_permissions(&taken, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(files, ["src/In.svelte"], "stderr: {stderr}");
     assert_eq!(
         completed,
         "COMPLETED 1 FILES 0 ERRORS 1 WARNINGS 1 FILES_WITH_PROBLEMS"

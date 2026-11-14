@@ -560,8 +560,8 @@ impl Parser {
         }
 
         self.private_name_stack.push(PrivateNames {
-            declared: Vec::new(),
-            used: Vec::new(),
+            declared: crate::state::Log::new(),
+            used: crate::state::Log::new(),
         });
         let mut had_constructor = false;
         // The decorators before the next member, and where the first

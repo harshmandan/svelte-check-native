@@ -339,13 +339,58 @@ pub(crate) struct Label {
     pub statement_start: Option<u32>,
 }
 
+/// A list that is only ever added to, shared between a parser and the
+/// copies taken of it before an attempted reading.
+///
+/// A copy remembers how long the list was. Going back to the copy puts
+/// the list back at that length the next time something is added, so a
+/// copy costs nothing however long the list: a class with thousands of
+/// private names would otherwise be copied whole for every arrow
+/// function or type argument list tried inside it.
+#[derive(Clone)]
+pub(crate) struct Log<T> {
+    items: std::rc::Rc<std::cell::RefCell<Vec<T>>>,
+    len: usize,
+}
+
+impl<T: Clone> Log<T> {
+    pub(crate) fn new() -> Log<T> {
+        Log {
+            items: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            len: 0,
+        }
+    }
+
+    pub(crate) fn push(&mut self, item: T) {
+        let mut items = self.items.borrow_mut();
+        items.truncate(self.len);
+        items.push(item);
+        self.len += 1;
+    }
+
+    /// The last item `wanted` picks.
+    pub(crate) fn last_where(&self, wanted: impl Fn(&T) -> bool) -> Option<T> {
+        self.items.borrow()[..self.len.min(self.items.borrow().len())]
+            .iter()
+            .rev()
+            .find(|item| wanted(item))
+            .cloned()
+    }
+
+    pub(crate) fn to_vec(&self) -> Vec<T> {
+        let items = self.items.borrow();
+        items[..self.len.min(items.len())].to_vec()
+    }
+}
+
 /// The private names of one class body.
 #[derive(Clone)]
 pub(crate) struct PrivateNames {
     /// Declared names, with what declared them (`"true"`, `"iget"`, …).
-    pub declared: Vec<(String, &'static str)>,
+    /// A name's last entry is what holds of it.
+    pub declared: Log<(String, &'static str)>,
     /// Uses not yet matched to a declaration: name and position.
-    pub used: Vec<(String, u32)>,
+    pub used: Log<(String, u32)>,
 }
 
 /// Whether an expression is read where `in` is no operator: the head

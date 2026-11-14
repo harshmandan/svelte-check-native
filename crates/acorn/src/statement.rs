@@ -31,7 +31,7 @@ pub(crate) fn check_key_name(node: &Node, name: &str) -> bool {
 /// Whether a private name is declared twice in a class body. A getter
 /// and a setter of the same staticness share a name.
 pub(crate) fn is_private_name_conflicted(
-    names: &mut Vec<(String, &'static str)>,
+    names: &mut crate::state::Log<(String, &'static str)>,
     element: &Node,
 ) -> bool {
     let name = &element.first().name;
@@ -46,7 +46,7 @@ pub(crate) fn is_private_name_conflicted(
         } else {
             "true"
         };
-    let Some(entry) = names.iter_mut().find(|(n, _)| n == name) else {
+    let Some(entry) = names.last_where(|(n, _)| n == name) else {
         names.push((name.clone(), next));
         return false;
     };
@@ -55,7 +55,7 @@ pub(crate) fn is_private_name_conflicted(
         ("iget", "iset") | ("iset", "iget") | ("sget", "sset") | ("sset", "sget")
     );
     if pair {
-        entry.1 = "true";
+        names.push((name.clone(), "true"));
         return false;
     }
     true
@@ -878,8 +878,8 @@ impl Parser {
         };
 
         self.private_name_stack.push(PrivateNames {
-            declared: Vec::new(),
-            used: Vec::new(),
+            declared: crate::state::Log::new(),
+            used: crate::state::Log::new(),
         });
         let mut had_constructor = false;
         self.expect(Tok::BraceL)?;
@@ -1108,7 +1108,8 @@ impl Parser {
         let Some(PrivateNames { declared, used }) = self.private_name_stack.pop() else {
             return Ok(());
         };
-        for (name, start) in used {
+        let declared = declared.to_vec();
+        for (name, start) in used.to_vec() {
             if declared.iter().any(|(n, _)| *n == name) {
                 continue;
             }

@@ -80,3 +80,33 @@ fn bare_type_parameters_are_an_expression() {
     assert_eq!(end("<T,>}"), Ok(4));
     assert_eq!(end("<a b>}"), Err("Unexpected token".to_string()));
 }
+
+/// Private names declared or used inside an attempted reading that is
+/// given up are forgotten with it; those of the reading that stands are
+/// kept, once.
+#[test]
+fn private_names_survive_attempted_readings() {
+    let ts = |code| module(code, Language::TypeScript);
+    assert_eq!(
+        ts("class A { #a = 1; m() { const f = <T,>(v: T) => this.#a; return f<number>(1); } }"),
+        None
+    );
+    let undeclared = |at| {
+        Some((
+            "Private field '#b' must be declared in an enclosing class".to_string(),
+            at,
+        ))
+    };
+    assert_eq!(
+        ts("class A { #a = 1; m() { return <T,>(v: T) => this.#b; } }"),
+        undeclared(50)
+    );
+    assert_eq!(
+        ts("class A { get #a() { return 1 } m() { return (x: number) => x; } set #a(v) {} }"),
+        None
+    );
+    assert_eq!(
+        ts("class A { get #a() { return 1 } m = (x) => x; get #a() { return 2 } }"),
+        Some(("Identifier '#a' has already been declared".to_string(), 50))
+    );
+}

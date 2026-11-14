@@ -93,8 +93,9 @@ pub struct ScopeTree {
     /// range is the id span (Identifier form) or the RestElement
     /// span (ObjectPattern-with-rest form). Stored here so the
     /// template-side walker can decide whether to fire once
-    /// `custom_element_info` is known.
-    pub custom_element_props_candidates: Vec<Range>,
+    /// `custom_element_info` is known. Each with its walk order (see
+    /// [`Reference::walk_order`]).
+    pub custom_element_props_candidates: Vec<(Range, u32)>,
     /// The ignore-stack snapshot at each candidate's site — mirrors
     /// `UnresolvedRef::ignored` / `Reference::ignored`.
     pub custom_element_props_ignored: Vec<Option<Vec<SmolStr>>>,
@@ -648,7 +649,7 @@ struct TreeBuilder {
     /// would fire `custom_element_props_identifier` when the file
     /// compiles as a custom element. Paired with an ignore-stack
     /// snapshot so `// svelte-ignore` leading comments are honoured.
-    custom_element_props_candidates: Vec<Range>,
+    custom_element_props_candidates: Vec<(Range, u32)>,
     custom_element_props_ignored: Vec<Option<Vec<SmolStr>>>,
     /// Non-runes instance-script `export` facts, collected during the
     /// instance parse (see the matching `ScopeTree` fields).
@@ -720,6 +721,8 @@ struct PendingRef {
     /// snapshot — walkers push leading-comment `svelte-ignore` codes
     /// when entering a statement and pop on exit.
     ignored: Option<Vec<SmolStr>>,
+    /// See [`Reference::walk_order`].
+    walk_order: u32,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -1591,6 +1594,7 @@ impl TreeBuilder {
             parent_is_call: false,
             in_reactive_statement: false,
             ignored: None,
+            walk_order: self.script_rule_events.len() as u32,
         });
     }
 
@@ -2144,6 +2148,7 @@ impl TreeBuilder {
                     parent_is_call: r.parent_is_call,
                     in_reactive_statement: r.in_reactive_statement,
                     ignored: r.ignored.clone(),
+                    walk_order: r.walk_order,
                 });
             } else {
                 unresolved.push(UnresolvedRef {
@@ -2152,6 +2157,7 @@ impl TreeBuilder {
                     scope: r.scope,
                     parent_is_call: r.parent_is_call,
                     ignored: r.ignored,
+                    walk_order: r.walk_order,
                 });
             }
         }
@@ -2423,6 +2429,7 @@ fn synthesize_store_subs(
                 parent_is_call: r.parent_is_call,
                 in_reactive_statement: false,
                 ignored: r.ignored.clone(),
+                walk_order: r.walk_order,
             });
         }
     }
@@ -4017,7 +4024,8 @@ impl<'b> ScriptWalker<'b> {
                 _ => None,
             };
             if let Some(r) = warn_range {
-                self.tree.custom_element_props_candidates.push(r);
+                let order = self.tree.script_rule_events.len() as u32;
+                self.tree.custom_element_props_candidates.push((r, order));
                 self.tree
                     .custom_element_props_ignored
                     .push(self.current_ignore_snapshot());
@@ -5633,6 +5641,7 @@ impl<'b> ScriptWalker<'b> {
             parent_is_call,
             in_reactive_statement: self.in_reactive_statement,
             ignored,
+            walk_order: self.tree.script_rule_events.len() as u32,
         });
     }
 }

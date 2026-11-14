@@ -439,12 +439,15 @@ pub fn walk_parsed(
     // ... — buffered during the shared script walk (module first,
     // then instance — upstream walk order), replayed here where
     // upstream's analyze pipeline surfaces them: after the options
-    // warnings, before the walk-time binding rules.
-    crate::rules::script_ast_rules::flush(script_rule_events, ctx);
+    // warnings. The walk-time binding warnings (state_referenced_locally,
+    // …) go among them, where the same walks raise them.
+    crate::rules::script_ast_rules::flush(
+        script_rule_events,
+        crate::rules::binding_rules::walk_time_warnings(ctx),
+        ctx,
+    );
 
-    // Walk-time binding rules (state_referenced_locally, …) —
-    // upstream fires these during the instance walk, so they land
-    // between the script-AST rules and the template warnings.
+    // Writes the script walks reject.
     crate::rules::binding_rules::visit(ctx);
 
     let mut ancestors: Vec<Ancestor> = Vec::new();

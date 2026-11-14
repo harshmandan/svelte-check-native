@@ -8,10 +8,10 @@
 //! for warnings (and may run twice when the provisional runes answer
 //! flips, discarding the first tree) — so each hook buffers a
 //! [`ScriptRuleEvent`] on the tree builder. [`flush`] replays the
-//! buffer after the `<svelte:options>` attribute warnings and before
-//! the walk-time binding rules, in walk order (module script first,
-//! then instance) — the position and order these warnings surface in
-//! upstream's analyze pipeline.
+//! buffer after the `<svelte:options>` attribute warnings, in walk
+//! order (module script first, then instance) and with the walk-time
+//! binding warnings among them — the position and order these warnings
+//! surface in upstream's analyze pipeline.
 //!
 //! Upstream equivalents:
 //! - `perf_avoid_inline_class` → `visitors/NewExpression.js:11`
@@ -395,15 +395,31 @@ fn legacy_creation_candidate<'a>(expr: &'a Expression<'_>) -> Option<(&'a str, o
     has_target.then(|| (callee.name.as_str(), ne.span))
 }
 
-/// Replay the buffered events in walk order. Runs after the
-/// `<svelte:options>` attribute warnings and before the walk-time
-/// binding rules (see the module doc), with the finished scope tree
+/// Replay the buffered events in walk order, with the walk-time
+/// binding warnings (`walk_time`) among them where the same walks
+/// raise them. Runs after the `<svelte:options>` attribute warnings
+/// (see the module doc), with the finished scope tree
 /// available on `ctx` for the `legacy_component_creation` callee
 /// resolution: the callee must be a default import from a `.svelte`
 /// source.
-pub(crate) fn flush(events: Vec<ScriptRuleEvent>, ctx: &mut LintContext<'_>) {
-    for event in events {
+pub(crate) fn flush(
+    events: Vec<ScriptRuleEvent>,
+    walk_time: Vec<crate::rules::binding_rules::WalkTimeWarning>,
+    ctx: &mut LintContext<'_>,
+) {
+    // A walk-time warning recorded after `order` events goes between
+    // event `order - 1` and event `order`.
+    let mut walk_time = walk_time.into_iter().peekable();
+    for (index, event) in events.into_iter().enumerate() {
+        while let Some((_, range, code, message)) =
+            walk_time.next_if(|(order, ..)| *order as usize <= index)
+        {
+            ctx.emit(code, message, range);
+        }
         emit_event(event, ctx);
+    }
+    for (_, range, code, message) in walk_time {
+        ctx.emit(code, message, range);
     }
 }
 

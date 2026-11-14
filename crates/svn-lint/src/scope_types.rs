@@ -171,6 +171,12 @@ pub struct Reference {
     /// for the enclosing statement. Rules consult this before
     /// emitting diagnostics. `None` == no ignores active (most refs).
     pub ignored: Option<Vec<SmolStr>>,
+    /// How many script-walk rule events (see
+    /// `ScopeTree::script_rule_events`) were raised before the walk
+    /// reached this reference: a warning raised at the reference goes
+    /// right after that many of them, as the compiler's single walk
+    /// raises both.
+    pub walk_order: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -286,4 +292,6 @@ pub struct UnresolvedRef {
     /// this onto the synthetic binding's `references` entries so
     /// `store_rune_conflict` honours `// svelte-ignore` comments.
     pub ignored: Option<Vec<SmolStr>>,
+    /// See `Reference::walk_order`.
+    pub walk_order: u32,
 }

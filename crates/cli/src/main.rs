@@ -2554,6 +2554,10 @@ fn check_project(
                 .into_iter()
                 // TSGO-ENHANCEMENT: already reported above.
                 .filter(|(p, _)| !rejections_reported.contains(p))
+                // A component left out of the run has no diagnostics of
+                // any kind: its compile error would name a file that is
+                // not counted.
+                .filter(|(p, _)| !dropped_files.contains(p))
                 .map(|(p, s)| (p, String::from(&*s)))
                 .collect();
             match svn_svelte_compiler::compile_batch(workspace, bridge_sources) {

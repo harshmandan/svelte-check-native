@@ -493,7 +493,7 @@ fn check_directive(text: &str) -> Option<bool> {
 /// A declaration file by TypeScript's naming rule: `.d.ts`, `.d.mts`,
 /// `.d.cts`, or an arbitrary-extension declaration such as
 /// `Foo.d.svelte.ts` (a `.d.` anywhere in a `.ts` file name).
-fn is_declaration_file(file: &Path) -> bool {
+pub(crate) fn is_declaration_file(file: &Path) -> bool {
     let Some(name) = file.file_name().and_then(|n| n.to_str()) else {
         return false;
     };

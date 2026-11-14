@@ -641,6 +641,11 @@ fn compile_chunk(
         match worker.compile_one(&path, &source) {
             Ok(d) => out.push((path, d)),
             Err(BridgeError::SubprocessDied) => return Err(BridgeError::SubprocessDied),
+            // Writing to a worker that has gone fails with a broken
+            // pipe before any read can find it dead.
+            Err(BridgeError::Io(e)) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+                return Err(BridgeError::SubprocessDied);
+            }
             Err(e) => {
                 // One bad file doesn't kill the whole run: it gets an
                 // empty result, and the reason is said.

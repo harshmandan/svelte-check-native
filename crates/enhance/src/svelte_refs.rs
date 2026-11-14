@@ -32,6 +32,9 @@ pub(crate) struct SvelteImportRef {
     pub(crate) start: u32,
     pub(crate) end: u32,
     pub(crate) names: Vec<ImportedName>,
+    /// `import './x.svelte'`: the module is run, and nothing is taken
+    /// from it. TypeScript does not ask such a module to be one.
+    pub(crate) side_effect: bool,
 }
 
 /// A name an import takes from a module, at the span of the identifier
@@ -251,6 +254,7 @@ impl ImportCollector<'_> {
             start,
             end,
             names,
+            side_effect: false,
         });
     }
 
@@ -282,6 +286,13 @@ impl<'a> Visit<'a> for ImportCollector<'_> {
             })
             .collect();
         self.record_names(&it.source, names);
+        // No specifier list at all, not an empty one.
+        if it.specifiers.is_none()
+            && let Some(last) = self.out.last_mut()
+            && it.source.value.as_str().is_some_and(is_svelte_specifier)
+        {
+            last.side_effect = true;
+        }
     }
 
     /// `export { Foo } from './Foo.svelte'`. This is its own node kind;

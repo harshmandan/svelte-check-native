@@ -299,8 +299,7 @@ fn importers_of_a_rejected_component_see_its_script() {
         ("src/NoScript.svelte", "<div>\n"),
     ]);
     let (diagnostics, _) = check(dir.path(), &[]);
-    let root = dir.path().canonicalize().unwrap();
-    let file = |name: &str| root.join("src").join(name).display().to_string();
+    let file = |name: &str| named_file(dir.path(), name);
     let mut found: Vec<_> = diagnostics
         .iter()
         .filter(|d| matches!(d["code"].as_i64(), Some(2306 | 1192 | 2305)))
@@ -374,5 +373,68 @@ fn importers_of_a_rejected_component_see_its_script() {
         ),
     ];
     want.sort();
+    assert_eq!(found, want);
+}
+
+/// A file under `src`, as TypeScript names it in a message: resolved,
+/// with forward slashes and no Windows `\\?\` prefix.
+fn named_file(root: &Path, name: &str) -> String {
+    dunce::canonicalize(root)
+        .unwrap()
+        .join("src")
+        .join(name)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+/// Places TypeScript says nothing about a rejected component: where it
+/// is imported only to run it, and in a declaration file the project
+/// does not check. A script that reads `import.meta` is a module, so
+/// what is missing from it is a default export, not module-ness.
+#[test]
+fn importers_typescript_does_not_question() {
+    let dir = workspace(&[
+        (
+            "src/App.svelte",
+            "<script lang=\"ts\">\n  import './NoModule.svelte';\n  import Meta from './Meta.svelte';\n  void Meta;\n</script>\n",
+        ),
+        (
+            "src/types.d.ts",
+            "import type Bad from './NoModule.svelte';\nexport type T = Bad;\n",
+        ),
+        (
+            "src/ambient.d.ts",
+            "declare module '*.svelte' {\n  const component: any;\n  export default component;\n}\n",
+        ),
+        ("src/NoModule.svelte", UNCLOSED),
+        (
+            "src/Meta.svelte",
+            "<script>\n  const u = import.meta.url;\n</script>\n<div>{u}\n",
+        ),
+    ]);
+    let (diagnostics, _) = check(dir.path(), &[]);
+    let found: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| matches!(d["code"].as_i64(), Some(2306 | 1192 | 2305)))
+        .map(|d| {
+            (
+                d["filename"].as_str().unwrap().to_string(),
+                d["start"]["line"].as_i64().unwrap(),
+                d["start"]["character"].as_i64().unwrap(),
+                d["code"].as_i64().unwrap(),
+                d["message"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    let want = vec![(
+        "src/App.svelte".to_string(),
+        2,
+        9,
+        1192,
+        format!(
+            "Module '\"{}\"' has no default export.",
+            named_file(dir.path(), "Meta.svelte")
+        ),
+    )];
     assert_eq!(found, want);
 }

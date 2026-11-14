@@ -1405,6 +1405,7 @@ dependencies = [
 name = "svn-enhance"
 version = "1.11.1"
 dependencies = [
+ "dunce",
  "oxc_allocator",
  "oxc_ast",
  "oxc_ast_visit",

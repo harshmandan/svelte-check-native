@@ -121,6 +121,21 @@ fn components_outside_the_tsconfig_are_compiled() {
     );
 }
 
+/// A component the run leaves out (its template does not parse) is no
+/// file of the run: nothing the compiler says about it is reported, and
+/// it is not counted.
+#[test]
+fn a_component_left_out_of_the_run_is_not_compiled() {
+    let unclosed = "<script>\n  let a = 1;\n</script>\n<div>{a} MOCK_WARN\n";
+    let dir = workspace(&[("src/In.svelte", WARNS), ("other/Bad.svelte", unclosed)]);
+    let (files, completed, stderr) = check(dir.path());
+    assert_eq!(files, ["src/In.svelte"], "stderr: {stderr}");
+    assert_eq!(
+        completed,
+        "COMPLETED 1 FILES 0 ERRORS 1 WARNINGS 1 FILES_WITH_PROBLEMS"
+    );
+}
+
 #[test]
 fn a_tsconfig_with_no_components_still_gets_their_warnings() {
     let dir = workspace(&[("apps/app/src/A.svelte", WARNS)]);

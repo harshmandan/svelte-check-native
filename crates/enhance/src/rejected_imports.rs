@@ -95,6 +95,13 @@ pub fn rejected_import_diagnostics(
         if !source.contains(".svelte") {
             continue;
         }
+        // TypeScript reports nothing in a declaration file it was told
+        // not to check.
+        if options.skip_lib_check == Some(true)
+            && crate::missing_svelte_imports::is_declaration_file(file)
+        {
+            continue;
+        }
         let Some(refs) = checked_refs(file, &source, options.check_js) else {
             continue;
         };
@@ -123,8 +130,14 @@ pub fn rejected_import_diagnostics(
             let Some(fallback) = fallbacks.get(&target) else {
                 continue;
             };
-            let path = fallback.path.display();
+            // TypeScript and tsgo name a file with forward slashes.
+            let path = fallback.path.to_string_lossy().replace('\\', "/");
             if !(fallback.es_syntax || force_modules) {
+                // A module imported for its side effects need not be
+                // one.
+                if r.side_effect {
+                    continue;
+                }
                 push(
                     r.start,
                     r.end,
@@ -164,8 +177,10 @@ pub fn rejected_import_diagnostics(
     out
 }
 
+/// The path with its symbolic links resolved, written as the rest of
+/// the run writes paths (no `\\?\` prefix on Windows).
 fn canonical(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// The `.svelte` imports of a file the compiler type-checks.
@@ -218,15 +233,26 @@ fn fallback(path: &Path, source: &str, resolver: &Resolver) -> Fallback {
 }
 
 /// TypeScript's external-module indicator: an `import`, `export` or
-/// `import x = require()`.
+/// `import x = require()` statement, or `import.meta` anywhere.
 fn has_module_syntax(program: &Program<'_>) -> bool {
+    use oxc_ast_visit::Visit;
+    struct ImportMeta(bool);
+    impl<'a> Visit<'a> for ImportMeta {
+        fn visit_import_meta(&mut self, _it: &oxc_ast::ast::ImportMeta) {
+            self.0 = true;
+        }
+    }
     program.body.iter().any(|statement| {
         statement.is_module_declaration()
             || matches!(
                 statement,
                 Statement::TSImportEqualsDeclaration(d) if d.module_reference.is_external()
             )
-    })
+    }) || {
+        let mut finder = ImportMeta(false);
+        finder.visit_program(program);
+        finder.0
+    }
 }
 
 /// The names `program` exports, following `export *` into the modules

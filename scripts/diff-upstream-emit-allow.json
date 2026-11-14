@@ -121,16 +121,6 @@
     },
     {
       "status": "bug",
-      "sample": "svelte2tsx/sveltekit-autotypes",
-      "file": "+page.svelte",
-      "kind": "result",
-      "label": "props",
-      "ours": "T<{data,data,form,form?,nope,snapshot?}>",
-      "upstream": "T<{data,form?,nope,snapshot?}>",
-      "reason": "Our props type for a SvelteKit page with `export let data` / `export let form` lists `data` and `form` twice (once as written, once auto-typed), one `form` required; svelte2tsx lists each once, `form` optional."
-    },
-    {
-      "status": "bug",
       "sample": ["svelte2tsx/ts-$$Props-interface", "svelte2tsx/ts-$$Props-type"],
       "kind": "result",
       "label": "props",

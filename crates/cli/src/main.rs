@@ -263,8 +263,12 @@ fn main() -> ExitCode {
 fn finished(run: std::thread::Result<ExitCode>) -> ExitCode {
     match run {
         Ok(code) => code,
-        // The check panicked; the panic has been printed.
-        Err(_) => ExitCode::from(101),
+        // The check panicked; the panic has been printed. The run
+        // failed, and says so the way every failed run does.
+        Err(_) => {
+            eprintln!("svelte-check failed");
+            ExitCode::from(1)
+        }
     }
 }
 

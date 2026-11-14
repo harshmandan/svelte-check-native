@@ -31,7 +31,7 @@ use crate::blocks::{
 use crate::error::ParseError;
 use crate::html5::closing_tag_omitted;
 use crate::mustache::{MustacheSigil, classify_mustache_sigil, find_mustache_end};
-use crate::scanner::{Scanner, is_svelte_whitespace_at};
+use crate::scanner::{Scanner, is_svelte_whitespace, is_svelte_whitespace_at};
 use crate::sections::{SectionCollector, section_tag_at};
 use crate::tag_read::{
     AwaitBranch, ExpressionRead, TagReadError, TagReadErrorKind, TagReader,
@@ -1236,7 +1236,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             // closing tag may carry attributes
             // (`/<\/textarea(\s[^>]*)?>/iy`).
             self.parse_textarea_children(tag_start, open_tag_end)?
-        } else if name.eq_ignore_ascii_case("style") || name.eq_ignore_ascii_case("script") {
+        } else if name == "style" || name == "script" {
             // Raw-text both `style` AND nested `script` (e.g. a JSON-LD
             // `<script type="application/ld+json">` in `<svelte:head>`).
             // Svelte's parser blanks `<script>` bodies verbatim
@@ -1244,7 +1244,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             // this, `{...}` in a JSON-LD block parses as a mustache
             // interpolation and fires phantom diagnostics. `title` is
             // NOT raw-text — Svelte interpolates mustaches inside it.
-            self.parse_raw_text_children_until(&name, tag_start, open_tag_end)?
+            self.parse_raw_text_children_until(&name)?
         } else {
             let (children, closed) = self.parse_children_until(&name, tag_start, open_tag_end)?;
             implicit_close = closed;
@@ -1553,91 +1553,45 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         }
     }
 
-    fn parse_raw_text_children_until(
-        &mut self,
-        tag: &str,
-        open_start: u32,
-        open_end: u32,
-    ) -> Option<Fragment> {
+    /// The body of a `<style>` or `<script>` element in the template, as
+    /// the compiler reads it: text up to the first literal `</style>` /
+    /// `</script>` (`indexOf`, so `</STYLE>` and `</style >` close
+    /// nothing), then that close tag, which is `expected_token` when the
+    /// template holds none. The body is never read for tags or
+    /// mustaches: a single Text child spans it, present even when it is
+    /// empty, as in the compiler's tree.
+    fn parse_raw_text_children_until(&mut self, tag: &str) -> Option<Fragment> {
         let children_start = self.scanner.pos();
-        let Some(close_start) = self.find_raw_text_close_tag(tag) else {
-            self.errors.push(ParseError::UnterminatedElement {
-                name: tag.to_string(),
-                range: Range::new(open_start, open_end),
+        let close = format!("</{tag}>");
+        let source = self.scanner.source();
+        let found = source
+            .get(children_start as usize..self.fragment_end as usize)
+            .and_then(|body| body.find(&close))
+            .map(|at| children_start + at as u32);
+        let Some(close_start) = found else {
+            // The compiler reads the text to the end of the template,
+            // which it trims, and fails to find the close tag there.
+            let at = source.trim_end_matches(is_svelte_whitespace).len() as u32;
+            self.errors.push(ParseError::Compiler {
+                code: "expected_token",
+                message: format!("Expected token {close}\nhttps://svelte.dev/e/expected_token"),
+                range: Range::new(at, at),
             });
             self.scanner.set_pos(self.fragment_end);
             return Some(Fragment {
-                nodes: Vec::new(),
+                nodes: vec![Node::Text(Text {
+                    range: Range::new(children_start, self.fragment_end),
+                })],
                 range: Range::new(children_start, self.fragment_end),
             });
         };
-
-        // CSS/JS raw content is not Svelte template syntax — never parse
-        // it for mustaches/tags. Represent it the way the Svelte parser
-        // does: exactly one Text child spanning the body, present even
-        // when the body is empty (upstream emits a zero-length Text node
-        // for `<svg><style></style></svg>`).
-        self.scanner.set_pos(close_start);
-        let children_end = close_start;
-        let raw_text = Node::Text(Text {
-            range: Range::new(children_start, children_end),
-        });
-
-        if self.scanner.starts_with("</") {
-            let close_start = self.scanner.pos();
-            self.scanner.advance(2);
-            for exp in tag.bytes() {
-                match self.scanner.peek_byte() {
-                    Some(b) if b.eq_ignore_ascii_case(&exp) => self.scanner.advance_byte(),
-                    _ => {
-                        self.errors.push(ParseError::MismatchedClosingTag {
-                            expected: tag.to_string(),
-                            range: Range::new(close_start, self.scanner.pos()),
-                        });
-                        return None;
-                    }
-                }
-            }
-            self.scanner.skip_ascii_whitespace();
-            if self.scanner.peek_byte() == Some(b'>') {
-                self.scanner.advance_byte();
-            }
-        }
-
+        self.scanner.set_pos(close_start + close.len() as u32);
         Some(Fragment {
-            nodes: vec![raw_text],
-            range: Range::new(children_start, children_end),
+            nodes: vec![Node::Text(Text {
+                range: Range::new(children_start, close_start),
+            })],
+            range: Range::new(children_start, close_start),
         })
-    }
-
-    /// Locate the matching raw-text close tag without interpreting the body.
-    /// `<style>` may contain arbitrary CSS braces that would be valid CSS but
-    /// invalid Svelte template syntax.
-    fn find_raw_text_close_tag(&self, tag: &str) -> Option<u32> {
-        let bytes = self.scanner.source().as_bytes();
-        let tag_bytes = tag.as_bytes();
-        let mut i = self.scanner.pos() as usize;
-        let end = self.fragment_end as usize;
-
-        while i + 2 + tag_bytes.len() <= end {
-            if bytes[i] == b'<' && bytes.get(i + 1) == Some(&b'/') {
-                let name_start = i + 2;
-                let name_end = name_start + tag_bytes.len();
-                let name_matches = bytes[name_start..name_end]
-                    .iter()
-                    .zip(tag_bytes)
-                    .all(|(a, b)| a.eq_ignore_ascii_case(b));
-                let boundary_matches = bytes.get(name_end).is_none_or(|b| {
-                    !b.is_ascii_alphanumeric() && !matches!(b, b'-' | b'_' | b'.' | b':')
-                });
-                if name_matches && boundary_matches {
-                    return Some(i as u32);
-                }
-            }
-            i += 1;
-        }
-
-        None
     }
 
     /// The tag name at the current `<`, if it plausibly starts an opening

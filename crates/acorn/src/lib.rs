@@ -307,14 +307,30 @@ pub fn closing_brace(text: &str) -> Result<u32, bool> {
 ///
 /// The column counts UTF-16 units from the last line break before `pos`
 /// (`\n`, `\r`, U+2028 or U+2029, wherever it stands), and the offset
-/// it is taken for counts them from the start of the text.
+/// it is taken for counts them from the start of the text. That is
+/// acorn's count when no `\r`, U+2028 or U+2029 stands before the
+/// position the read started at; [`column_as_offset_from`] knows where
+/// that was.
 pub fn column_as_offset(source: &str, pos: u32) -> u32 {
+    column_as_offset_from(source, 0, pos)
+}
+
+/// [`column_as_offset`] for a read that started at `start`. acorn's
+/// `lineStart` begins after the last `\n` before `start` (its
+/// constructor's `lastIndexOf("\n", startPos - 1)`: the line breaks it
+/// never read are found by that alone), and moves past every line break
+/// it reads from `start` on, `\r`, U+2028 and U+2029 included.
+pub fn column_as_offset_from(source: &str, start: u32, pos: u32) -> u32 {
     let before = source.get(..pos as usize).unwrap_or(source);
-    let line_start = before
+    let start = (start as usize).min(before.len());
+    let read = before.get(start..).unwrap_or("");
+    let line_start = read
         .char_indices()
         .rev()
         .find(|(_, c)| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}'))
-        .map_or(0, |(i, c)| i + c.len_utf8());
+        .map(|(i, c)| start + i + c.len_utf8())
+        .or_else(|| before.get(..start)?.rfind('\n').map(|i| i + 1))
+        .unwrap_or(0);
     let column = before[line_start..].encode_utf16().count();
     let mut units = 0;
     for (i, c) in source.char_indices() {

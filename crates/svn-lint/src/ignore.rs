@@ -295,10 +295,11 @@ fn is_ident_char(b: u8) -> bool {
 /// (`2-analyze/index.js`). [`ScriptComments::build`] replays that
 /// attachment over the oxc tree.
 pub(crate) struct ScriptComments {
-    /// `(node start, codes)` for every `svelte-ignore` comment attached
-    /// as a leading comment, in comment order. Offsets are
-    /// script-local, matching oxc spans.
-    leading: Vec<(u32, Vec<SmolStr>)>,
+    /// `(node start, codes, codes that name no warning)` for every
+    /// `svelte-ignore` comment attached as a leading comment, in
+    /// comment order. The node's offset is script-local, matching oxc
+    /// spans.
+    leading: Vec<(u32, Vec<SmolStr>, Vec<BadIgnoreCode>)>,
 }
 
 impl ScriptComments {
@@ -316,23 +317,33 @@ impl ScriptComments {
     /// `prior` holds the codes of the comments the compiler read before
     /// this script (see [`prior_script_ignores`]); they lead the
     /// script's first node.
+    ///
+    /// `base` is where `content` starts in the file.
     pub(crate) fn build(
         program: &Program<'_>,
         content: &str,
+        base: u32,
         runes: bool,
-        prior: Vec<SmolStr>,
+        prior: PriorIgnores,
     ) -> Self {
-        let codes: Vec<Vec<SmolStr>> = program
+        let codes: Vec<(Vec<SmolStr>, Vec<BadIgnoreCode>)> = program
             .comments
             .iter()
             .map(|c| {
                 content
                     .get(c.span.start as usize..c.span.end as usize)
-                    .map(|text| comment_ignore_codes(text, runes))
+                    .map(|text| {
+                        (
+                            comment_ignore_codes(text, runes),
+                            comment_bad_codes(text, base + c.span.start, runes),
+                        )
+                    })
                     .unwrap_or_default()
             })
             .collect();
-        if prior.is_empty() && codes.iter().all(Vec::is_empty) {
+        let nothing =
+            |(codes, bad): &(Vec<SmolStr>, Vec<BadIgnoreCode>)| codes.is_empty() && bad.is_empty();
+        if prior.codes.is_empty() && prior.bad_codes.is_empty() && codes.iter().all(nothing) {
             return Self::empty();
         }
         let mut queue: Vec<(u32, u32, usize)> = program
@@ -351,15 +362,15 @@ impl ScriptComments {
             first_node: None,
         };
         attacher.visit_program(program);
-        let mut leading: Vec<(u32, Vec<SmolStr>)> = Vec::new();
+        let mut leading: Vec<(u32, Vec<SmolStr>, Vec<BadIgnoreCode>)> = Vec::new();
         if let Some(first) = attacher.first_node
-            && !prior.is_empty()
+            && !(prior.codes.is_empty() && prior.bad_codes.is_empty())
         {
-            leading.push((first, prior));
+            leading.push((first, prior.codes, prior.bad_codes));
         }
         leading.extend(attacher.leading.into_iter().filter_map(|(start, i)| {
-            let c = codes.get(i).filter(|c| !c.is_empty())?;
-            Some((start, c.clone()))
+            let (codes, bad) = codes.get(i).filter(|c| !nothing(c))?;
+            Some((start, codes.clone(), bad.clone()))
         }));
         Self { leading }
     }
@@ -374,7 +385,7 @@ impl ScriptComments {
     /// outermost of them, whose subtree holds the others.
     pub(crate) fn leading_ignores(&self, node_start: u32) -> Vec<SmolStr> {
         let mut codes: Vec<SmolStr> = Vec::new();
-        for (_, entry) in self.leading.iter().filter(|(s, _)| *s == node_start) {
+        for (_, entry, _) in self.leading.iter().filter(|(s, _, _)| *s == node_start) {
             for c in entry {
                 if !codes.contains(c) {
                     codes.push(c.clone());
@@ -383,6 +394,84 @@ impl ScriptComments {
         }
         codes
     }
+
+    /// The codes that name no warning in the comments leading the node
+    /// that starts at `node_start`. The compiler reads a node's leading
+    /// comments when it visits the node, and warns about each then.
+    pub(crate) fn leading_bad_codes(&self, node_start: u32) -> Vec<BadIgnoreCode> {
+        self.leading
+            .iter()
+            .filter(|(s, _, _)| *s == node_start)
+            .flat_map(|(_, _, bad)| bad.iter().cloned())
+            .collect()
+    }
+}
+
+/// A code in a `svelte-ignore` comment that names no warning: the
+/// `legacy_code` or `unknown_code` warning the compiler raises for it,
+/// at the code.
+#[derive(Clone)]
+pub(crate) struct BadIgnoreCode {
+    pub(crate) code: Code,
+    pub(crate) message: String,
+    pub(crate) range: Range,
+}
+
+/// What a script walk is told about the comments the compiler read
+/// before the script: their `svelte-ignore` codes, and the codes among
+/// them that name no warning.
+#[derive(Default)]
+pub(crate) struct PriorIgnores {
+    pub(crate) codes: Vec<SmolStr>,
+    pub(crate) bad_codes: Vec<BadIgnoreCode>,
+}
+
+/// The codes that name no warning in a JavaScript `svelte-ignore`
+/// comment, whose text (delimiters included) starts at `start` in the
+/// file. The compiler only checks the codes in runes mode.
+fn comment_bad_codes(text: &str, start: u32, runes: bool) -> Vec<BadIgnoreCode> {
+    if !runes {
+        return Vec::new();
+    }
+    let Some(body) = crate::scope_util::strip_comment_delimiters(text) else {
+        return Vec::new();
+    };
+    let Some(rest) = body.trim_start().strip_prefix("svelte-ignore") else {
+        return Vec::new();
+    };
+    let Some(space) = rest.chars().next().filter(|c| c.is_whitespace()) else {
+        return Vec::new();
+    };
+    let rest = &rest[space.len_utf8()..];
+    // `rest` is a tail of `body`, which is a slice of `text`.
+    let base = start + (rest.as_ptr() as usize - text.as_ptr() as usize) as u32;
+    let mut out = Vec::new();
+    for (at, token, followed_by_comma) in runes_ignore_tokens(rest) {
+        if !is_known_code(token) {
+            let token_start = base + at as u32;
+            let range = Range::new(token_start, token_start + token.len() as u32);
+            let replacement = legacy_rename(token)
+                .map(str::to_string)
+                .unwrap_or_else(|| token.replace('-', "_"));
+            out.push(if is_known_code(&replacement) {
+                BadIgnoreCode {
+                    code: Code::legacy_code,
+                    message: messages::legacy_code(token, &replacement),
+                    range,
+                }
+            } else {
+                BadIgnoreCode {
+                    code: Code::unknown_code,
+                    message: messages::unknown_code(token, fuzzymatch_known_code(token)),
+                    range,
+                }
+            });
+        }
+        if !followed_by_comma {
+            break;
+        }
+    }
+    out
 }
 
 /// The `svelte-ignore` codes a JavaScript comment's text (delimiters
@@ -417,13 +506,13 @@ pub(crate) fn prior_script_ignores(
     before: u32,
     scripts: &[(u32, &Program<'_>)],
     runes: bool,
-) -> Vec<SmolStr> {
+) -> PriorIgnores {
     // Cheap gate: no ignore comment can precede the script.
     if !source
         .get(..before as usize)
         .is_some_and(|head| head.contains("svelte-ignore"))
     {
-        return Vec::new();
+        return PriorIgnores::default();
     }
     let mut comments: Vec<Range> = Vec::new();
     for &(content_start, program) in scripts {
@@ -439,15 +528,20 @@ pub(crate) fn prior_script_ignores(
     if let Some(fragment) = fragment {
         collect_fragment_comments(fragment, source, before, &mut comments);
     }
-    let mut codes: Vec<SmolStr> = Vec::new();
+    let mut prior = PriorIgnores::default();
     for range in comments {
         for code in comment_ignore_codes(range.slice(source), runes) {
-            if !codes.contains(&code) {
-                codes.push(code);
+            if !prior.codes.contains(&code) {
+                prior.codes.push(code);
             }
         }
+        // Read again as a leading comment of this script's first node,
+        // a code that names no warning is warned about again.
+        prior
+            .bad_codes
+            .extend(comment_bad_codes(range.slice(source), range.start, runes));
     }
-    codes
+    prior
 }
 
 /// The JavaScript comments in the template expressions and start tags

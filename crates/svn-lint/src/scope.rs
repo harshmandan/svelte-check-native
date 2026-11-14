@@ -1503,7 +1503,7 @@ impl TreeBuilder {
         root_scope: ScopeId,
         runes: bool,
         leading_ignores: &[SmolStr],
-        prior_ignores: Vec<SmolStr>,
+        prior_ignores: crate::ignore::PriorIgnores,
     ) {
         self.build_script_inner(
             script,
@@ -1824,7 +1824,7 @@ impl TreeBuilder {
         root_scope: ScopeId,
         runes: bool,
         leading_ignores: &[SmolStr],
-        prior_ignores: Vec<SmolStr>,
+        prior_ignores: crate::ignore::PriorIgnores,
     ) {
         self.build_script_inner(
             script,
@@ -1848,7 +1848,7 @@ impl TreeBuilder {
         is_instance: bool,
         runes: bool,
         leading_ignores: &[SmolStr],
-        prior_ignores: Vec<SmolStr>,
+        prior_ignores: crate::ignore::PriorIgnores,
     ) {
         let base = script.content_range.start;
         let preprocess_ts = self.preprocess_ts;
@@ -1859,8 +1859,13 @@ impl TreeBuilder {
         // the file's real runes flag — upstream's extract_svelte_ignore
         // is strict in runes mode and lax (legacy dashed names accepted)
         // otherwise.
-        let script_comments =
-            crate::ignore::ScriptComments::build(program, script.content, runes, prior_ignores);
+        let script_comments = crate::ignore::ScriptComments::build(
+            program,
+            script.content,
+            base,
+            runes,
+            prior_ignores,
+        );
         let mut walker = ScriptWalker {
             tree: self,
             base_offset: base,
@@ -2842,6 +2847,13 @@ impl<'b> ScriptWalker<'b> {
         let Some(start) = node_start else {
             return false;
         };
+        for bad in self.script_comments.leading_bad_codes(start) {
+            self.tree.script_rule_events.push(ScriptRuleEvent::Warning {
+                code: bad.code,
+                message: bad.message,
+                range: bad.range,
+            });
+        }
         let codes = self.script_comments.leading_ignores(start);
         if codes.is_empty() {
             false

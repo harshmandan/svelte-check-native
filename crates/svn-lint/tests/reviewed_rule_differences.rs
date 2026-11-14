@@ -281,6 +281,47 @@ const CASES: &[(&str, &[Reported])] = &[
         "{const a = $state(0)}<input bind:value={a} />",
         &[("constant_binding", 28, 42, true)],
     ),
+    // A code that names no warning in a script comment is warned about
+    // when the node the comment leads is visited: in runes mode only, and
+    // again for the next script, which the comment also leads.
+    (
+        "<script>\n// svelte-ignore foo_bar\nlet a = $state(0);</script>{a}",
+        &[("unknown_code", 26, 33, false)],
+    ),
+    (
+        "<script>\n// svelte-ignore a11y-structure\nlet a = $state(0);</script>{a}",
+        &[("legacy_code", 26, 40, false)],
+    ),
+    (
+        "<script>\n/* svelte-ignore foo_bar, state_referenced_locally */\nlet a = $state(0), b = a;</script>{b}",
+        &[("unknown_code", 26, 33, false)],
+    ),
+    (
+        "<script module>\n// svelte-ignore foo_bar\nexport const m = 1;</script><script>let a = $state(0);</script>{a}",
+        &[
+            ("unknown_code", 33, 40, false),
+            ("unknown_code", 33, 40, false),
+        ],
+    ),
+    (
+        "<script>\nlet a = $state(0);\n// svelte-ignore nope_nope\n</script>{a}",
+        &[],
+    ),
+    (
+        "<script>\nfunction f() {\n  // svelte-ignore what_is_this\n  return 1;\n}\nlet a = $state(f());</script>{a}",
+        &[("unknown_code", 43, 55, false)],
+    ),
+    (
+        "<script>\n// svelte-ignore foo_bar\nlet a = 1;</script>{a}",
+        &[],
+    ),
+    (
+        "<script>\nlet a = $state(0);\nlet b = [\n  // svelte-ignore bad_code\n  a,\n];</script>{b}",
+        &[
+            ("unknown_code", 57, 65, false),
+            ("state_referenced_locally", 68, 69, false),
+        ],
+    ),
 ];
 
 #[test]

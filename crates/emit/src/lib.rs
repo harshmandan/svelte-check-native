@@ -2166,13 +2166,19 @@ pub(crate) fn emit_template_node(
             if e.name.eq_ignore_ascii_case("!doctype") {
                 return;
             }
-            // Every `<style>…</style>` in the file, at any depth, is taken
-            // out of the template check: svelte2tsx finds them all with
-            // one case-sensitive regex (`htmlxparser.ts`) and removes them
+            // A `<style>…</style>` at any depth is taken out of the
+            // template check: svelte2tsx finds them with one
+            // case-sensitive regex (`htmlxparser.ts`) and removes them
             // (`handleStyleTag`), so a nested `<style>`'s attributes are
-            // not typed and the names they read stay unused. A nested
-            // `<script>` stays an element.
-            if e.name == "style" {
+            // not typed and the names they read stay unused. A tag that
+            // regex does not match (self-closing, or an attribute value
+            // it cannot read) stays an element, as a nested `<script>`
+            // does.
+            if e.name == "style"
+                && source
+                    .get(e.range.start as usize..)
+                    .is_some_and(svelte2tsx_removes_style)
+            {
                 return;
             }
             crate::nodes::let_directive::emit_slot_parented_node(
@@ -2350,6 +2356,97 @@ fn module_hoistable_snippets(
         }
     }
     hoist
+}
+
+/// Whether svelte2tsx's `styleRegex` matches at the start of `text`,
+/// which starts with a `<style` tag: its attributes read as
+/// `name`, `name="…"`, `name='…'` or `name=value` (a value with no
+/// white space or `>`), then `>`, and a `</style>` somewhere after.
+///
+/// ```text
+/// <style((?:\s+[^=>'"\/\s]+=(?:"[^"]*"|'[^']*'|[^>\s]+)|\s+[^=>'"\/\s]+)*\s*)>([\S\s]*?)<\/style>
+/// ```
+fn svelte2tsx_removes_style(text: &str) -> bool {
+    /// The regex's attribute list and `>` at the start of `text`: what
+    /// follows the `>`.
+    fn after_open_tag(text: &str) -> Option<&str> {
+        let spaced = text.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+        if spaced.len() < text.len() {
+            let name_len = spaced
+                .find(|c: char| {
+                    matches!(c, '=' | '>' | '\'' | '"' | '/')
+                        || c.is_whitespace()
+                        || c == '\u{feff}'
+                })
+                .unwrap_or(spaced.len());
+            if name_len > 0 {
+                let after_name = &spaced[name_len..];
+                if let Some(value) = after_name.strip_prefix('=') {
+                    let quoted = value
+                        .chars()
+                        .next()
+                        .filter(|c| matches!(c, '"' | '\''))
+                        .and_then(|q| value[1..].find(q))
+                        .map(|close| close + 2);
+                    let bare = value
+                        .find(|c: char| c == '>' || c.is_whitespace() || c == '\u{feff}')
+                        .unwrap_or(value.len());
+                    let found = [quoted, Some(bare).filter(|&len| len > 0)]
+                        .into_iter()
+                        .flatten()
+                        .find_map(|len| after_open_tag(&value[len..]));
+                    if found.is_some() {
+                        return found;
+                    }
+                }
+                if let Some(rest) = after_open_tag(after_name) {
+                    return Some(rest);
+                }
+            }
+        }
+        spaced.strip_prefix('>')
+    }
+    text.strip_prefix("<style")
+        .and_then(after_open_tag)
+        .is_some_and(|rest| rest.contains("</style>"))
+}
+
+#[cfg(test)]
+mod style_tag_tests {
+    use super::svelte2tsx_removes_style;
+
+    /// Each answer is what svelte2tsx's own regex gives for the text.
+    #[test]
+    fn a_style_tag_is_removed_where_the_regex_matches() {
+        for text in [
+            "<style>p{}</style>",
+            "<style media={m}>p{}</style>",
+            "<style lang=\"scss\" global>p{}</style>",
+            "<style media='a b'\n>p{}</style>",
+            "<style media=\"x\"y>p{}</style>",
+            "<style a=\"1>2\">p{}</style>",
+            "<style>p{}</style><style>q{}</style>",
+            // The regex ends the tag at the first `>` it can reach.
+            "<style media={a > b}>p{}</style>",
+        ] {
+            assert!(svelte2tsx_removes_style(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_style_tag_the_regex_cannot_read_stays_an_element() {
+        for text in [
+            "<style media={wide ? 'screen' : 1}>p{}</style>",
+            "<style media={m} />",
+            "<style media={m} /><style>p{}</style>",
+            "<style/>",
+            "<style media=>p{}</style>",
+            "<style>p{}",
+            "<styles>p{}</style>",
+        ] {
+            assert!(!svelte2tsx_removes_style(text), "{text}");
+        }
+    }
 }
 
 #[cfg(test)]

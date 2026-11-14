@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "svelte2tsx removes a nested `<style>` only where its `styleRegex` (htmlxparser.ts) matches: an opening tag whose attributes are bare names or `name=value` with a quoted value or one without white space, then `>`, then a `</style>`. A self-closing `<style … />` and an attribute value holding spaces and quotes do not match, so those tags stay elements: their attributes are typed, and `level` and `wide` are read. We left out every element named `style`, which made both names unused (TS6133) and, with svelte's element types installed, dropped the TS2322 on `media`."
+}

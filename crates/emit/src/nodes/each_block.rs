@@ -81,7 +81,8 @@ pub(crate) fn emit_each_block(
     // `!` / `as` / `satisfies` wrapper (`maybe!` names `maybe`).
     let iterable_name = expr_source_range
         .and_then(|r| {
-            source.get(r.start as usize..svn_analyze::each_expression_end(source, r) as usize)
+            let name = svn_analyze::each_expression_name_range(source, r);
+            source.get(name.start as usize..name.end as usize)
         })
         .unwrap_or(expr_text);
     let same_name = context.is_some() && !expr_text.is_empty() && binding_text == iterable_name;

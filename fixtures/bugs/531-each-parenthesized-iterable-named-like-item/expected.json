@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "svelte2tsx decides whether an {#each} iterable and its item share a name from the expression's node, which leaves out parentheses around it: `{#each (items) as items}` and `{#each (maybe!) as maybe}` go through the `$$_each` temp like their unparenthesized forms. We compared the text with its parentheses, missed the match and wrote `for (let items of …(items))`, which reads the binding in its own initializer (TS2448, TS7022)."
+}

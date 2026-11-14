@@ -1138,13 +1138,18 @@ struct LetDirectiveScope {
     defaults: Vec<Range>,
 }
 
-/// Where svelte2tsx's `getEnd` ends an `{#each}` iterable: an expression
-/// wrapped in `!`, `as T` or `satisfies T` ends at the expression it
-/// wraps (one level), so `maybe!` compares equal to an item named
-/// `maybe`. Otherwise, or if it does not parse, the range's own end.
-pub fn each_expression_end(source: &str, range: Range) -> u32 {
+/// The part of an `{#each}` iterable svelte2tsx compares with the
+/// item's name: from where the expression's node starts to where
+/// `getEnd` ends it.
+///
+/// The compiler's node leaves out parentheses around the expression,
+/// so `(items)` is `items`. An expression wrapped in `!`, `as T` or
+/// `satisfies T` ends at the expression it wraps (one level), so
+/// `maybe!` compares equal to an item named `maybe`. If the text does
+/// not parse, the range as given.
+pub fn each_expression_name_range(source: &str, range: Range) -> Range {
     let Some(slice) = source.get(range.start as usize..range.end as usize) else {
-        return range.end;
+        return range;
     };
     let lead = (slice.len() - slice.trim_start().len()) as u32;
     let alloc = oxc_allocator::Allocator::default();
@@ -1152,22 +1157,24 @@ pub fn each_expression_end(source: &str, range: Range) -> u32 {
     let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
     use oxc_ast::ast::{Expression, Statement};
     let Some(Statement::ExpressionStatement(es)) = parsed.program.body.first() else {
-        return range.end;
+        return range;
     };
     if parsed.panicked {
-        return range.end;
+        return range;
     }
     let mut expr = &es.expression;
-    if let Expression::ParenthesizedExpression(p) = expr {
+    while let Expression::ParenthesizedExpression(p) = expr {
         expr = &p.expression;
     }
-    let inner_end = match expr {
-        Expression::TSAsExpression(e) => Some(e.expression.span().end),
-        Expression::TSSatisfiesExpression(e) => Some(e.expression.span().end),
-        Expression::TSNonNullExpression(e) => Some(e.expression.span().end),
-        _ => None,
+    let end = match expr {
+        Expression::TSAsExpression(e) => e.expression.span().end,
+        Expression::TSSatisfiesExpression(e) => e.expression.span().end,
+        Expression::TSNonNullExpression(e) => e.expression.span().end,
+        other => other.span().end,
     };
-    inner_end.map_or(range.end, |n| range.start + lead + n - 1)
+    // Positions in `wrapped` are one past those in the trimmed slice.
+    let at = |position: u32| range.start + lead + position - 1;
+    Range::new(at(expr.span().start), at(end))
 }
 
 /// Parse a binding-pattern source slice (the `as` clause of

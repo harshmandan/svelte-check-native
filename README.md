@@ -168,6 +168,7 @@ The Rust CLI parses and analyzes Svelte files, generates a TypeScript overlay, i
 | Crate | Responsibility |
 | --- | --- |
 | [`parser`](./crates/parser) | Parse Svelte source into an AST. |
+| [`acorn`](./crates/acorn) | Read JavaScript and TypeScript the way Svelte's parser does, through a port of acorn and acorn-typescript. |
 | [`analyze`](./crates/analyze) | Analyze runes, props, events, bindings, and scope. |
 | [`emit`](./crates/emit) | Generate the TypeScript overlay and rewrite imports. |
 | [`svn-lint`](./crates/svn-lint) | Produce Svelte compiler warnings in Rust. |

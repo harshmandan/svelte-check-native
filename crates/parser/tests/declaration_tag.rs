@@ -6,9 +6,15 @@
 //! is what svelte 5.57.3's `parse()` does with the template: the end of
 //! the tag, or the error's code and offset.
 
+#![allow(clippy::expect_used)]
+
 use svn_parser::tag_read::{TagReadErrorKind, TagReader};
 
-fn read(template: &str) -> Result<Option<u32>, (&'static str, u32)> {
+/// The end of the tag (`None` for an expression tag), or the error's
+/// code and offset.
+type Outcome = Result<Option<u32>, (&'static str, u32)>;
+
+fn read(template: &str) -> Outcome {
     let reader = TagReader::new(template, false);
     let start = template.find(['l', 'c']).expect("a keyword") as u32;
     // The parser reads no further than the `}` a brace count finds.
@@ -29,7 +35,7 @@ fn read(template: &str) -> Result<Option<u32>, (&'static str, u32)> {
 
 #[test]
 fn declaration_tags_end_where_acorn_ends_the_statement() {
-    let cases: &[(&str, Result<Option<u32>, (&str, u32)>)] = &[
+    let cases: &[(&str, Outcome)] = &[
         ("{let x = 1\nfoo}", Err(("expected_token", 11))),
         ("{let x = 1;;}", Err(("expected_token", 11))),
         ("{let x = 1;}", Ok(Some(12))),

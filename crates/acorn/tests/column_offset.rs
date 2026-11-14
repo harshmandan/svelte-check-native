@@ -8,6 +8,8 @@
 //! Each case is the error position acorn 8.19.0 with acorn-typescript
 //! gives `parseExpressionAt(source, start)`, in UTF-16 units.
 
+#![allow(clippy::expect_used)]
+
 use svn_acorn::{Language, column_as_offset_from, parse_expression_at};
 
 fn byte_of_unit(source: &str, unit: usize) -> u32 {

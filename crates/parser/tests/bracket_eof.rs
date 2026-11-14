@@ -3,6 +3,8 @@
 //! end before reading it. Each case is what svelte 5.57.3's `parse()`
 //! throws: `unexpected_eof` at that offset.
 
+#![allow(clippy::expect_used)]
+
 use svn_parser::tag_read::{TagReadErrorKind, TagReader};
 
 fn eof_at(error: svn_parser::tag_read::TagReadError) -> Option<u32> {

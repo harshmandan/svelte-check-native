@@ -252,12 +252,19 @@ fn main() -> ExitCode {
         .name("main".into())
         .stack_size(DEEP_STACK)
         .spawn(run);
-    match run.map(std::thread::JoinHandle::join) {
-        Ok(Ok(code)) => code,
-        // The check panicked; the panic has been printed.
-        Ok(Err(_)) => ExitCode::from(101),
+    match run {
+        Ok(handle) => finished(handle.join()),
         // No thread to be had: run where we stand.
         Err(_) => self::run(),
+    }
+}
+
+/// The exit code of a check that ran to its end or panicked.
+fn finished(run: std::thread::Result<ExitCode>) -> ExitCode {
+    match run {
+        Ok(code) => code,
+        // The check panicked; the panic has been printed.
+        Err(_) => ExitCode::from(101),
     }
 }
 
@@ -2848,6 +2855,14 @@ mod tests {
     use svn_typecheck::Severity;
 
     // ---- CLI flag surface ----
+
+    /// A crash is a failed run: svelte-check prints the error and
+    /// "svelte-check failed" and exits 1, like any other failure.
+    #[test]
+    fn a_panicked_check_exits_1() {
+        let panicked: std::thread::Result<ExitCode> = Err(Box::new("boom"));
+        assert_eq!(finished(panicked), ExitCode::from(1));
+    }
 
     #[test]
     fn config_flag_is_parsed() {

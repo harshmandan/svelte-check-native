@@ -946,6 +946,24 @@ exports.transpileModule = (content) => {
         assert_eq!(first.code, "/*mock*/let a0 = 0;");
     }
 
+    /// tsgo's scratch directory is this run's alone and goes away with
+    /// its handle, even when the batch never gets to clean up after
+    /// itself.
+    #[test]
+    fn the_tsgo_scratch_directory_is_private_and_removed_on_drop() {
+        let dir = scratch_dir().expect("scratch dir");
+        let path = AsRef::<Path>::as_ref(&dir).to_path_buf();
+        assert!(path.join("in").is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        drop(dir);
+        assert!(!path.exists(), "{} was left behind", path.display());
+    }
+
     #[test]
     fn enum_exports_silence_unused_export_warnings() {
         let message = "Component has unused export property 'E'. If it is for external reference only, please consider using `export const E`";

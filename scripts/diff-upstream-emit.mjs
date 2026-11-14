@@ -89,6 +89,22 @@ function skipNonCode(s, i) {
         const e = s.indexOf('*/', i + 2);
         return e < 0 ? s.length : e + 2;
     }
+    if (c === '/' && regexCanStart(s, i)) {
+        // A regex literal: to the unescaped `/` outside a class.
+        let j = i + 1;
+        let cls = false;
+        while (j < s.length && s[j] !== '\n' && (cls || s[j] !== '/')) {
+            if (s[j] === '\\') j++;
+            else if (s[j] === '[') cls = true;
+            else if (s[j] === ']') cls = false;
+            j++;
+        }
+        if (s[j] === '/') {
+            j++;
+            while (/[a-z]/.test(s[j] ?? '')) j++;
+            return j;
+        }
+    }
     if (c === '"' || c === "'") {
         let j = i + 1;
         while (j < s.length && s[j] !== c) j += s[j] === '\\' ? 2 : 1;
@@ -104,6 +120,26 @@ function skipNonCode(s, i) {
         return j + 1;
     }
     return -1;
+}
+
+/**
+ * Whether a `/` at `i` starts a regex literal rather than dividing:
+ * true after an operator, an opening bracket, a separator or a keyword
+ * that takes an expression, false after a value (a name, a number, a
+ * closing bracket).
+ */
+function regexCanStart(s, i) {
+    let j = i - 1;
+    while (j >= 0 && /\s/.test(s[j])) j--;
+    if (j < 0) return true;
+    const p = s[j];
+    if ('(,=:[!&|?{};+-*%<>~^'.includes(p)) return true;
+    if (/[\w$]/.test(p)) {
+        let k = j;
+        while (k >= 0 && /[\w$]/.test(s[k])) k--;
+        return /^(?:return|typeof|case|do|else|in|of|void|yield|await|delete|instanceof|new)$/.test(s.slice(k + 1, j + 1));
+    }
+    return false;
 }
 
 /** Index of the bracket closing the one at `open`. */
@@ -205,6 +241,7 @@ function renameSynthesised(text) {
     return (
         text
             .replace(/__sveltets_2_([A-Za-z0-9_]+)/g, (_, n) => canonHelper(n))
+            .replace(/__sveltets_\$\$bindings\b|__svn_\$\$bindings\b/g, 'H.$$$$bindings')
             .replace(/__svn_C_[A-Za-z0-9_]+/g, '$C')
             .replace(/__svn_inst_[A-Za-z0-9_]+/g, '$I')
             // svelte2tsx names a component's constructor local after the
@@ -221,6 +258,7 @@ function renameSynthesised(text) {
             .replace(/__svn_([A-Za-z0-9_]+)/g, (_, n) => canonHelper(n))
             .replace(/\$\$action_\d+/g, 'H.action')
             .replace(/H\.action\d+/g, 'H.action')
+            .replace(/\bsvelteHTML\.mapElementTag\b/g, 'H.mapelementtag')
     );
 }
 
@@ -295,6 +333,13 @@ function unwrapValues(s) {
         const c = s[i];
         // A value starts after `:` that follows a key; a parenthesised
         // value runs to its matching `)` and is followed by `,` or `}`.
+        // Doubled parentheses, `((x))`, are one pair.
+        if (c === '(' && s[i + 1] === '(' && matchClose(s, i + 1) + 1 === matchClose(s, i)) {
+            const close = matchClose(s, i);
+            out += unwrapValues(s.slice(i + 1, close));
+            i = close + 1;
+            continue;
+        }
         if (c === '(' && (out.endsWith(':') || out.endsWith('...'))) {
             const close = matchClose(s, i);
             const next = s[close + 1];
@@ -303,7 +348,7 @@ function unwrapValues(s) {
             const inner = s.slice(i + 1, close);
             const one_value = splitTop(stripOuterParens(inner)).length === 1;
             if (one_value && (next === ',' || next === '}' || next === undefined)) {
-                out += unwrapValues(inner);
+                out += unwrapValues(stripOuterParens(inner));
                 i = close + 1;
                 continue;
             }
@@ -407,6 +452,178 @@ function snippets(original, text) {
     return out;
 }
 
+/**
+ * `const` declarations inside the template's body and its snippets'
+ * bodies (each an `async () => {…}`): `{@const}` tags and the names an
+ * `{#await}` branch binds. The construct is the pattern, with any type
+ * annotation, and the initializer. Synthesised locals (`$$…`, `__svn_…`)
+ * and declarations other kinds already cover (`skip`, by offset) are
+ * left out.
+ */
+function templateConsts(original, text, skip) {
+    const out = [];
+    const seen = new Set();
+    const body = /\basync\s*\(\s*\)\s*=>\s*\{/g;
+    let r;
+    while ((r = body.exec(text))) {
+        const open = r.index + r[0].length - 1;
+        const close = matchClose(text, open);
+        const decl = /\bconst\s+/g;
+        decl.lastIndex = open;
+        let m;
+        while ((m = decl.exec(text)) && m.index < close) {
+            if (seen.has(m.index) || skip.has(m.index)) continue;
+            seen.add(m.index);
+            // The declaration runs to the `;` that ends it.
+            let i = m.index + m[0].length;
+            let eq = -1;
+            while (i < close) {
+                const s = skipNonCode(text, i);
+                if (s >= 0) {
+                    i = s;
+                    continue;
+                }
+                const c = text[i];
+                if ('([{'.includes(c)) {
+                    i = matchClose(text, i) + 1;
+                    continue;
+                }
+                if (c === ';') break;
+                // A declaration without `;` ends at a line break unless
+                // the next line continues the expression.
+                if (c === '\n' && eq >= 0) {
+                    const next = text.slice(i).match(/^\s*(\S)/);
+                    if (!next || !'.?:&|+-*/%,=<>'.includes(next[1])) break;
+                }
+                if (c === '=' && eq < 0 && !'=>'.includes(text[i + 1]) && !'=!<>'.includes(text[i - 1])) eq = i;
+                i++;
+            }
+            if (eq < 0) continue;
+            const pattern = original.slice(m.index + m[0].length, eq);
+            const init = original.slice(eq + 1, i);
+            if (/\$\$|__svn|__sveltets/.test(pattern)) continue;
+            if (/^\s*(?:new\b|__sveltets_2_ensureComponent\(|__svn_ensure_component\()/.test(init)) continue;
+            out.push({ kind: 'const', at: m.index, label: '', text: `${normalize(pattern)}=${normalize(init)}` });
+        }
+    }
+    return out;
+}
+
+/**
+ * A render-result value as the type it gives its key. The two sides
+ * spell the same type several ways: a JSDoc cast `/** @type {T} *\/
+ * ({})`, `{} as any as T`, `undefined as any as (T)`, `{a: a} as T`
+ * (the cast decides the type, not the value object), and a bare `""`
+ * (widened to `string` in a returned object). Each becomes `T<T>`, with
+ * `;` and `,` between type members read alike. A value object cast to a
+ * type keeps the object when it is more than names (`{...ensureRight
+ * Props<…>(…)} as T`), since that part is checked too.
+ */
+function canonResultValue(v) {
+    v = stripOuterParens(v);
+    const typeOf = (t) =>
+        'T<' +
+        stripOuterParens(t)
+            .replace(/;([}\]])/g, '$1')
+            .replace(/;/g, ',') +
+        '>';
+    if (v.startsWith('@type{')) {
+        const close = matchClose(v, 5);
+        return typeOf(v.slice(6, close));
+    }
+    if (v === '""') return 'T<string>';
+    if (v === '{}') return 'T<{}>';
+    let obj = '';
+    let rest = v;
+    if (v.startsWith('undefinedas')) rest = v.slice('undefined'.length);
+    else if (v.startsWith('{')) {
+        const close = matchClose(v, 0);
+        obj = v.slice(0, close + 1);
+        rest = v.slice(close + 1);
+    }
+    if (!rest.startsWith('as')) return v;
+    rest = rest.slice(2);
+    if (rest.startsWith('anyas')) rest = rest.slice(5);
+    else if (rest.startsWith('unknownas')) rest = rest.slice(9);
+    const names = /^\{(?:[\w$]+:[\w$]+(?:,[\w$]+:[\w$]+)*)?\}$/;
+    return (obj && !names.test(obj) ? obj : '') + typeOf(rest);
+}
+
+/**
+ * `T<{a?: X, b: Y}>` → `T<{a?,b}>`: the names a props or exports type
+ * declares and which are optional, sorted. The member types are left
+ * out: one side writes `typeof a` where the other writes the type it
+ * resolves to, which only the type checker can compare. Anything that
+ * is not a plain type literal is returned as it is.
+ */
+function memberNames(value) {
+    const m = /^T<\{([\s\S]*)\}>$/.exec(value);
+    if (!m) return value;
+    const members = [];
+    for (const piece of splitTop(m[1])) {
+        if (/^(?:[\w$]+|"[^"]*")\??:/.test(piece) || members.length === 0) members.push(piece);
+        else members[members.length - 1] += ',' + piece;
+    }
+    const names = members.filter(Boolean).map((p) => /^((?:[\w$]+|"[^"]*")\??):/.exec(p)?.[1] ?? p);
+    return `T<{${names.sort().join(',')}}>`;
+}
+
+/**
+ * The render function's result, one construct per key: `props`,
+ * `slots`, `exports`, `bindings`. `events` is left out: svelte2tsx
+ * widens it outside the result (`__sveltets_2_with_any_event`), we
+ * inside, so the two never agree as text.
+ *
+ * A Svelte 4 component's props are a value object upstream (`{a: a}`),
+ * made partly optional by the default export's `__sveltets_2_partial(
+ * ['a'], …)`, and a type on our side (`{a?: typeof a}`). The value
+ * object is read as that type: each `key: name` is `key: typeof name`,
+ * optional when the partial list names it.
+ */
+function renderResult(original, text) {
+    const out = [];
+    const partial = /(?:__sveltets_2_partial|__sveltets_2_partial_with_any)\(\s*\[([^\]]*)\]/.exec(text);
+    const optional = new Set(
+        partial ? [...partial[1].matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1]) : []
+    );
+    const ret = /\breturn\s*\{\s*props\s*:/g;
+    let m;
+    while ((m = ret.exec(text))) {
+        const open = m.index + m[0].indexOf('{');
+        const close = matchClose(text, open);
+        // Split on the commas between keys: a comma inside a type's
+        // angle brackets (`as Record<string, never>`) splits too, so a
+        // piece that does not start a key belongs to the one before.
+        const parts = [];
+        for (const piece of splitTop(original.slice(open + 1, close))) {
+            if (/^\s*\w+\s*:/.test(piece) || parts.length === 0) parts.push(piece);
+            else parts[parts.length - 1] += ',' + piece;
+        }
+        for (const part of parts) {
+            const k = /^\s*(\w+)\s*:/.exec(part);
+            if (!k || !['props', 'slots', 'exports', 'bindings'].includes(k[1])) continue;
+            let value = unwrapValues(normalize(part.slice(k[0].length)));
+            // A member may carry a JSDoc type (`/** @type {T} */ a: a`),
+            // which becomes the member's type.
+            const member = /^(?:@type\{([\s\S]*)\})?([\w$]+):([\w$]+)$/;
+            const members = value.startsWith('{') && value.endsWith('}') ? splitTop(value.slice(1, -1)).filter(Boolean) : null;
+            if (k[1] === 'props' && members && members.every((p) => member.test(p))) {
+                value = `T<{${members
+                    .map((p) => {
+                        const [, type, key, name] = member.exec(p);
+                        return `${key}${optional.has(key) ? '?' : ''}:${type ?? `typeof${name}`}`;
+                    })
+                    .join(',')}}>`;
+            } else {
+                value = canonResultValue(value);
+            }
+            if (k[1] === 'props' || k[1] === 'exports') value = memberNames(value);
+            out.push({ kind: 'result', at: m.index, label: k[1], text: value });
+        }
+    }
+    return out;
+}
+
 function extract(original) {
     // Match on code only (a comment can mention `createElement(` too);
     // spans read from the original, comments included, since a JSDoc
@@ -500,7 +717,60 @@ function extract(original) {
     for (const c of found) {
         if (c.kind === 'on') c.text = splitTop(c.text).map(stripOuterParens).join(',');
     }
-    for (const s of snippets(original, text)) found.push(s);
+    const snippetDecls = snippets(original, text);
+    for (const s of snippetDecls) found.push(s);
+    // Directive helpers: the arguments decide what TypeScript checks
+    // (the action / transition / animation function against the
+    // element, a slot's name and the props it exposes, a get/set
+    // binding's pair, a style directive's value).
+    parenContent(/(?:__sveltets_2_ensureAction|__svn_ensure_action)\(/g, 'action');
+    parenContent(/(?:__sveltets_2_ensureTransition|__svn_ensure_transition)\(/g, 'transition');
+    parenContent(/(?:__sveltets_2_ensureAnimation|__svn_ensure_animation)\(/g, 'animation');
+    parenContent(/(?:__sveltets_createSlot|__svn_create_slot)\(/g, 'slot');
+    parenContent(/(?:__sveltets_2_get_set_binding|__svn_get_set_binding)\(/g, 'getset');
+    parenContent(/(?:__sveltets_2_ensureType|__svn_ensure_type)\(/g, 'style');
+    for (const c of found) {
+        if (['action', 'transition', 'animation', 'slot', 'getset', 'style'].includes(c.kind)) {
+            c.text = unwrapValues(splitTop(c.text).map(stripOuterParens).join(','));
+        }
+    }
+    // `bind:` on an element or component writes back to its target:
+    // `() => target = __sveltets_2_any(null)` upstream,
+    // `void (() => { target = __svn_any(null); })` ours.
+    const assign = /=>\s*\{?\s*([^;{}=]+?)\s*=\s*(?:__sveltets_2_any|__svn_any)\(\s*null\s*\)/g;
+    while ((m = assign.exec(text))) {
+        found.push({ kind: 'bind', at: m.index, label: '', text: normalize(m[1]) });
+    }
+    // `bind:name` on a component checks `name` against the component's
+    // bindable props: `instance.$$bindings = 'name'`.
+    const bindings = /\.\$\$bindings\s*=\s*/g;
+    while ((m = bindings.exec(text))) {
+        const start = m.index + m[0].length;
+        const end = skipNonCode(text, start);
+        if (end < 0) continue;
+        found.push({ kind: 'bindings', at: m.index, label: '', text: normalize(text.slice(start, end)) });
+    }
+    // A slot consumer's `let:` directives: the destructuring pattern
+    // and the slot it reads, `const {…} = instance.$$slot_def.name`.
+    const slotLet = /\bconst\s*\{/g;
+    const slotLetDecls = new Set();
+    while ((m = slotLet.exec(text))) {
+        const open = m.index + m[0].length - 1;
+        const close = matchClose(text, open);
+        const rhs = /^\s*=\s*([\w$]+)\.\$\$slot_def\s*(\.\s*[\w$]+|\[[^\]]*\])/.exec(text.slice(close + 1));
+        if (!rhs) continue;
+        slotLetDecls.add(m.index);
+        found.push({
+            kind: 'slotlet',
+            at: m.index,
+            label: normalize(rhs[2]).replace(/^\["(.*)"\]$/, '.$1'),
+            text: normalize(original.slice(open, close + 1)),
+        });
+    }
+    for (const c of templateConsts(original, text, new Set([...snippetDecls.map((s) => s.at), ...slotLetDecls]))) {
+        found.push(c);
+    }
+    for (const r of renderResult(original, text)) found.push(r);
     const iso = /interface \$\$IsomorphicComponent\s*\{/g;
     while ((m = iso.exec(text))) {
         const open = m.index + m[0].length - 1;
@@ -526,61 +796,151 @@ function extract(original) {
 
 // --------------------------------------------------------------- pairing
 
+const KINDS = [
+    'element',
+    'component',
+    'iso',
+    'each',
+    'if',
+    'await',
+    'snippet',
+    'render',
+    'on',
+    'action',
+    'transition',
+    'animation',
+    'style',
+    'bind',
+    'getset',
+    'bindings',
+    'slot',
+    'slotlet',
+    'const',
+    'result',
+];
+
+/** A snapshot's files: `// === rel ===` header → the emit after it. */
+function sections(text) {
+    const out = new Map();
+    const heads = [...text.matchAll(/^\/\/ === (.+) ===$/gm)];
+    heads.forEach((h, i) => {
+        const end = i + 1 < heads.length ? heads[i + 1].index : text.length;
+        out.set(h[1], text.slice(h.index + h[0].length, end));
+    });
+    return out;
+}
+
+/**
+ * The files svelte2tsx rejected in a sample (`upstream.error.txt`, one
+ * `rel: message` line each). svelte-check reports such a file's parse
+ * error and leaves it out of type checking, so there is no emit to
+ * compare; the emit_snapshots test checks that we leave it out too.
+ */
+function rejectedFiles(sampleDir) {
+    const file = path.join(sampleDir, 'upstream.error.txt');
+    if (!fs.existsSync(file)) return new Map();
+    const out = new Map();
+    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+        const m = /^(.+?\.svelte): (.*)$/.exec(line);
+        if (m) out.set(m[1], m[2]);
+    }
+    return out;
+}
+
+/** Pair two lists of one kind's constructs and report what differs. */
+function compareKind(kind, xs, ys, base, out) {
+    // Snippets are declarations; we hoist some to a different place
+    // than svelte2tsx, so their order says nothing.
+    if (kind === 'snippet') {
+        const key = (c) => `${c.label}(${c.text})`;
+        xs = [...xs].sort((p, q) => key(p).localeCompare(key(q)));
+        ys = [...ys].sort((p, q) => key(p).localeCompare(key(q)));
+    }
+    const n = Math.max(xs.length, ys.length);
+    for (let i = 0; i < n; i++) {
+        const x = xs[i];
+        const y = ys[i];
+        const same =
+            x &&
+            y &&
+            x.text === y.text &&
+            // An element is its tag, which decides the type its
+            // attributes are checked against, plus those attributes; a
+            // component is the constructor it goes through plus its props.
+            (!['component', 'snippet', 'element', 'slotlet'].includes(kind) || x.label === y.label);
+        if (same) continue;
+        out.push({
+            ...base,
+            kind,
+            index: i,
+            label: x && y && x.label !== y.label ? `${x.label} vs ${y.label}` : (x ?? y).label,
+            ours: x ? x.text : null,
+            upstream: y ? y.text : null,
+        });
+    }
+}
+
 function compareSample(corpus, name) {
-    const ours = path.join(SNAP, corpus, name, 'expected.emit.ts');
-    const theirs = path.join(SNAP, corpus, name, 'upstream.emit.ts');
-    if (!fs.existsSync(theirs) || !fs.existsSync(ours)) return null;
-    const a = extract(fs.readFileSync(ours, 'utf8'));
-    const b = extract(fs.readFileSync(theirs, 'utf8'));
-    for (const c of b) stats.kinds[c.kind] = (stats.kinds[c.kind] ?? 0) + 1;
-    if (a.length === 0 && b.length === 0) stats.empty.push(`${corpus}/${name}`);
+    const sampleDir = path.join(SNAP, corpus, name);
+    const ours = path.join(sampleDir, 'expected.emit.ts');
+    const theirs = path.join(sampleDir, 'upstream.emit.ts');
+    if (!fs.existsSync(ours)) return null;
+    const rejected = rejectedFiles(sampleDir);
+    if (!fs.existsSync(theirs) && rejected.size === 0) return null;
+    const a = sections(fs.readFileSync(ours, 'utf8'));
+    const b = fs.existsSync(theirs) ? sections(fs.readFileSync(theirs, 'utf8')) : new Map();
+    const sample = `${corpus}/${name}`;
     const out = [];
-    for (const kind of [
-        'element',
-        'component',
-        'iso',
-        'each',
-        'if',
-        'await',
-        'snippet',
-        'render',
-        'on',
-    ]) {
-        let xs = a.filter((c) => c.kind === kind);
-        let ys = b.filter((c) => c.kind === kind);
-        // Snippets are declarations; we hoist some to a different place
-        // than svelte2tsx, so their order says nothing.
-        if (kind === 'snippet') {
-            const key = (c) => `${c.label}(${c.text})`;
-            xs = [...xs].sort((p, q) => key(p).localeCompare(key(q)));
-            ys = [...ys].sort((p, q) => key(p).localeCompare(key(q)));
-        }
-        // Upstream writes the interface inline only for generic
-        // components; the others go through the shim's factory.
-        if (kind === 'iso' && ys.length === 0) continue;
-        const n = Math.max(xs.length, ys.length);
-        for (let i = 0; i < n; i++) {
-            const x = xs[i];
-            const y = ys[i];
-            // A component is the constructor it goes through plus its props.
-            const same =
-                x &&
-                y &&
-                x.text === y.text &&
-                // An element is its tag, which decides the type its
-                // attributes are checked against, plus those attributes.
-                (!['component', 'snippet', 'element'].includes(kind) || x.label === y.label);
-            if (same) continue;
+    let constructs = 0;
+    let templateConstructs = 0;
+    for (const file of [...new Set([...a.keys(), ...b.keys(), ...rejected.keys()])].sort()) {
+        if (rejected.has(file)) continue;
+        const base = { sample, file };
+        if (!a.has(file) || !b.has(file)) {
+            // A component one side emits and the other does not.
             out.push({
-                sample: `${corpus}/${name}`,
-                kind,
-                index: i,
-                label: x && y && x.label !== y.label ? `${x.label} vs ${y.label}` : (x ?? y).label,
-                ours: x ? x.text : null,
-                upstream: y ? y.text : null,
+                ...base,
+                kind: 'file',
+                index: 0,
+                label: file,
+                ours: a.has(file) ? 'emitted' : null,
+                upstream: b.has(file) ? 'emitted' : null,
             });
+            continue;
+        }
+        const xs = extract(a.get(file));
+        const ys = extract(b.get(file));
+        for (const c of ys) stats.kinds[c.kind] = (stats.kinds[c.kind] ?? 0) + 1;
+        constructs += xs.length + ys.length;
+        templateConstructs += [...xs, ...ys].filter((c) => c.kind !== 'result').length;
+        for (const kind of KINDS) {
+            const xk = xs.filter((c) => c.kind === kind);
+            const yk = ys.filter((c) => c.kind === kind);
+            // Upstream writes the interface inline only for generic
+            // components; the others go through the shim's factory.
+            if (kind === 'iso' && yk.length === 0) continue;
+            if (kind === 'result') {
+                // The render result's keys are written in a different
+                // order, and a Svelte 4 install's result has fewer of
+                // them: pair each key with its namesake.
+                for (const key of [...new Set([...xk, ...yk].map((c) => c.label))].sort()) {
+                    compareKind(
+                        kind,
+                        xk.filter((c) => c.label === key),
+                        yk.filter((c) => c.label === key),
+                        base,
+                        out
+                    );
+                }
+                continue;
+            }
+            compareKind(kind, xk, yk, base, out);
         }
     }
+    // Every file rejected: nothing of this sample is type-checked.
+    if ([...a.keys()].every((f) => rejected.has(f))) return null;
+    if (constructs === 0) stats.empty.push(sample);
+    if (templateConstructs === 0) stats.resultOnly.push(sample);
     return out;
 }
 
@@ -591,17 +951,41 @@ function loadAllow() {
     return JSON.parse(fs.readFileSync(ALLOW, 'utf8')).entries.map((e) => ({ ...e, hits: 0 }));
 }
 
-function allowed(d, allow) {
-    for (const e of allow) {
-        if (e.sample !== '*' && e.sample !== d.sample) continue;
-        if (e.kind && e.kind !== d.kind) continue;
-        if (e.label !== undefined && e.label !== d.label) continue;
-        if (e.ours !== undefined && !(d.ours ?? '').includes(e.ours)) continue;
-        if (e.upstream !== undefined && !(d.upstream ?? '').includes(e.upstream)) continue;
-        e.hits++;
-        return e;
+const asList = (v) => (Array.isArray(v) ? v : [v]);
+
+/**
+ * Whether allowlist entry `e` accounts for divergence `d` completely.
+ * `ours` / `upstream` name the differing parts (a string, or parallel
+ * lists for several parts): with each `ours` part replaced by its
+ * `upstream` part, our text must become upstream's exactly, so a change
+ * anywhere else in the construct is still reported. `null` on a side
+ * means that side has no construct, and the other side's text must then
+ * equal the entry's exactly.
+ */
+function explains(e, d) {
+    if (e.sample !== '*' && e.sample !== d.sample) return false;
+    if (e.file !== undefined && e.file !== d.file) return false;
+    if (e.kind !== d.kind) return false;
+    if (e.label !== undefined && e.label !== d.label) return false;
+    if (e.ours === null || e.upstream === null) {
+        return e.ours === d.ours && e.upstream === d.upstream;
     }
-    return null;
+    if (d.ours === null || d.upstream === null) return false;
+    const from = asList(e.ours);
+    const to = asList(e.upstream);
+    if (from.length !== to.length || from.some((f) => !f || !d.ours.includes(f))) return false;
+    let text = d.ours;
+    from.forEach((f, i) => {
+        text = text.split(f).join(to[i]);
+    });
+    return text === d.upstream;
+}
+
+function allowed(d, allow) {
+    const hits = allow.filter((e) => explains(e, d));
+    for (const e of hits) e.hits++;
+    if (hits.length === 0) return null;
+    return hits.find((e) => e.status === 'bug') ?? hits[0];
 }
 
 // ------------------------------------------------------------------ main
@@ -614,7 +998,7 @@ const missing = [];
 let compared = 0;
 // Constructs found on the upstream side, per kind, and the samples
 // where neither side has any (for `--stats`).
-const stats = { kinds: {}, empty: [] };
+const stats = { kinds: {}, empty: [], resultOnly: [] };
 for (const corpus of Object.keys(CORPORA)) {
     const dir = path.join(SNAP, corpus);
     if (!fs.existsSync(dir)) continue;
@@ -648,6 +1032,7 @@ if (flag('--json')) {
     console.log(`${compared} samples compared; upstream constructs per kind:`);
     for (const [k, n] of Object.entries(stats.kinds).sort()) console.log(`  ${k}: ${n}`);
     console.log(`${stats.empty.length} samples reduce to no construct on either side`);
+    console.log(`${stats.resultOnly.length} samples reduce to the render result alone`);
     if (flag('--verbose')) for (const s of stats.empty) console.log(`  ${s}`);
 } else if (flag('--kinds')) {
     const by = {};

@@ -245,12 +245,13 @@ pub fn run(
 
 /// The `--listFiles` lines of tsgo's output: one absolute path per
 /// line. Diagnostic headers and code frames never form a bare
-/// absolute path of an existing file.
+/// absolute path of an existing file, so whether the line names one is
+/// the whole test (a directory may well be called `proj - Copy`).
 fn listed_files(stdout: &str) -> Vec<PathBuf> {
     stdout
         .lines()
         .map(str::trim_end)
-        .filter(|l| Path::new(l).is_absolute() && !l.contains(" - ") && Path::new(l).is_file())
+        .filter(|l| Path::new(l).is_absolute() && Path::new(l).is_file())
         .map(PathBuf::from)
         .collect()
 }

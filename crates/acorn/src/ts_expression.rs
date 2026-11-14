@@ -178,7 +178,7 @@ impl Parser {
                     allowed: &["public", "private", "protected", "override", "readonly"],
                     disallowed: &[],
                     stop_on_start_of_class_static_block: false,
-                    error: crate::ts::invalid_modifier_on_type_member,
+                    error: crate::ts::INVALID_MODIFIER_ON_TYPE_MEMBER,
                 },
             )?;
             is_property = modified.accessibility.is_some()

@@ -10,7 +10,7 @@ use crate::statement::{
     is_private_name_conflicted,
 };
 use crate::token::Tok;
-use crate::ts::{ListKind, ModifierRules, invalid_modifier_on_type_parameter_positions};
+use crate::ts::{INVALID_MODIFIER_ON_TYPE_PARAMETER_POSITIONS, ListKind, ModifierRules};
 use crate::ts_expression::BodyOf;
 use crate::ts_types::TypeParameterModifiers;
 
@@ -653,7 +653,7 @@ impl Parser {
                 allowed: CLASS_MEMBER_MODIFIERS,
                 disallowed: &["in", "out"],
                 stop_on_start_of_class_static_block: true,
-                error: invalid_modifier_on_type_parameter_positions,
+                error: INVALID_MODIFIER_ON_TYPE_PARAMETER_POSITIONS,
             },
         )?;
         let is_static = read.iter().any(|m| m == "static");

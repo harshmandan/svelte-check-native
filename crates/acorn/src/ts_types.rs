@@ -4,8 +4,8 @@
 use crate::state::{ForInit, Node, PResult, Parser, Ty};
 use crate::token::Tok;
 use crate::ts::{
-    ListKind, ModifierRules, invalid_modifier_on_type_member, invalid_modifier_on_type_parameter,
-    invalid_modifier_on_type_parameter_positions,
+    INVALID_MODIFIER_ON_TYPE_MEMBER, INVALID_MODIFIER_ON_TYPE_PARAMETER,
+    INVALID_MODIFIER_ON_TYPE_PARAMETER_POSITIONS, ListKind, ModifierRules,
 };
 
 /// Which modifiers a type parameter may carry where it stands.
@@ -198,25 +198,25 @@ impl Parser {
                 allowed: &[],
                 disallowed: &["in", "out"],
                 stop_on_start_of_class_static_block: false,
-                error: invalid_modifier_on_type_parameter_positions,
+                error: INVALID_MODIFIER_ON_TYPE_PARAMETER_POSITIONS,
             },
             TypeParameterModifiers::Const => ModifierRules {
                 allowed: &["const"],
                 disallowed: &["in", "out"],
                 stop_on_start_of_class_static_block: false,
-                error: invalid_modifier_on_type_parameter_positions,
+                error: INVALID_MODIFIER_ON_TYPE_PARAMETER_POSITIONS,
             },
             TypeParameterModifiers::InOut => ModifierRules {
                 allowed: &["in", "out"],
                 disallowed: NOT_ON_TYPE_PARAMETER,
                 stop_on_start_of_class_static_block: false,
-                error: invalid_modifier_on_type_parameter,
+                error: INVALID_MODIFIER_ON_TYPE_PARAMETER,
             },
             TypeParameterModifiers::Class => ModifierRules {
                 allowed: &["const", "in", "out"],
                 disallowed: NOT_ON_TYPE_PARAMETER,
                 stop_on_start_of_class_static_block: false,
-                error: invalid_modifier_on_type_parameter,
+                error: INVALID_MODIFIER_ON_TYPE_PARAMETER,
             },
         };
         self.ts_parse_modifiers(&mut node, &rules)?;
@@ -547,7 +547,7 @@ impl Parser {
                     "override",
                 ],
                 stop_on_start_of_class_static_block: false,
-                error: invalid_modifier_on_type_member,
+                error: INVALID_MODIFIER_ON_TYPE_MEMBER,
             },
         )?;
         if self.ts_try_parse_index_signature(&mut node)? {

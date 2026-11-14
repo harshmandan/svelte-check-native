@@ -49,23 +49,19 @@ pub(crate) struct ModifierRules<'a> {
     pub allowed: &'a [&'a str],
     pub disallowed: &'a [&'a str],
     pub stop_on_start_of_class_static_block: bool,
-    /// The error for a modifier from `disallowed`, given the modifier.
-    pub error: fn(&str) -> String,
+    /// The error for a modifier from `disallowed`.
+    pub error: &'static str,
 }
 
-pub(crate) fn invalid_modifier_on_type_member(modifier: &str) -> String {
-    format!("'{modifier}' modifier cannot appear on a type member.")
-}
-
-pub(crate) fn invalid_modifier_on_type_parameter(modifier: &str) -> String {
-    format!("'{modifier}' modifier cannot appear on a type parameter.")
-}
-
-pub(crate) fn invalid_modifier_on_type_parameter_positions(modifier: &str) -> String {
-    format!(
-        "'{modifier}' modifier can only appear on a type parameter of a class, interface or type alias."
-    )
-}
+// acorn-typescript raises the error for a disallowed modifier with the
+// function that would build the message, not with the message. What
+// reaches the user is that function's source text, so that text is
+// the message here.
+pub(crate) const INVALID_MODIFIER_ON_TYPE_MEMBER: &str =
+    "({ modifier }) => `'${modifier}' modifier cannot appear on a type member.`";
+pub(crate) const INVALID_MODIFIER_ON_TYPE_PARAMETER: &str =
+    "({ modifier }) => `'${modifier}' modifier cannot appear on a type parameter.`";
+pub(crate) const INVALID_MODIFIER_ON_TYPE_PARAMETER_POSITIONS: &str = "({ modifier }) => `'${modifier}' modifier can only appear on a type parameter of a class, interface or type alias.`";
 
 fn is_access_modifier(modifier: &str) -> bool {
     matches!(modifier, "private" | "public" | "protected")
@@ -562,7 +558,7 @@ impl Parser {
             }
 
             if rules.disallowed.contains(&modifier) {
-                return self.raise(self.start, (rules.error)(modifier));
+                return self.raise(self.start, rules.error);
             }
         }
         Ok(read)

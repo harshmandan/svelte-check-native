@@ -28,8 +28,7 @@ mod tag_reader;
 
 use tag_reader::TagError;
 
-use crate::rules::acorn_early_errors::{Mode, Position};
-use crate::rules::js_parse_error::{RESERVED_IN_STRICT_MODE, first_error_in};
+use crate::rules::js_parse_error::RESERVED_IN_STRICT_MODE;
 use svn_parser::tag_read::{AcornRead, AcornReadShape};
 
 /// One parse error: code, rendered message and range.
@@ -133,83 +132,84 @@ impl Finder<'_> {
     /// later pass replayed on the tree (`yield` as a name, a private name
     /// outside its class, a parameter named twice, an octal literal).
     fn acorn_read_error(&mut self, read: AcornRead) -> bool {
-        // JavaScript is read by acorn itself: the port says what acorn
-        // says. An expression is read where it stands in the template,
-        // as the compiler reads it; a pattern, a parameter list or a
-        // statement in the text the compiler builds around it.
-        if !self.ts {
-            let result = match read.shape {
-                AcornReadShape::Expression => svn_acorn::parse_expression_at(
-                    self.source,
-                    read.range.start,
-                    svn_acorn::Language::JavaScript,
-                ),
-                shape => {
-                    let (wrapped, origin) = read.wrapped(self.source);
-                    let result = if shape == AcornReadShape::Statement {
-                        svn_acorn::parse_statement_at(&wrapped, 0, svn_acorn::Language::JavaScript)
-                    } else {
-                        svn_acorn::parse_expression_at(&wrapped, 0, svn_acorn::Language::JavaScript)
-                    };
-                    result.map_err(|mut error| {
-                        error.pos += origin;
-                        error
-                    })
-                }
-            };
-            let Err(error) = result else {
-                return false;
-            };
-            // In the text the wrapping adds after the read, the
-            // wrapping itself is at fault.
-            if error.pos > read.range.end && read.shape != AcornReadShape::Expression {
-                return false;
-            }
-            self.report(
-                error.pos,
-                Code::js_parse_error,
-                format!("{}\nhttps://svelte.dev/e/js_parse_error", error.message),
-                Self::point(error.pos),
-            );
-            return true;
-        }
-        let (wrapped, origin) = read.wrapped(self.source);
-        let allocator = Allocator::default();
-        let source_type = SourceType::default()
-            .with_module(true)
-            .with_typescript(self.ts);
-        let parsed = oxc_parser::Parser::new(&allocator, &wrapped, source_type).parse();
-        let mode = Mode {
-            ts: self.ts,
-            transpiled: false,
+        self.acorn_read_error_in(read, false)
+    }
+
+    /// [`Self::acorn_read_error`]. With `whole_template` the expression
+    /// is read with everything after it in view, as the compiler reads
+    /// a tag's expression; without, the template ends where the read
+    /// does, as it does for the compiler where it has cut the template
+    /// short (an `{#each}` head it reads again without its `as …`).
+    fn acorn_read_error_in(&mut self, read: AcornRead, whole_template: bool) -> bool {
+        // acorn's port says what acorn says. An expression is read
+        // where it stands in the template, as the compiler reads it; a
+        // pattern, a parameter list or a statement in the text the
+        // compiler builds around it.
+        let language = if self.ts {
+            svn_acorn::Language::TypeScript
+        } else {
+            svn_acorn::Language::JavaScript
         };
-        let candidate = first_error_in(
-            &wrapped,
-            &parsed.program,
-            &parsed.diagnostics,
-            parsed.fatal_error,
-            mode,
-        );
-        let Some(candidate) = candidate else {
+        let result = match read.shape {
+            AcornReadShape::Expression => {
+                let template = if whole_template {
+                    self.source
+                } else {
+                    self.source
+                        .get(..read.range.end as usize)
+                        .unwrap_or(self.source)
+                };
+                svn_acorn::parse_expression_at(template, read.range.start, language)
+            }
+            // The compiler reads a pattern as the left side of an
+            // assignment it writes after it: the template up to the
+            // pattern's end, then ` = 1`.
+            AcornReadShape::Pattern => {
+                let mut template = self
+                    .source
+                    .get(..read.range.end as usize)
+                    .unwrap_or(self.source)
+                    .to_string();
+                template.push_str(" = 1");
+                svn_acorn::parse_expression_at(&template, read.range.start, language)
+            }
+            shape => {
+                let (wrapped, origin) = read.wrapped(self.source);
+                let result = if shape == AcornReadShape::Statement {
+                    svn_acorn::parse_statement_at(&wrapped, 0, language)
+                } else {
+                    svn_acorn::parse_expression_at(&wrapped, 0, language)
+                };
+                result.map_err(|mut error| {
+                    error.pos += origin;
+                    error
+                })
+            }
+        };
+        let Err(error) = result else {
             return false;
         };
-        let Position::At(at) = candidate.at else {
+        // In the text the wrapping adds after the read, the wrapping
+        // itself is at fault.
+        if error.pos > read.range.end && read.shape != AcornReadShape::Expression {
             return false;
-        };
-        let mut at = origin + at;
-        if at > read.range.end {
-            // In the text the wrapping adds after the read. An expression
-            // that runs out is acorn meeting whatever follows it; for a
-            // pattern or parameters the wrapping itself is at fault.
-            if read.shape != AcornReadShape::Expression {
-                return false;
-            }
-            at = read.range.end;
         }
+        // acorn-typescript places a few errors at the column number of
+        // a position, taken for an offset.
+        let at = if error.column_of {
+            let line_start = self.source[..error.pos as usize]
+                .rfind('\n')
+                .map_or(0, |i| i + 1);
+            self.source[line_start..error.pos as usize]
+                .encode_utf16()
+                .count() as u32
+        } else {
+            error.pos
+        };
         self.report(
             at,
             Code::js_parse_error,
-            format!("{}\nhttps://svelte.dev/e/js_parse_error", candidate.message),
+            format!("{}\nhttps://svelte.dev/e/js_parse_error", error.message),
             Self::point(at),
         );
         true
@@ -220,7 +220,7 @@ impl Finder<'_> {
     /// than a syntax error in strict-mode module code (a private name
     /// outside its class, `yield` as a name, an octal literal).
     fn expression(&mut self, range: Range) {
-        self.expression_read_before(range, None);
+        self.expression_read_before(range, None, true);
     }
 
     /// [`Self::expression`] for the expression a tag opens with, when
@@ -231,10 +231,20 @@ impl Finder<'_> {
         range: Range,
         error: Option<&svn_parser::tag_read::TagReadError>,
     ) {
-        self.expression_read_before(range, error.map(|e| e.at));
+        self.expression_read_before(range, error.map(|e| e.at), true);
     }
 
-    fn expression_read_before(&mut self, range: Range, limit: Option<u32>) {
+    /// The same for an `{#each}` block's iterable, which the compiler
+    /// reads from a template cut short before the `as`.
+    fn each_expression(
+        &mut self,
+        range: Range,
+        error: Option<&svn_parser::tag_read::TagReadError>,
+    ) {
+        self.expression_read_before(range, error.map(|e| e.at), false);
+    }
+
+    fn expression_read_before(&mut self, range: Range, limit: Option<u32>, whole_template: bool) {
         let text = range.slice(self.source);
         let svn_parser::acorn::Read::Expression { end, .. } =
             svn_parser::acorn::read_expression(text, self.ts)
@@ -248,10 +258,13 @@ impl Finder<'_> {
         if is_plain_reference(text) {
             return;
         }
-        self.acorn_read_error(AcornRead {
-            range: Range::new(range.start, range.start + end),
-            shape: AcornReadShape::Expression,
-        });
+        self.acorn_read_error_in(
+            AcornRead {
+                range: Range::new(range.start, range.start + end),
+                shape: AcornReadShape::Expression,
+            },
+            whole_template,
+        );
     }
 
     /// The initializer of the `{@const pattern = init}` whose pattern
@@ -372,7 +385,7 @@ impl Finder<'_> {
             }
             Node::EachBlock(b) => {
                 self.read_error(b.open_error.as_ref());
-                self.first_expression(b.expression_range, b.open_error.as_ref());
+                self.each_expression(b.expression_range, b.open_error.as_ref());
                 if b.open_error.is_none() {
                     let context = b.as_clause.as_ref().and_then(|c| c.context_range);
                     self.pattern(context.map(|r| r.start));

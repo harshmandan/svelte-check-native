@@ -158,16 +158,24 @@ pub(crate) fn merged_script_error(
 
 /// The first error acorn raises in one script.
 fn first_error(script: &Script<'_, '_, '_>, mode: Mode) -> Option<Candidate> {
-    // A JavaScript script the compiler reads as written is read by
-    // acorn itself: the port says what acorn says.
-    if !mode.ts && !mode.transpiled {
-        return svn_acorn::parse(
-            script.section.content,
-            svn_acorn::Reading::Script,
-            svn_acorn::Language::JavaScript,
-        )
-        .err()
-        .map(|error| Candidate::at(error.pos, error.message));
+    // A script the compiler reads as written is read by acorn itself
+    // (with acorn-typescript for TypeScript): the port says what it
+    // says.
+    if !mode.transpiled {
+        let language = if mode.ts {
+            svn_acorn::Language::TypeScript
+        } else {
+            svn_acorn::Language::JavaScript
+        };
+        return svn_acorn::parse(script.section.content, svn_acorn::Reading::Script, language)
+            .err()
+            .map(|error| {
+                let mut candidate = Candidate::at(error.pos, error.message);
+                if error.column_of {
+                    candidate.at = Position::ColumnOf(error.pos);
+                }
+                candidate
+            });
     }
     first_error_in(
         script.section.content,

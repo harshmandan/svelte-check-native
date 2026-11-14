@@ -71,11 +71,87 @@ pub struct RejectedImports {
     pub judged_names: Vec<(PathBuf, u32, u32)>,
 }
 
-/// TypeScript's comment directive for the line `offset` is on: the
-/// 0-based line of a `// @ts-ignore` or `// @ts-expect-error` comment
-/// on the line before, or before that across blank lines and lines
-/// that are only a `//` comment. The flag says it expects the error.
-fn comment_directive(source: &str, offset: u32) -> Option<(u32, bool)> {
+/// The comment directives in `file`'s source as TypeScript's scanner
+/// finds them: the 0-based line of each `@ts-ignore` / `@ts-expect-error`
+/// comment, and whether it expects an error. A component's are those of
+/// its scripts. A line comment is one when it starts with two or three
+/// slashes and whitespace; a block comment when its last line starts,
+/// after whitespace, with any `/` and `*` and whitespace.
+fn comment_directives(file: &Path, source: &str) -> HashMap<u32, bool> {
+    use oxc_ast::CommentKind;
+    let mut out = HashMap::new();
+    let pm = PositionMap::new(source);
+    let mut read = |program: &Program<'_>, base: u32| {
+        for comment in &program.comments {
+            let start = base + comment.span.start;
+            let end = base + comment.span.end;
+            let Some(text) = source.get(start as usize..end as usize) else {
+                continue;
+            };
+            let (at, directive) = match comment.kind {
+                CommentKind::Line => {
+                    let after = text.strip_prefix("//").unwrap_or(text);
+                    let after = after.strip_prefix('/').unwrap_or(after);
+                    (start, after.trim_start_matches(is_js_space))
+                }
+                CommentKind::SingleLineBlock | CommentKind::MultiLineBlock => {
+                    // The scanner reads only the comment's last line.
+                    let last_line = text
+                        .rfind(['\n', '\r', '\u{2028}', '\u{2029}'])
+                        .map_or(0, |i| {
+                            i + text[i..].chars().next().map_or(1, char::len_utf8)
+                        });
+                    let line = &text[last_line..];
+                    let after = line
+                        .trim_start_matches(is_js_space)
+                        .trim_start_matches(['/', '*'])
+                        .trim_start_matches(is_js_space);
+                    (start + last_line as u32, after)
+                }
+                _ => continue,
+            };
+            let expects = if directive.starts_with("@ts-expect-error") {
+                true
+            } else if directive.starts_with("@ts-ignore") {
+                false
+            } else {
+                continue;
+            };
+            out.insert(pm.position_of(at).line, expects);
+        }
+    };
+    if file.extension().is_some_and(|e| e == "svelte") {
+        let (doc, _) = svn_parser::parse_sections(source);
+        for script in [doc.instance_script.as_ref(), doc.module_script.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            let allocator = Allocator::default();
+            let parsed = svn_parser::parse_script_body(&allocator, script.content, script.lang);
+            read(&parsed.program, script.content_range.start);
+        }
+    } else if let Ok(source_type) = SourceType::from_path(file) {
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, source_type).parse();
+        read(&parsed.program, 0);
+    }
+    out
+}
+
+/// JavaScript's `\s`: white space and line terminators.
+fn is_js_space(c: char) -> bool {
+    c == '\u{feff}' || (c.is_whitespace() && c != '\u{85}')
+}
+
+/// The comment directive that applies to the line `offset` is on, as
+/// TypeScript looks for it: on the line before, or before that across
+/// blank lines and lines that are only a `//` comment. Its 0-based
+/// line, and whether it expects an error.
+fn comment_directive(
+    source: &str,
+    directives: &HashMap<u32, bool>,
+    offset: u32,
+) -> Option<(u32, bool)> {
     let before = source.get(..offset as usize)?;
     let mut lines: Vec<&str> = before.lines().collect();
     // The line the diagnostic is on.
@@ -83,16 +159,8 @@ fn comment_directive(source: &str, offset: u32) -> Option<(u32, bool)> {
         lines.pop();
     }
     for (index, line) in lines.iter().enumerate().rev() {
-        let comment = line
-            .find("//")
-            .map(|at| line[at + 2..].trim_start_matches('/'));
-        if let Some(text) = comment.map(str::trim_start) {
-            if text.starts_with("@ts-expect-error") {
-                return Some((index as u32, true));
-            }
-            if text.starts_with("@ts-ignore") {
-                return Some((index as u32, false));
-            }
+        if let Some(&expects) = directives.get(&(index as u32)) {
+            return Some((index as u32, expects));
         }
         let trimmed = line.trim();
         if !(trimmed.is_empty() || trimmed.starts_with("//")) {
@@ -167,9 +235,10 @@ pub fn rejected_import_diagnostics(
         };
         let dir = file.parent().unwrap_or_else(|| Path::new("."));
         let pm = PositionMap::new(&source);
+        let directives = comment_directives(file, &source);
         let mut push = |start: u32, end: u32, code: u32, message: String| {
             // A comment directive above the line takes the error.
-            match comment_directive(&source, start) {
+            match comment_directive(&source, &directives, start) {
                 Some((line, true)) => {
                     satisfied_expectations.push((file.clone(), line + 1));
                     return;

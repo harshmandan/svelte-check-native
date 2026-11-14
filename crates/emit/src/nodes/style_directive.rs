@@ -54,32 +54,53 @@ pub(crate) fn emit_style_directive(
                 }
                 return;
             }
+            // A lone mustache in quotes (`style:color="{value}"`) is the
+            // expression itself to svelte2tsx, as `style:color={value}`
+            // is, so its type is checked rather than a template
+            // literal's `string`.
+            if let [
+                svn_parser::AttrValuePart::Expression {
+                    expression_range, ..
+                },
+            ] = av.parts.as_slice()
+            {
+                emit_expression_value(buf, source, *expression_range, indent);
+                return;
+            }
             emit_template_literal(buf, source, av, indent);
         }
         Some(svn_parser::DirectiveValue::Expression {
             expression_range, ..
-        }) => {
-            let Some(expr) =
-                source.get(expression_range.start as usize..expression_range.end as usize)
-            else {
-                return;
-            };
-            let trimmed = expr.trim();
-            if trimmed.is_empty() {
-                return;
-            }
-            let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
-            let start = expression_range.start + leading_ws;
-            let end = start + trimmed.len() as u32;
-            let _ = write!(buf, "{indent}__svn_ensure_type(String, Number, ");
-            buf.append_with_source(trimmed, svn_core::Range::new(start, end));
-            let _ = writeln!(buf, ");");
-        }
+        }) => emit_expression_value(buf, source, *expression_range, indent),
         // BindPair (`{getter, setter}`) is bind-only — not legal under
         // `style:`, but enumerate it so the compiler enforces match
         // exhaustiveness if a new DirectiveValue variant lands.
         Some(svn_parser::DirectiveValue::BindPair { .. }) => {}
     }
+}
+
+/// Emit `__svn_ensure_type(String, Number, EXPR);` for the expression
+/// at `expression_range`, mapped to its source.
+fn emit_expression_value(
+    buf: &mut EmitBuffer,
+    source: &str,
+    expression_range: svn_core::Range,
+    indent: &str,
+) {
+    let Some(expr) = source.get(expression_range.start as usize..expression_range.end as usize)
+    else {
+        return;
+    };
+    let trimmed = expr.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
+    let start = expression_range.start + leading_ws;
+    let end = start + trimmed.len() as u32;
+    let _ = write!(buf, "{indent}__svn_ensure_type(String, Number, ");
+    buf.append_with_source(trimmed, svn_core::Range::new(start, end));
+    let _ = writeln!(buf, ");");
 }
 
 /// Emit the template-literal form for a quoted

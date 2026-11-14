@@ -31,7 +31,7 @@ pub fn visit_text(t: &Text, preceding: &[&Node], ctx: &mut LintContext<'_>) {
     //
     // Walk contiguous runs of bidi-control chars — upstream fires
     // once per match (each match is a run of 1+ of these chars).
-    for run in bidi_runs(t.range, ctx.source) {
+    for run in bidi_runs(t.range, ctx.source, false) {
         // A text node does not take the ignore comments before it
         // the way elements do. Instead, each match looks at every
         // earlier comment in the fragment (not just the adjacent
@@ -60,30 +60,48 @@ pub fn visit_text(t: &Text, preceding: &[&Node], ctx: &mut LintContext<'_>) {
 /// The text chunks of an attribute value are text nodes to the
 /// compiler too; outside a fragment they skip the comment scan.
 pub fn visit_attribute_text(range: Range, ctx: &mut LintContext<'_>) {
-    for run in bidi_runs(range, ctx.source) {
+    for run in bidi_runs(range, ctx.source, true) {
         let msg = messages::bidirectional_control_characters();
         ctx.emit(Code::bidirectional_control_characters, msg, run);
     }
 }
 
-/// Each maximal run of bidi-control characters in `range`.
-fn bidi_runs(range: Range, source: &str) -> Vec<Range> {
-    let base = range.start;
+/// Each maximal run of bidi-control characters in the text at `range`.
+///
+/// The compiler looks for them in the text with its character
+/// references decoded, and reports a run at its place in that decoded
+/// text counted from where the node starts in the file. A run written
+/// as `&#x202E;` is therefore reported one character wide, at the
+/// offset it has once the references before it are decoded.
+fn bidi_runs(range: Range, source: &str, is_attribute_value: bool) -> Vec<Range> {
     let content = range.slice(source);
-    let mut runs = Vec::new();
-    let mut chars = content.char_indices().peekable();
-    while let Some((i, c)) = chars.next() {
-        if is_bidi_control(c) {
-            let mut end = i + c.len_utf8();
-            while let Some(&(j, nc)) = chars.peek() {
-                if !is_bidi_control(nc) {
-                    break;
-                }
-                chars.next();
-                end = j + nc.len_utf8();
+    let decoded = crate::html_decode::decode_character_references(content, is_attribute_value);
+    // Where the character `units` UTF-16 units after the node's start
+    // begins in the file.
+    let offset_after = |units: usize| {
+        let mut left = units;
+        let rest = source.get(range.start as usize..).unwrap_or("");
+        for (i, c) in rest.char_indices() {
+            if left == 0 {
+                return range.start + i as u32;
             }
-            runs.push(Range::new(base + i as u32, base + end as u32));
+            left = left.saturating_sub(c.len_utf16());
         }
+        source.len() as u32
+    };
+    let mut runs = Vec::new();
+    let mut units = 0;
+    let mut run_start: Option<usize> = None;
+    for c in decoded.chars() {
+        if is_bidi_control(c) {
+            run_start.get_or_insert(units);
+        } else if let Some(start) = run_start.take() {
+            runs.push(Range::new(offset_after(start), offset_after(units)));
+        }
+        units += c.len_utf16();
+    }
+    if let Some(start) = run_start {
+        runs.push(Range::new(offset_after(start), offset_after(units)));
     }
     runs
 }

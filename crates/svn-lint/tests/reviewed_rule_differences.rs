@@ -322,6 +322,67 @@ const CASES: &[(&str, &[Reported])] = &[
             ("state_referenced_locally", 68, 69, false),
         ],
     ),
+    // A comment in a promise that its tag follows with then or catch is
+    // read like any other before the script.
+    (
+        "{#await /* svelte-ignore state_referenced_locally */ 1 then v}{v}{/await}<script>let a = $state(0), b = a;</script>{b}<button onclick={()=>a++}>x</button>",
+        &[],
+    ),
+    (
+        "{#await 1 /* svelte-ignore state_referenced_locally */ then v}{v}{/await}<script>let a = $state(0), b = a;</script>{b}<button onclick={()=>a++}>x</button>",
+        &[],
+    ),
+    (
+        "{#await /* svelte-ignore state_referenced_locally */ 1 catch e}{e}{/await}<script>let a = $state(0), b = a;</script>{b}<button onclick={()=>a++}>x</button>",
+        &[],
+    ),
+    (
+        "{#await /* svelte-ignore state_referenced_locally */ 1}x{:then v}{v}{/await}<script>let a = $state(0), b = a;</script>{b}<button onclick={()=>a++}>x</button>",
+        &[],
+    ),
+    (
+        "{#await 1 then v}{v}{/await}<script>let a = $state(0), b = a;</script>{b}<button onclick={()=>a++}>x</button>",
+        &[("state_referenced_locally", 59, 60, false)],
+    ),
+    // A bidirectional control character written as a character reference
+    // is found in the decoded text, and reported where it stands there.
+    (
+        "<p>a&#x202E;b</p>",
+        &[("bidirectional_control_characters", 4, 5, false)],
+    ),
+    (
+        "<p>a&#x202E;&#x202D;b c&#x2066;</p>",
+        &[
+            ("bidirectional_control_characters", 4, 6, false),
+            ("bidirectional_control_characters", 9, 10, false),
+        ],
+    ),
+    (
+        "<p>é&#x202E;b</p>",
+        &[("bidirectional_control_characters", 5, 6, false)],
+    ),
+    (
+        "<p title=\"a&#x202E;b\">x</p>",
+        &[("bidirectional_control_characters", 11, 12, false)],
+    ),
+    (
+        "<p>ab&#x202E;</p>\n<p>\u{202e}</p>",
+        &[
+            ("bidirectional_control_characters", 5, 6, false),
+            ("bidirectional_control_characters", 21, 24, false),
+        ],
+    ),
+    (
+        "<p>&amp;&#x202E;b</p>",
+        &[("bidirectional_control_characters", 4, 5, false)],
+    ),
+    (
+        "<p>a\u{202e}b\u{202e}\u{202d}c</p>",
+        &[
+            ("bidirectional_control_characters", 4, 7, false),
+            ("bidirectional_control_characters", 8, 14, false),
+        ],
+    ),
 ];
 
 #[test]

@@ -587,7 +587,32 @@ fn collect_fragment_comments(fragment: &Fragment, source: &str, before: u32, out
                 }
             }
             Node::AwaitBlock(b) => {
-                expr(b.expression_range);
+                // `{#await promise then value}`: the tag goes on past
+                // the promise with a keyword that is no JavaScript, so
+                // the promise's comments are read up to that keyword.
+                let close = svn_parser::find_mustache_end(source, b.expression_range.start);
+                let keyword = [
+                    b.then_branch.as_ref().and_then(|t| t.context_range),
+                    b.catch_branch.as_ref().and_then(|c| c.context_range),
+                ]
+                .into_iter()
+                .flatten()
+                .map(|context| context.start)
+                .filter(|&at| close.is_some_and(|close| at < close))
+                .min()
+                .and_then(|context_start| {
+                    let between =
+                        source.get(b.expression_range.end as usize..context_start as usize)?;
+                    let at = between.rfind("then").max(between.rfind("catch"))?;
+                    Some(b.expression_range.end + at as u32)
+                });
+                match keyword {
+                    Some(end) => out.extend(js_comments_in(
+                        source,
+                        Range::new(b.expression_range.start, end),
+                    )),
+                    None => expr(b.expression_range),
+                }
                 if let Some(pending) = &b.pending {
                     collect_fragment_comments(pending, source, before, out);
                 }

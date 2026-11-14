@@ -1,7 +1,7 @@
 {
     "errors": [
-        { "file": "Page.svelte", "line": 5, "column": 1, "code": 2741 },
-        { "file": "Page.svelte", "line": 6, "column": 1, "code": 2741 }
+        { "file": "input.svelte", "line": 5, "column": 1, "code": 2741 },
+        { "file": "input.svelte", "line": 6, "column": 1, "code": 2741 }
     ],
     "_note": "A tag name runs to the next whitespace, `/` or `>`, as the Svelte parser reads it, so `<Child$x>` is the component `Child$x` and `<kids.$Kid>` the component `kids.$Kid`. Stopping the name at the `$` read `<Child$x>` as `<Child>` with a `$x` attribute and `<kids.$Kid>` as an element named `kids.`, and the file was dropped from the run. svelte-check moves a missing-prop error onto the tag name as its HTML scanner reads it, which ends before the `$`."
 }

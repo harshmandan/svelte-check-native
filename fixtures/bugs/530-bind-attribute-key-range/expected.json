@@ -2,7 +2,7 @@
     "ranges": true,
     "errors": [
         {
-            "file": "Page.svelte",
+            "file": "input.svelte",
             "line": 6,
             "column": 18,
             "code": 2322,
@@ -10,7 +10,7 @@
             "endColumn": 19
         },
         {
-            "file": "Page.svelte",
+            "file": "input.svelte",
             "line": 7,
             "column": 18,
             "code": 2322,
@@ -18,7 +18,7 @@
             "endColumn": 19
         },
         {
-            "file": "Page.svelte",
+            "file": "input.svelte",
             "line": 8,
             "column": 18,
             "code": 2322,
@@ -26,7 +26,7 @@
             "endColumn": 19
         },
         {
-            "file": "Page.svelte",
+            "file": "input.svelte",
             "line": 9,
             "column": 18,
             "code": 2322,
@@ -34,7 +34,7 @@
             "endColumn": 29
         },
         {
-            "file": "Page.svelte",
+            "file": "input.svelte",
             "line": 10,
             "column": 18,
             "code": 2322,
@@ -42,7 +42,7 @@
             "endColumn": 23
         },
         {
-            "file": "Page.svelte",
+            "file": "input.svelte",
             "line": 11,
             "column": 18,
             "code": 2322,
@@ -50,7 +50,7 @@
             "endColumn": 22
         },
         {
-            "file": "Page.svelte",
+            "file": "input.svelte",
             "line": 12,
             "column": 18,
             "code": 2322,
@@ -58,7 +58,7 @@
             "endColumn": 22
         },
         {
-            "file": "Page.svelte",
+            "file": "input.svelte",
             "line": 13,
             "column": 18,
             "code": 2322,
@@ -66,7 +66,7 @@
             "endColumn": 23
         },
         {
-            "file": "Page.svelte",
+            "file": "input.svelte",
             "line": 14,
             "column": 9,
             "code": 2322,
@@ -74,7 +74,7 @@
             "endColumn": 20
         },
         {
-            "file": "Page.svelte",
+            "file": "input.svelte",
             "line": 16,
             "column": 0,
             "code": 2322,
@@ -82,7 +82,7 @@
             "endColumn": 11
         },
         {
-            "file": "Page.svelte",
+            "file": "input.svelte",
             "line": 19,
             "column": 21,
             "code": 2322,
@@ -90,7 +90,7 @@
             "endColumn": 28
         },
         {
-            "file": "Page.svelte",
+            "file": "input.svelte",
             "line": 20,
             "column": 21,
             "code": 2322,
@@ -98,7 +98,7 @@
             "endColumn": 22
         },
         {
-            "file": "Page.svelte",
+            "file": "input.svelte",
             "line": 21,
             "column": 21,
             "code": 2322,
@@ -106,7 +106,7 @@
             "endColumn": 43
         },
         {
-            "file": "Page.svelte",
+            "file": "input.svelte",
             "line": 22,
             "column": 17,
             "code": 2322,
@@ -114,7 +114,7 @@
             "endColumn": 28
         },
         {
-            "file": "Page.svelte",
+            "file": "input.svelte",
             "line": 23,
             "column": 9,
             "code": 2322,
@@ -124,7 +124,7 @@
     ],
     "warnings": [
         {
-            "file": "Page.svelte",
+            "file": "input.svelte",
             "line": 13,
             "column": 0,
             "code": "element_invalid_self_closing_tag",

@@ -218,6 +218,15 @@ function renameSynthesised(text) {
 
 function normalize(text) {
     text = renameSynthesised(text);
+    // svelte2tsx ends a component's block with the bare tag name
+    // (`… } Component}`), a reference for editor navigation with no
+    // effect on types. Taken out while the white space is still there:
+    // without it `return x }` reads as one name before the brace. A tag
+    // name is capitalised, dotted or namespaced.
+    text = text.replace(
+        /([})]);?(\s*)(?:[A-Z][\w$.]*|[a-z_$][\w$]*[.:][\w$.:]*)\s*\}/g,
+        '$1$2}'
+    );
     let s = '';
     let i = 0;
     while (i < text.length) {
@@ -250,10 +259,6 @@ function normalize(text) {
             .replace(/H\.snippetreturn\(\)/g, 'H.any(0)')
             .replace(/=>\{returnH\.any\(0\);?\}/g, '=>H.any(0)')
             .replace(/;\}/g, '}')
-            // svelte2tsx ends a component's block with the bare tag name
-            // (`… } Component}`), a reference for editor navigation with no
-            // effect on types.
-            .replace(/([})]);?[A-Za-z_$][\w$.]*\}/g, '$1}')
     );
 }
 
@@ -340,7 +345,9 @@ function extract(original) {
         found.push({
             kind: 'element',
             at: m.index,
-            label: tag.trim(),
+            // The tag: a string, or for `<svelte:element>` an expression,
+            // which we parenthesise and upstream writes bare.
+            label: stripOuterParens(normalize(tag)),
             text: unwrapValues(normalize(attrs + (rest.length ? ',' + rest.join(',') : ''))),
         });
     }
@@ -465,7 +472,9 @@ function compareSample(corpus, name) {
                 x &&
                 y &&
                 x.text === y.text &&
-                (!['component', 'snippet'].includes(kind) || x.label === y.label);
+                // An element is its tag, which decides the type its
+                // attributes are checked against, plus those attributes.
+                (!['component', 'snippet', 'element'].includes(kind) || x.label === y.label);
             if (same) continue;
             out.push({
                 sample: `${corpus}/${name}`,

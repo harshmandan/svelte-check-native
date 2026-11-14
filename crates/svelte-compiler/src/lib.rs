@@ -796,31 +796,45 @@ pub struct Transpiled {
     pub mappings: String,
 }
 
+/// What became of one script given to [`transpile_scripts`].
+#[derive(Debug, Clone)]
+pub enum Transpile {
+    /// TypeScript printed it.
+    Printed(Transpiled),
+    /// `transpileModule` threw on it.
+    Threw,
+    /// It could not be asked: no JS runtime, no `typescript` in the
+    /// workspace that offers `transpileModule`, or the process given
+    /// this script failed.
+    NotRun,
+}
+
 /// Transpile each `(file name, TypeScript)` with the workspace's own
 /// `typescript` package, exactly as svelte-check's fallback preprocessor
-/// calls it.
+/// calls it. One entry per script, in order.
 ///
 /// TypeScript prints on one thread, so the scripts are shared out over
 /// several JS processes once there are enough of them to pay for
-/// loading the package more than once.
-///
-/// `None` when that cannot be done at all: no JS runtime, or no
-/// `typescript` in the workspace that offers `transpileModule`. An entry
-/// is `None` where the transpile of that script threw.
-pub fn transpile_scripts(
-    workspace: &Path,
-    scripts: &[(&Path, &str)],
-) -> Option<Vec<Option<Transpiled>>> {
+/// loading the package more than once. A process that fails costs only
+/// its own scripts their answer.
+pub fn transpile_scripts(workspace: &Path, scripts: &[(&Path, &str)]) -> Vec<Transpile> {
     /// Fewer scripts than this are not worth a process of their own.
     const PER_PROCESS: usize = 150;
+    let not_run = || vec![Transpile::NotRun; scripts.len()];
     if scripts.is_empty() {
-        return Some(Vec::new());
+        return Vec::new();
     }
-    let runtime = pick_runtime().ok()?;
-    let (_script_dir, script) = write_script_to_temp("transpile", TRANSPILE_JS).ok()?;
+    let Ok(runtime) = pick_runtime() else {
+        return not_run();
+    };
+    let Ok((_script_dir, script)) = write_script_to_temp("transpile", TRANSPILE_JS) else {
+        return not_run();
+    };
     // The script resolves `typescript` from here, which takes an
     // absolute path.
-    let workspace = &std::path::absolute(workspace).ok()?;
+    let Ok(workspace) = std::path::absolute(workspace) else {
+        return not_run();
+    };
     let cores = thread::available_parallelism().map_or(1, usize::from);
     let processes = scripts.len().div_ceil(PER_PROCESS).clamp(1, cores);
     let per_process = scripts.len().div_ceil(processes);
@@ -828,14 +842,22 @@ pub fn transpile_scripts(
         let handles: Vec<_> = scripts
             .chunks(per_process)
             .map(|chunk| {
-                scope.spawn(|| transpile_in_one_process(&runtime, &script, workspace, chunk))
+                let handle =
+                    scope.spawn(|| transpile_in_one_process(&runtime, &script, &workspace, chunk));
+                (chunk.len(), handle)
             })
             .collect();
         let mut printed = Vec::with_capacity(scripts.len());
-        for handle in handles {
-            printed.extend(handle.join().ok()??);
+        for (len, handle) in handles {
+            match handle.join().ok().flatten() {
+                Some(chunk) => printed.extend(chunk.into_iter().map(|p| match p {
+                    Some(p) => Transpile::Printed(p),
+                    None => Transpile::Threw,
+                })),
+                None => printed.extend(std::iter::repeat_n(Transpile::NotRun, len)),
+            }
         }
-        Some(printed)
+        printed
     })
 }
 

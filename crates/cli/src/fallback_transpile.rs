@@ -307,29 +307,42 @@ pub(crate) struct PrintedScript {
 /// The workspace's own `typescript` package prints them, as it does for
 /// svelte-check: what TypeScript makes of a script it has to repair is
 /// its printer's business, and no other printer says the same. Where
-/// that package cannot be asked (no JS runtime, or a `typescript`
-/// without `transpileModule`), tsgo prints instead.
+/// that package cannot be asked for a script (no JS runtime, a
+/// `typescript` without `transpileModule`, or its process failed), tsgo
+/// prints it instead.
 pub(crate) fn print_scripts(
     workspace: &Path,
     scripts: &[(&Path, &str)],
 ) -> Vec<Option<PrintedScript>> {
-    if let Some(printed) = svn_svelte_compiler::transpile_scripts(workspace, scripts) {
-        return printed
-            .into_iter()
-            .map(|script| {
-                let script = script?;
-                Some(PrintedScript {
-                    map: decode_mappings(&script.mappings)?,
+    let answers = svn_svelte_compiler::transpile_scripts(workspace, scripts);
+    let mut printed: Vec<Option<PrintedScript>> = Vec::with_capacity(scripts.len());
+    let mut not_run: Vec<usize> = Vec::new();
+    for (i, answer) in answers.into_iter().enumerate() {
+        printed.push(match answer {
+            svn_svelte_compiler::Transpile::Printed(script) => decode_mappings(&script.mappings)
+                .map(|map| PrintedScript {
+                    map,
                     code: script.code,
-                })
-            })
-            .collect();
+                }),
+            svn_svelte_compiler::Transpile::Threw => None,
+            svn_svelte_compiler::Transpile::NotRun => {
+                not_run.push(i);
+                None
+            }
+        });
     }
-    let contents: Vec<&str> = scripts.iter().map(|(_, content)| *content).collect();
-    match svn_typecheck::discover(workspace) {
+    if not_run.is_empty() {
+        return printed;
+    }
+    let contents: Vec<&str> = not_run.iter().map(|&i| scripts[i].1).collect();
+    let by_tsgo = match svn_typecheck::discover(workspace) {
         Ok(tsgo) => print_split(&tsgo, &contents),
         Err(_) => vec![None; contents.len()],
+    };
+    for (i, script) in not_run.into_iter().zip(by_tsgo) {
+        printed[i] = script;
     }
+    printed
 }
 
 /// Print with tsgo. It goes through as few processes as possible. tsgo

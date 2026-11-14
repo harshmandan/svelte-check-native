@@ -893,6 +893,46 @@ mod tests {
         );
     }
 
+    /// TypeScript prints in several processes once there are enough
+    /// scripts. One process dying costs only its own scripts the real
+    /// print; the others' prints are kept.
+    #[test]
+    fn one_failed_transpile_process_keeps_the_others_prints() {
+        if std::thread::available_parallelism().map_or(1, usize::from) < 2 {
+            return;
+        }
+        let ws = tempfile::tempdir().unwrap();
+        let ts = ws.path().join("node_modules/typescript");
+        std::fs::create_dir_all(&ts).unwrap();
+        std::fs::write(
+            ts.join("package.json"),
+            r#"{ "name": "typescript", "version": "5.9.0", "main": "index.js" }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            ts.join("index.js"),
+            r#"exports.ModuleKind = { ESNext: 99 };
+exports.ScriptTarget = { ESNext: 99 };
+exports.transpileModule = (content) => {
+    if (content.includes('CRASH')) process.exit(3);
+    return { outputText: '/*mock*/' + content, sourceMapText: '{"mappings":"AAAA"}' };
+};
+"#,
+        )
+        .unwrap();
+        let file = ws.path().join("A.svelte");
+        let mut contents: Vec<String> = (0..400).map(|i| format!("let a{i} = {i};")).collect();
+        contents[399] = "CRASH".to_string();
+        let scripts: Vec<(&Path, &str)> = contents
+            .iter()
+            .map(|c| (file.as_path(), c.as_str()))
+            .collect();
+        let printed = print_scripts(ws.path(), &scripts);
+        assert_eq!(printed.len(), scripts.len());
+        let first = printed[0].as_ref().expect("first script printed");
+        assert_eq!(first.code, "/*mock*/let a0 = 0;");
+    }
+
     #[test]
     fn enum_exports_silence_unused_export_warnings() {
         let message = "Component has unused export property 'E'. If it is for external reference only, please consider using `export const E`";

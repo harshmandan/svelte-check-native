@@ -121,24 +121,6 @@
     },
     {
       "status": "bug",
-      "sample": ["svelte2tsx/ts-$$Props-interface", "svelte2tsx/ts-$$Props-type"],
-      "kind": "result",
-      "label": "props",
-      "ours": ["name1?:typeofname1,name2?:typeofname2,rename1?:typeofrename1,rename2?:typeofrename2", "T<$$Props>"],
-      "upstream": ["name1?:string,name2:string,renamed1?:string,renamed2:string", "T<{Foo?:typeofFoo,bar?:typeofbar,baz?:string,RenamedFoo?:typeofRenameFoo,renamedbar?:typeofrenamebar,renamedbaz?:string}&$$Props>"],
-      "reason": "With a `$$Props` type, the props checked against it by `__sveltets_2_ensureRightProps` use the local names (`rename1`) where svelte2tsx uses the exported ones (`renamed1`), and make required props optional (`name2`); and the result's props type leaves out the intersection with the component's other exports (`Foo`, `bar`, …) that svelte2tsx adds to `$$Props`."
-    },
-    {
-      "status": "bug",
-      "sample": "svelte2tsx/ts-$$Props-with-$$props",
-      "kind": "result",
-      "label": "props",
-      "ours": "T<$$Props>",
-      "upstream": "T<{c?:typeofc}&$$Props>",
-      "reason": "With a `$$Props` type, svelte2tsx's props type is the exported props intersected with `$$Props` (`{c?: typeof c} & $$Props`); ours is `$$Props` alone."
-    },
-    {
-      "status": "bug",
       "sample": "svelte2tsx/ts-uses-$$props",
       "kind": "result",
       "label": "props",

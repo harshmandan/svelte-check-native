@@ -194,6 +194,13 @@ struct LoneParam<'a> {
     name: Option<&'a str>,
 }
 
+/// Whether a function declares no parameters at all. A rest parameter
+/// is a parameter: TypeScript's `parameters.length`, which upstream
+/// tests, counts `...args`, while oxc keeps it apart from `items`.
+fn takes_no_parameters(params: &oxc_ast::ast::FormalParameters<'_>) -> bool {
+    params.items.is_empty() && params.rest.is_none()
+}
+
 /// The parameter count and first parameter of `params`.
 fn first_param<'a>(
     params: &'a oxc_ast::ast::FormalParameters<'a>,
@@ -501,7 +508,7 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
                         // on every kit route file but a layout.
                         if name == "entries" {
                             if !is_layout
-                                && func.params.items.is_empty()
+                                && takes_no_parameters(&func.params)
                                 && func.return_type.is_none()
                                 && let Some(body) = func.body.as_ref()
                             {
@@ -656,7 +663,7 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
                         {
                             match init {
                                 Expression::ArrowFunctionExpression(arrow)
-                                    if arrow.params.items.is_empty()
+                                    if takes_no_parameters(&arrow.params)
                                         && arrow.return_type.is_none() =>
                                 {
                                     if is_ts {
@@ -678,7 +685,7 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
                                     }
                                 }
                                 Expression::FunctionExpression(func)
-                                    if func.params.items.is_empty()
+                                    if takes_no_parameters(&func.params)
                                         && func.return_type.is_none() =>
                                 {
                                     if is_ts {
@@ -1486,6 +1493,23 @@ export async function POST({ request }) { return new Response(''); }
         assert!(got.contains(
             "/** @type {import('./$types.js').EntryGenerator} */ export function entries()"
         ));
+    }
+
+    #[test]
+    fn entries_with_a_rest_parameter_is_left_alone() {
+        // Upstream types `entries` only when it takes no parameters, and
+        // a rest parameter counts as one — so `...args` stays untyped
+        // and the compiler reports it as an implicit `any[]`.
+        for path in ["src/routes/+page.js", "src/routes/+page.ts"] {
+            for source in [
+                "export function entries(...args) { return []; }\n",
+                "export const entries = (...args) => [];\n",
+                "export const entries = function (...args) { return []; };\n",
+            ] {
+                let got = inject(&PathBuf::from(path), source);
+                assert!(got.is_none(), "{path}: {source} -> {got:?}");
+            }
+        }
     }
 
     // .js route files — JSDoc-form injections (upstream's !isTsFile

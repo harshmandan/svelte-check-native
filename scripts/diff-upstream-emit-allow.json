@@ -121,42 +121,6 @@
     },
     {
       "status": "bug",
-      "sample": "svelte2tsx/export-const-array-destructuring",
-      "kind": "result",
-      "label": "props",
-      "ours": "T<{a?,b?,c?}>",
-      "upstream": "T<{a?,b?,c?,d?}>",
-      "reason": "A prop exported through an array destructuring (`d`) is missing from our props type."
-    },
-    {
-      "status": "bug",
-      "sample": "svelte2tsx/export-const-object-destructuring",
-      "kind": "result",
-      "label": "props",
-      "ours": "T<{a?,b?}>",
-      "upstream": "T<{a?,b?,c?,g?}>",
-      "reason": "Props exported through an object destructuring (`c`, `g`) are missing from our props type."
-    },
-    {
-      "status": "bug",
-      "sample": "svelte2tsx/export-destructuring-array-hole",
-      "kind": "result",
-      "label": "props",
-      "ours": "T<{A?,a?}>",
-      "upstream": "T<{A?,C?,a?,c?,d_one?,d_three?,e_one?}>",
-      "reason": "Props exported through a destructuring with holes and nesting (`C`, `c`, `d_one`, `d_three`, `e_one`) are missing from our props type."
-    },
-    {
-      "status": "bug",
-      "sample": "bugs/190-export-destructure-names",
-      "kind": "result",
-      "label": "props",
-      "ours": "T<{a?,b?,c?,x?,z?}>",
-      "upstream": "T<{a?,b?,c?,rest?,x?,z?}>",
-      "reason": "A prop exported as a destructuring's rest element (`rest`) is missing from our props type."
-    },
-    {
-      "status": "bug",
       "sample": "svelte2tsx/export-list",
       "kind": "result",
       "label": "props",

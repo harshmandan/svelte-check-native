@@ -3,10 +3,7 @@
 function $$render_8b128b67() {
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("script", {
-            "lang": `ts`,
-        });
-        }
+        <script lang="ts" />
         { svelteHTML.createElement("p", {});             1;
         }
     });
@@ -23,10 +20,9 @@ export default __svn_component_default;
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("script", {
-            "lang": `ts`,
-        });
-        }
+        <script lang = "ts">
+    let count: number = "one";
+</script>
         { svelteHTML.createElement("p", {});             count;
         }
     });

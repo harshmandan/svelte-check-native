@@ -213,3 +213,43 @@ fn explicit_config_flag_ignores_nested_configs() {
         "--config pins the explicit config; the nested filter must be ignored. stdout:\n{stdout}"
     );
 }
+
+/// `compilerOptions.namespace` does not reach the type-check overlay.
+/// `svelte-check --tsgo` converts every component without it, so DOM
+/// attribute names are lowercased under any namespace: `contentEditable`
+/// is checked as the known `contenteditable`, while an attribute HTML
+/// has no type for is still reported.
+#[test]
+fn config_namespace_foreign_does_not_change_attribute_typing() {
+    let ws = workspace_temp();
+    write(&ws.path().join("tsconfig.json"), "{}");
+    write(
+        &ws.path().join("svelte.config.js"),
+        "export default { compilerOptions: { namespace: 'foreign' } };",
+    );
+    write(
+        &ws.path().join("src/App.svelte"),
+        "<script lang=\"ts\">\n\tconst label: string = 'hi';\n</script>\n\n<div contentEditable=\"true\">{label}</div>\n<div someAttr=\"x\">{label}</div>\n",
+    );
+    let bin = env!("CARGO_BIN_EXE_svelte-check-native");
+    let output = Command::new(bin)
+        .args([
+            "--workspace",
+            ws.path().to_str().unwrap(),
+            "--tsconfig",
+            ws.path().join("tsconfig.json").to_str().unwrap(),
+            "--output",
+            "machine",
+        ])
+        .output()
+        .expect("binary should run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\"src/App.svelte\" 6:6 "),
+        "an unknown attribute must still be reported. stdout:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("\"src/App.svelte\" 5:6 "),
+        "a known attribute in another case must type-check. stdout:\n{stdout}"
+    );
+}

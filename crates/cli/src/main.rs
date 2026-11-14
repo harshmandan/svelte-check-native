@@ -469,9 +469,6 @@ fn main() -> ExitCode {
         analysed_config.is_some(),
     );
     let kit_files_settings = svelte_config_summary.kit_files_settings;
-    // Set the project-wide preserve-attribute-case flag (svelte config
-    // `namespace: 'foreign'`) ONCE before any (parallel) emit reads it.
-    svn_emit::set_preserve_attribute_case(svelte_config_summary.preserve_attribute_case);
     // Key `$$render_<hash>` names to workspace-relative paths so the
     // emitted overlay (and the committed emit snapshots) don't depend
     // on where the checkout lives on disk.
@@ -2725,11 +2722,6 @@ fn check_project(
 /// `--emit-ts` flow: discover `.svelte` files, parse, emit, print to stdout
 /// with file separators. Exits 0 unconditionally — debug-mode is best-effort.
 fn run_emit_ts(workspace: &Path) -> ExitCode {
-    // Honour svelte config `namespace: 'foreign'` (preserve attribute
-    // case) in the debug-emit path too, mirroring the check path.
-    if let Some(cfg) = svelte_config::find_svelte_config(workspace) {
-        svn_emit::set_preserve_attribute_case(svelte_config::analyse(&cfg).preserve_attribute_case);
-    }
     // Same relative keying as the check path — `--emit-ts` output is what
     // the emit snapshots lock, so it must be checkout-location-independent.
     svn_emit::set_render_hash_root(workspace);

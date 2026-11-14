@@ -553,17 +553,16 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
                 }),
             _ => false,
         });
-    // `namespace: 'foreign'` (svelte config) preserves ALL attribute
-    // case — upstream `transformAttributeCase` is gated on `!preserveCase`
-    // (htmlxtojsx_v2/index.ts:109). Mirror that here.
+    // Upstream gates `transformAttributeCase` on `!preserveCase`
+    // (the `namespace: 'foreign'` option), but `svelte-check --tsgo`
+    // never passes a namespace to svelte2tsx, so case is never preserved.
     // A `<svelte:window>`-style element is not an `Element` node to
     // svelte2tsx, so its attribute names keep their case and its numeric
     // attributes stay strings; `<svelte:element>` (passed with a
     // non-literal tag) is one.
     let svelte_element = !tag_literal;
     let parent_is_element = !(tag_literal && tag_name.starts_with("svelte:"));
-    let should_lowercase =
-        parent_is_element && !is_custom_element && !crate::preserve_attribute_case();
+    let should_lowercase = parent_is_element && !is_custom_element;
     for attr in attributes {
         match attr {
             svn_parser::Attribute::Plain(p) => {

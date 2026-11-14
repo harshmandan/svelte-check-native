@@ -60,7 +60,7 @@ pub(crate) fn count_lines(text: &str) -> u32 {
 static RENDER_HASH_ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
 /// Set the workspace root used to key `$$render_<hash>` names. Call once
-/// before emit (from the CLI, alongside `set_preserve_attribute_case`).
+/// before emit (from the CLI).
 /// Later calls are ignored — one root per process run.
 pub fn set_render_hash_root(root: &Path) {
     let _ = RENDER_HASH_ROOT.set(root.to_path_buf());

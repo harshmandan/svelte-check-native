@@ -196,9 +196,6 @@ pub struct SvelteConfigSummary {
     /// executes the config, so the caller should do the same through
     /// [`execute_kit_files`] before trusting the defaults left here.
     pub kit_files_unresolved: bool,
-    /// `compilerOptions.namespace === 'foreign'` — preserve DOM
-    /// attribute-name case in emit (upstream `preserveAttributeCase`).
-    pub preserve_attribute_case: bool,
     /// `compilerOptions.runes` boolean literal. Upstream compiles every
     /// component with the config's compilerOptions, so a config-level
     /// `runes: true` / `runes: false` FORCES the mode; `None` keeps the
@@ -271,8 +268,7 @@ impl ResolvedConfig {
 ///
 /// NOT resolved per-file on purpose: `kit.files` (upstream svelte-check
 /// loads it with `loadConfig(workspace, { traverse: false })`, so
-/// root-only IS parity) and `namespace: 'foreign'` (a process-wide emit
-/// flag today).
+/// root-only IS parity).
 ///
 /// Resolution is memoized per DIRECTORY — O(dirs), not O(files ×
 /// depth). [`ConfigResolver::prime`] walks each file's ancestor chain
@@ -444,9 +440,6 @@ pub fn analyse(config_path: &Path) -> SvelteConfigSummary {
         None => summary.kit_files_unresolved = true,
     }
 
-    // namespace: 'foreign' → preserve attribute case.
-    summary.preserve_attribute_case = extract_preserve_attribute_case(&parsed.program);
-
     // compilerOptions.runes — config-forced runes mode.
     summary.runes =
         default_export_config_object(&parsed.program).and_then(|obj| runes_in_object(obj));
@@ -525,9 +518,6 @@ pub fn analyse_vite_config(config_path: &Path) -> Option<SvelteConfigSummary> {
             None => summary.kit_files_unresolved = true,
         }
     }
-
-    // namespace: 'foreign' → preserve attribute case.
-    summary.preserve_attribute_case = preserve_case_in_object(plugin_obj);
 
     // compilerOptions.runes — same relative position as in
     // `svelte.config.js`.
@@ -674,13 +664,6 @@ fn default_export_config_object<'a>(
     None
 }
 
-/// `compilerOptions.namespace === 'foreign'` in the default-export config.
-fn extract_preserve_attribute_case(program: &oxc_ast::ast::Program<'_>) -> bool {
-    default_export_config_object(program)
-        .map(preserve_case_in_object)
-        .unwrap_or(false)
-}
-
 /// The `compilerOptions` object inside a config-root object, unwrapping
 /// `/** @type {...} */ ({...})` style parenthesised casts. The
 /// `compilerOptions` key sits at the same relative position in a
@@ -771,14 +754,6 @@ fn option_value_of(expr: &Expression<'_>) -> svn_lint::OptionValue {
         Expression::ObjectExpression(o) => option_value_of_object(o),
         _ => OptionValue::Unknown,
     }
-}
-
-/// `compilerOptions.namespace === 'foreign'` inside a config-root object.
-fn preserve_case_in_object(obj: &ObjectExpression<'_>) -> bool {
-    compiler_options_in_object(obj)
-        .and_then(|co| lookup_string_property(co, "namespace"))
-        .as_deref()
-        == Some("foreign")
 }
 
 /// `compilerOptions.runes` boolean literal inside a config-root object.
@@ -1181,16 +1156,6 @@ fn lookup_object_property<'a>(
         .filter_map(ObjectPropertyKind::as_property)
         .find(|p| p.key.is_specific_static_name(key))
         .map(|p| &p.value)
-}
-
-/// Convenience: look up `key` and return its value if it's a string
-/// literal; otherwise None.
-fn lookup_string_property(obj: &ObjectExpression<'_>, key: &str) -> Option<String> {
-    if let Expression::StringLiteral(s) = lookup_object_property(obj, key)? {
-        s.value.as_str().map(str::to_string)
-    } else {
-        None
-    }
 }
 
 impl WarningFilterPlan {
@@ -1743,11 +1708,11 @@ mod tests {
         analyse(&path).warning_filter_plan
     }
 
-    fn preserve_case(src: &str) -> bool {
+    fn forced_runes(src: &str) -> Option<bool> {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("svelte.config.mjs");
         std::fs::write(&path, src).unwrap();
-        analyse(&path).preserve_attribute_case
+        analyse(&path).runes
     }
 
     fn vite_summary(src: &str) -> Option<SvelteConfigSummary> {
@@ -1759,19 +1724,26 @@ mod tests {
 
     #[test]
     fn duplicate_config_keys_take_the_last_value() {
-        assert!(preserve_case(
-            "export default { compilerOptions: { namespace: 'html' }, compilerOptions: { namespace: 'foreign' } };"
-        ));
-        assert!(!preserve_case(
-            "export default { compilerOptions: { namespace: 'foreign' }, compilerOptions: { namespace: 'html' } };"
-        ));
+        assert_eq!(
+            forced_runes(
+                "export default { compilerOptions: { runes: false }, compilerOptions: { runes: true } };"
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            forced_runes(
+                "export default { compilerOptions: { runes: true }, compilerOptions: { runes: false } };"
+            ),
+            Some(false)
+        );
     }
 
     #[test]
     fn computed_config_keys_with_static_names_are_read() {
-        assert!(preserve_case(
-            "export default { [`compilerOptions`]: { ['namespace']: 'foreign' } };"
-        ));
+        assert_eq!(
+            forced_runes("export default { [`compilerOptions`]: { ['runes']: true } };"),
+            Some(true)
+        );
     }
 
     #[test]
@@ -1805,14 +1777,14 @@ export default defineConfig({
 import { sveltekit } from '@sveltejs/kit/vite';
 export default {
   plugins: [sveltekit({
-    compilerOptions: { namespace: 'foreign' },
+    compilerOptions: { runes: true },
     files: { params: 'src/lib/params' }
   })]
 };
 "#,
         )
         .expect("inline sveltekit options must be analysed");
-        assert!(s.preserve_attribute_case);
+        assert_eq!(s.runes, Some(true));
         assert_eq!(s.kit_files_settings.params_path, "src/lib/params");
     }
 
@@ -1838,14 +1810,14 @@ export default {
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 export default {
   plugins: [svelte({
-    compilerOptions: { namespace: 'foreign' },
+    compilerOptions: { runes: true },
     files: { params: 'ignored' }
   })]
 };
 "#,
         )
         .expect("inline svelte plugin options must be analysed");
-        assert!(s.preserve_attribute_case);
+        assert_eq!(s.runes, Some(true));
         // `files` is a Kit-only concept — the bare svelte plugin's
         // `files` (if any) is not read as kit.files.
         assert_eq!(
@@ -2181,7 +2153,7 @@ export default { plugins: [sveltekit({ compilerOptions: { runes: true } })] };
             r#"
 module.exports = {
   compilerOptions: {
-    namespace: 'foreign',
+    runes: true,
     warningFilter: (w) => !w.code.startsWith('a11y_')
   },
   kit: { files: { params: 'src/matchers' } }
@@ -2194,7 +2166,7 @@ module.exports = {
         );
         assert!(!s.warning_filter_plan.partial);
         assert_eq!(s.kit_files_settings.params_path, "src/matchers");
-        assert!(s.preserve_attribute_case);
+        assert_eq!(s.runes, Some(true));
     }
 
     #[test]
@@ -2220,32 +2192,12 @@ module.exports = config;
         let s = analyse_cjs(
             r#"
 const cache = {};
-cache.exports = { compilerOptions: { namespace: 'foreign' } };
-module.other = { compilerOptions: { namespace: 'foreign' } };
+cache.exports = { compilerOptions: { runes: true } };
+module.other = { compilerOptions: { runes: true } };
 "#,
         );
-        assert!(!s.preserve_attribute_case);
+        assert_eq!(s.runes, None);
         assert!(s.warning_filter_plan.rules.is_empty());
-    }
-
-    #[test]
-    fn namespace_foreign_sets_preserve_case() {
-        assert!(preserve_case(
-            "export default { compilerOptions: { namespace: 'foreign' } };"
-        ));
-        // `const config = {...}; export default config;` shape.
-        assert!(preserve_case(
-            "const config = { compilerOptions: { namespace: 'foreign' } };\nexport default config;"
-        ));
-    }
-
-    #[test]
-    fn namespace_non_foreign_or_absent_does_not_preserve() {
-        assert!(!preserve_case("export default {};"));
-        assert!(!preserve_case(
-            "export default { compilerOptions: { namespace: 'html' } };"
-        ));
-        assert!(!preserve_case("export default { compilerOptions: {} };"));
     }
 
     #[test]

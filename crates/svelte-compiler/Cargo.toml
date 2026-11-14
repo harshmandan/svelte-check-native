@@ -15,8 +15,7 @@ thiserror.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-
-[dev-dependencies]
+# A private directory per worker for the scripts it runs.
 tempfile.workspace = true
 
 # No doctests in this crate. Building the rustdoc harness for every crate

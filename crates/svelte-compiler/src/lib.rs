@@ -112,6 +112,9 @@ pub struct Worker {
     /// own stderr, prefixed so it's distinguishable from host output.
     /// Joined in `Drop` after the child exits.
     stderr_pump: Option<JoinHandle<()>>,
+    /// The private directory holding the bridge script, removed once
+    /// the worker is gone.
+    _script_dir: tempfile::TempDir,
 }
 
 impl Worker {
@@ -119,7 +122,7 @@ impl Worker {
     /// (the directory holding its `package.json`). `workspace` is where
     /// the Svelte config is looked for.
     fn spawn_on(svelte_pkg: &Path, workspace: &Path, runtime: &Path) -> Result<Self, BridgeError> {
-        let bridge_path = write_bridge_to_temp()?;
+        let (script_dir, bridge_path) = write_script_to_temp("bridge", BRIDGE_JS)?;
 
         // The bridge does `import { compile } from 'svelte/compiler'`.
         // Module resolution needs to find both `svelte` AND its
@@ -197,6 +200,7 @@ impl Worker {
             stdout: BufReader::new(stdout),
             next_id: 1,
             stderr_pump,
+            _script_dir: script_dir,
         })
     }
 
@@ -520,30 +524,22 @@ fn locate_svelte_config(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Write the embedded bridge script to a stable temp location once per
-/// worker; atomic so concurrent spawns are safe. Reusing the same path
-/// across spawns lets node's module-resolver cache do its job (when we
-/// eventually pipeline workers).
-fn write_bridge_to_temp() -> std::io::Result<PathBuf> {
-    write_script_to_temp("bridge", BRIDGE_JS)
-}
-
-/// Write an embedded script to `<temp>/svelte-check-native/<name>.mjs`.
-fn write_script_to_temp(name: &str, text: &str) -> std::io::Result<PathBuf> {
-    let dir = std::env::temp_dir().join("svelte-check-native");
-    std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{name}.mjs"));
-    // Write to a per-writer sibling, then atomically rename into place.
-    // rename(2) is atomic within a filesystem, so concurrent spawns
-    // never observe a half-written script.
-    let tmp = dir.join(format!(
-        "{name}.{}.{:?}.mjs",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, &path)?;
-    Ok(path)
+/// Write an embedded script to `<name>.mjs` in a new directory of its
+/// own under the temp dir, returned with the script's path; the
+/// directory is removed when it is dropped.
+///
+/// The directory is created with a random name and readable by this
+/// user only, so nobody else can own it, swap the script between its
+/// writing and the runtime loading it, or keep it from being written.
+/// A fixed path in a temp dir shared between users (`/tmp` on Linux)
+/// allows all three.
+fn write_script_to_temp(name: &str, text: &str) -> std::io::Result<(tempfile::TempDir, PathBuf)> {
+    let dir = tempfile::Builder::new()
+        .prefix("svelte-check-native-")
+        .tempdir()?;
+    let path = dir.path().join(format!("{name}.mjs"));
+    std::fs::write(&path, text)?;
+    Ok((dir, path))
 }
 
 /// Process a batch of files through one or more worker subprocesses.
@@ -821,7 +817,7 @@ pub fn transpile_scripts(
         return Some(Vec::new());
     }
     let runtime = pick_runtime().ok()?;
-    let script = write_script_to_temp("transpile", TRANSPILE_JS).ok()?;
+    let (_script_dir, script) = write_script_to_temp("transpile", TRANSPILE_JS).ok()?;
     // The script resolves `typescript` from here, which takes an
     // absolute path.
     let workspace = &std::path::absolute(workspace).ok()?;

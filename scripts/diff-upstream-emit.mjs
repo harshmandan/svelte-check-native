@@ -322,6 +322,8 @@ function stripOuterParens(s) {
  */
 function unwrapValues(s) {
     let out = '';
+    // Closing parentheses of doubled pairs already dropped.
+    const dropped = new Set();
     let i = 0;
     while (i < s.length) {
         const skip = skipNonCode(s, i);
@@ -335,14 +337,19 @@ function unwrapValues(s) {
         // value runs to its matching `)` and is followed by `,` or `}`.
         // Doubled parentheses, `((x))`, are one pair.
         if (c === '(' && s[i + 1] === '(' && matchClose(s, i + 1) + 1 === matchClose(s, i)) {
-            const close = matchClose(s, i);
-            out += unwrapValues(s.slice(i + 1, close));
-            i = close + 1;
+            dropped.add(matchClose(s, i));
+            i++;
+            continue;
+        }
+        if (dropped.has(i)) {
+            i++;
             continue;
         }
         if (c === '(' && (out.endsWith(':') || out.endsWith('...'))) {
             const close = matchClose(s, i);
-            const next = s[close + 1];
+            let after = close + 1;
+            while (dropped.has(after)) after++;
+            const next = s[after];
             // Not around a comma sequence: bare, `"x":a, b` gives the
             // object a second member, and parenthesised it is one value.
             const inner = s.slice(i + 1, close);
@@ -963,7 +970,7 @@ const asList = (v) => (Array.isArray(v) ? v : [v]);
  * equal the entry's exactly.
  */
 function explains(e, d) {
-    if (e.sample !== '*' && e.sample !== d.sample) return false;
+    if (e.sample !== '*' && !asList(e.sample).includes(d.sample)) return false;
     if (e.file !== undefined && e.file !== d.file) return false;
     if (e.kind !== d.kind) return false;
     if (e.label !== undefined && e.label !== d.label) return false;

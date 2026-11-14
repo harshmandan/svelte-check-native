@@ -1,13 +1,342 @@
 {
-  "_doc": "Known differences between our emit and upstream's for the emit-snapshot samples, read by scripts/diff-upstream-emit.mjs. Hand-written only. `status: intended` = equivalent or deliberate, with the reason; `status: bug` = a real divergence still to fix (kept so the gate passes, and reported as stale once the fix makes it match). Match fields: `sample` (exact or `*`), `kind`, optional `label`, and `ours` / `upstream` substrings of the normalised text.",
+  "_doc": "Known differences between our emit and upstream's for the emit-snapshot samples, read by scripts/diff-upstream-emit.mjs. Hand-written only. `status: intended` = equivalent or deliberate, with the reason; `status: bug` = a real divergence still to fix (kept so the gate passes, and reported as stale once the fix makes it match). Match fields: `sample` (a sample, a list of samples, or `*`), optional `file`, `kind`, optional `label`, and `ours` / `upstream`: the differing parts of the normalised text (a string, or parallel lists for several parts). With every `ours` part replaced by its `upstream` part, our text must become upstream's exactly, so a difference elsewhere in the construct is still reported. `null` on a side means that side has no such construct, and the other side must then equal the entry's text exactly.",
   "entries": [
     {
       "status": "intended",
       "sample": "svelte2tsx/rewrite-imports",
       "kind": "element",
-      "ours": "import(\"../../bar\")",
-      "upstream": "import(\"../../../../bar\")",
+      "label": "\"button\"",
+      "ours": ["import(\"../../bar\")", "import(\"../../mhm\")"],
+      "upstream": ["import(\"../../../../bar\")", "import(\"../../../../mhm\")"],
       "reason": "Same rewrite, different stage: like svelte2tsx's rewriteExternalImports, we rewrite a `../` specifier that leaves the workspace so it resolves from the overlay's directory, and leave every other relative specifier to the overlay tsconfig's `rootDirs`. We do it when the overlay is written (`rewrite_external_imports` in crates/typecheck/src/path_utils.rs), after the point where `--emit-ts` prints, so the snapshot shows the specifier as written."
+    },
+    {
+      "status": "bug",
+      "sample": "*",
+      "kind": "result",
+      "label": "bindings",
+      "ours": "H.$$bindings()",
+      "upstream": "H.$$bindings(\"\")",
+      "reason": "A runes component with no bindable props: we call the bindings helper with no argument, so the component's bindings type is `never`; svelte2tsx passes `''`, so it is `\"\"`. `bind:` on such a component is checked against a different type."
+    },
+    {
+      "status": "bug",
+      "sample": "*",
+      "kind": "result",
+      "label": "bindings",
+      "ours": "T<string>",
+      "upstream": "H.$$bindings(\"\")",
+      "reason": "A runes component (every JavaScript one, and TypeScript ones without a typed `$props()`) gets `bindings: string` in our render result, so `bind:` is accepted on any of its props; svelte2tsx lists the bindable props with `__sveltets_$$bindings(…)`, here none (`\"\"`)."
+    },
+    {
+      "status": "bug",
+      "sample": "svelte2tsx/runes-best-effort-types.v5",
+      "kind": "result",
+      "label": "bindings",
+      "ours": "T<string>",
+      "upstream": "H.$$bindings(\"j\",\"k\")",
+      "reason": "Our render result declares `bindings: string` for a JavaScript runes component, so every prop accepts `bind:`; svelte2tsx lists the `$bindable()` props, `j` and `k`."
+    },
+    {
+      "status": "bug",
+      "sample": "svelte2tsx/ts-runes-best-effort-types.v5",
+      "kind": "result",
+      "label": "bindings",
+      "ours": "T<string>",
+      "upstream": "H.$$bindings(\"l\",\"m\")",
+      "reason": "Our render result declares `bindings: string` for this runes component, so every prop accepts `bind:`; svelte2tsx lists the `$bindable()` props, `l` and `m`."
+    },
+    {
+      "status": "bug",
+      "sample": ["svelte2tsx/ts-event-dispatcher-typed", "svelte2tsx/ts-event-dispatchers", "svelte2tsx/ts-event-dispatchers-same-event"],
+      "kind": "result",
+      "label": "bindings",
+      "ours": null,
+      "upstream": "T<string>",
+      "reason": "Our events type for a typed `createEventDispatcher<{…}>()` copies the user's type argument, JSDoc comments included, into a JSDoc cast `/** @type {…} */`; the first `*/` of a copied comment ends the cast, and the rest of the render result is read as code (TypeScript reports `',' expected`). The keys after `events` are lost; svelte2tsx writes the events as `__sveltets_2_toEventTypings<…>()` in code."
+    },
+    {
+      "status": "bug",
+      "sample": ["svelte2tsx/ts-event-dispatcher-typed", "svelte2tsx/ts-event-dispatchers", "svelte2tsx/ts-event-dispatchers-same-event"],
+      "kind": "result",
+      "label": "exports",
+      "ours": null,
+      "upstream": "T<{}>",
+      "reason": "Same cause as this sample's missing `bindings`: a JSDoc comment copied into the events cast closes it early, and the keys after it are not part of the result."
+    },
+    {
+      "status": "bug",
+      "sample": ["svelte2tsx/ts-event-dispatcher-typed", "svelte2tsx/ts-event-dispatchers", "svelte2tsx/ts-event-dispatchers-same-event"],
+      "kind": "result",
+      "label": "slots",
+      "ours": null,
+      "upstream": "T<{}>",
+      "reason": "Same cause as this sample's missing `bindings`: a JSDoc comment copied into the events cast closes it early, and the keys after it are not part of the result."
+    },
+    {
+      "status": "intended",
+      "sample": "bugs/444-svelte-4-install-has-no-implicit-children",
+      "kind": "result",
+      "label": "bindings",
+      "ours": "T<string>",
+      "upstream": null,
+      "reason": "With a Svelte 4 install svelte2tsx's render result has no `bindings` key; the component factory's default, `Bindings = string`, is the type we write."
+    },
+    {
+      "status": "intended",
+      "sample": "bugs/444-svelte-4-install-has-no-implicit-children",
+      "kind": "result",
+      "label": "exports",
+      "ours": "T<{}>",
+      "upstream": null,
+      "reason": "With a Svelte 4 install svelte2tsx's render result has no `exports` key; the component factory's default, `Exports = {}`, is the type we write."
+    },
+    {
+      "status": "intended",
+      "sample": "svelte2tsx/generics-attribute.v5",
+      "kind": "result",
+      "label": "props",
+      "ours": "T<{a,b,c}>",
+      "upstream": "T<$$ComponentProps>",
+      "reason": "Same type: svelte2tsx names the `$props()` type `$$ComponentProps` (`/** @typedef {{ a: A; b: B; c: C }} */`) and casts to the name; we cast to the type literal itself."
+    },
+    {
+      "status": "intended",
+      "sample": "svelte2tsx/jsdoc-various.v5",
+      "kind": "result",
+      "label": "props",
+      "ours": "T<{b}>",
+      "upstream": "T<$$ComponentProps>",
+      "reason": "Same type: svelte2tsx names the `$props()` type `$$ComponentProps` (`{ b: T }`) and casts to the name; we cast to the type literal itself."
+    },
+    {
+      "status": "intended",
+      "sample": "svelte2tsx/runes.v5",
+      "kind": "result",
+      "label": "props",
+      "ours": "T<{a,b}>",
+      "upstream": "T<$$ComponentProps>",
+      "reason": "Same type: svelte2tsx names the `$props()` type `$$ComponentProps` (`{a: number, b: string}`) and casts to the name; we cast to the type literal itself."
+    },
+    {
+      "status": "intended",
+      "sample": "svelte2tsx/sveltekit-autotypes-$props-rune-no-changes.v5",
+      "kind": "result",
+      "label": "props",
+      "ours": "T<{data,form}>",
+      "upstream": "T<$$ComponentProps>",
+      "reason": "Same type: svelte2tsx names the `$props()` type `$$ComponentProps` (`{form: boolean, data: true }`) and casts to the name; we cast to the type literal itself."
+    },
+    {
+      "status": "intended",
+      "sample": "bugs/199-nested-props-destructure-widens",
+      "file": "AllNested.svelte",
+      "kind": "result",
+      "label": "props",
+      "ours": "T<Record<string,any>>",
+      "upstream": "T<$$ComponentProps>",
+      "reason": "Same type: svelte2tsx declares `type $$ComponentProps = Record<string, any>` for the nested destructuring and casts to the name; we cast to `Record<string, any>` itself."
+    },
+    {
+      "status": "bug",
+      "sample": ["svelte2tsx/props-variable-and-$props.id.v5", "bugs/500-props-type-argument-reported"],
+      "kind": "result",
+      "label": "props",
+      "ours": "T<any>",
+      "upstream": "T<$$ComponentProps>",
+      "reason": "For `let props = $props()` (no destructuring) svelte2tsx casts the props to `$$ComponentProps` without declaring that name, an unresolved type; we write `any`. Not established that the two give the same diagnostics."
+    },
+    {
+      "status": "bug",
+      "sample": "svelte2tsx/export-const-array-destructuring",
+      "kind": "result",
+      "label": "props",
+      "ours": "T<{a?,b?,c?}>",
+      "upstream": "T<{a?,b?,c?,d?}>",
+      "reason": "A prop exported through an array destructuring (`d`) is missing from our props type."
+    },
+    {
+      "status": "bug",
+      "sample": "svelte2tsx/export-const-object-destructuring",
+      "kind": "result",
+      "label": "props",
+      "ours": "T<{a?,b?}>",
+      "upstream": "T<{a?,b?,c?,g?}>",
+      "reason": "Props exported through an object destructuring (`c`, `g`) are missing from our props type."
+    },
+    {
+      "status": "bug",
+      "sample": "svelte2tsx/export-destructuring-array-hole",
+      "kind": "result",
+      "label": "props",
+      "ours": "T<{A?,a?}>",
+      "upstream": "T<{A?,C?,a?,c?,d_one?,d_three?,e_one?}>",
+      "reason": "Props exported through a destructuring with holes and nesting (`C`, `c`, `d_one`, `d_three`, `e_one`) are missing from our props type."
+    },
+    {
+      "status": "bug",
+      "sample": "bugs/190-export-destructure-names",
+      "kind": "result",
+      "label": "props",
+      "ours": "T<{a?,b?,c?,x?,z?}>",
+      "upstream": "T<{a?,b?,c?,rest?,x?,z?}>",
+      "reason": "A prop exported as a destructuring's rest element (`rest`) is missing from our props type."
+    },
+    {
+      "status": "bug",
+      "sample": "svelte2tsx/export-list",
+      "kind": "result",
+      "label": "props",
+      "ours": ["name2?", "renamed2?"],
+      "upstream": ["name2", "renamed2"],
+      "reason": "A `let` without initializer exported by `export { … }` (`name2`, and `rename2 as renamed2`) is a required prop upstream (left out of svelte2tsx's partial list); ours makes it optional."
+    },
+    {
+      "status": "bug",
+      "sample": ["svelte2tsx/ts-export-list", "svelte2tsx/ts-export-list-runes-false"],
+      "kind": "result",
+      "label": "props",
+      "ours": ["name2?", "name4?", "renamed2?"],
+      "upstream": ["name2", "name4", "renamed2"],
+      "reason": "A `let` without initializer exported by `export { … }` (`name2`, `name4`, `rename2 as renamed2`) is a required prop upstream; ours makes it optional."
+    },
+    {
+      "status": "bug",
+      "sample": ["svelte2tsx/uses-accessors-attr-present", "svelte2tsx/uses-accessors-mustachetag-true"],
+      "kind": "result",
+      "label": "props",
+      "ours": "class?",
+      "upstream": "class",
+      "reason": "`export { clazz as class }` of a `let` without initializer is a required prop upstream; ours makes it optional."
+    },
+    {
+      "status": "bug",
+      "sample": "svelte2tsx/sveltekit-autotypes",
+      "file": "+page.svelte",
+      "kind": "result",
+      "label": "props",
+      "ours": "T<{data,data,form,form?,nope,snapshot?}>",
+      "upstream": "T<{data,form?,nope,snapshot?}>",
+      "reason": "Our props type for a SvelteKit page with `export let data` / `export let form` lists `data` and `form` twice (once as written, once auto-typed), one `form` required; svelte2tsx lists each once, `form` optional."
+    },
+    {
+      "status": "bug",
+      "sample": ["svelte2tsx/ts-$$Props-interface", "svelte2tsx/ts-$$Props-type"],
+      "kind": "result",
+      "label": "props",
+      "ours": ["name1?:typeofname1,name2?:typeofname2,rename1?:typeofrename1,rename2?:typeofrename2", "T<$$Props>"],
+      "upstream": ["name1?:string,name2:string,renamed1?:string,renamed2:string", "T<{Foo?:typeofFoo,bar?:typeofbar,baz?:string,RenamedFoo?:typeofRenameFoo,renamedbar?:typeofrenamebar,renamedbaz?:string}&$$Props>"],
+      "reason": "With a `$$Props` type, the props checked against it by `__sveltets_2_ensureRightProps` use the local names (`rename1`) where svelte2tsx uses the exported ones (`renamed1`), and make required props optional (`name2`); and the result's props type leaves out the intersection with the component's other exports (`Foo`, `bar`, …) that svelte2tsx adds to `$$Props`."
+    },
+    {
+      "status": "bug",
+      "sample": "svelte2tsx/ts-$$Props-with-$$props",
+      "kind": "result",
+      "label": "props",
+      "ours": "T<$$Props>",
+      "upstream": "T<{c?:typeofc}&$$Props>",
+      "reason": "With a `$$Props` type, svelte2tsx's props type is the exported props intersected with `$$Props` (`{c?: typeof c} & $$Props`); ours is `$$Props` alone."
+    },
+    {
+      "status": "bug",
+      "sample": "svelte2tsx/ts-uses-$$props",
+      "kind": "result",
+      "label": "props",
+      "ours": "T<Record<string,never>>",
+      "upstream": "T<{}>",
+      "reason": "A component reading `$$props` with no declared props: svelte2tsx's render result types its props `{}`, ours `Record<string, never>`. Not established whether our default export's props wrapper makes the two accept the same props."
+    },
+    {
+      "status": "intended",
+      "sample": "svelte2tsx/component-slot-crazy-attributes",
+      "kind": "result",
+      "label": "slots",
+      "ours": "@type{string}(@type{any}(null))",
+      "upstream": "\"__svelte_ts_string\"",
+      "reason": "A slot attribute whose value is text with a mustache: svelte2tsx writes the placeholder string `\"__svelte_ts_string\"`, which a returned object widens to `string`; we cast to `string`. Same type."
+    },
+    {
+      "status": "intended",
+      "sample": "svelte2tsx/component-slot-inside-await",
+      "kind": "result",
+      "label": "slots",
+      "ours": "@type{(any)}(@type{any}(null))",
+      "upstream": "H.any({})",
+      "reason": "The `{:catch err}` value exposed through a slot is `any` on both sides: svelte2tsx writes `__sveltets_2_any({})`, we cast to `any`."
+    },
+    {
+      "status": "intended",
+      "sample": "svelte2tsx/uses-svelte-components-let-forward",
+      "kind": "result",
+      "label": "slots",
+      "ours": "@type{any}(@type{any}(null))",
+      "upstream": "H.instanceof(__sveltets_1_componentType()).$$slot_def[\"default\"].prop",
+      "reason": "A slot prop forwarded from `<svelte:component>`'s `let:` reads a slot of an untyped component, `any` on both sides: svelte2tsx goes through `__sveltets_1_componentType()` (an `any` component), we cast to `any`."
+    },
+    {
+      "status": "bug",
+      "sample": "bugs/200-slot-plain-attr-values",
+      "kind": "result",
+      "label": "slots",
+      "ours": ["\"first line\\nsecond line\"", "undefinedasanyas(string)"],
+      "upstream": ["\"first line\nsecond line\"", "\"__svelte_ts_string\""],
+      "reason": "A slot attribute whose text spans a line: svelte2tsx copies the line break raw into a double-quoted string, an unterminated string literal in its overlay; we escape it (`\\n`). (The text-with-mustache attributes differ only in spelling: svelte2tsx's placeholder `\"__svelte_ts_string\"` widens to `string`, the type we cast to.)"
+    },
+    {
+      "status": "bug",
+      "sample": "htmlx2jsx/style-directive",
+      "kind": "style",
+      "ours": "`${value}`",
+      "upstream": "value",
+      "reason": "`style:attr=\"{value}\"` (a lone mustache in quotes) is the expression itself to svelte2tsx, so `__sveltets_2_ensureType` checks `value` is a string or number; we wrap it in a template literal, which is always a string, so a wrong type goes unreported."
+    },
+    {
+      "status": "bug",
+      "sample": "htmlx2jsx/style-directive",
+      "kind": "style",
+      "ours": "\"string{mixed}\"",
+      "upstream": "` ${mixed}`",
+      "reason": "`style:attr=string{mixed}` (unquoted text followed by a mustache): svelte2tsx reads the mustache as an expression; we keep `{mixed}` as literal text, so `mixed` is never checked."
+    },
+    {
+      "status": "intended",
+      "sample": "htmlx2jsx/style-directive",
+      "kind": "style",
+      "ours": "\"string\"",
+      "upstream": "\" \"",
+      "reason": "Static text in a style directive's value: svelte2tsx replaces it with a space, we keep it. Either is a string literal, which `__sveltets_2_ensureType(String, Number, …)` accepts alike."
+    },
+    {
+      "status": "intended",
+      "sample": "bugs/523-bind-attribute-key-anchor",
+      "kind": "style",
+      "ours": "\"red\"",
+      "upstream": "\" \"",
+      "reason": "Static text in a style directive's value: svelte2tsx replaces it with a space, we keep it. Either is a string literal, which `__sveltets_2_ensureType(String, Number, …)` accepts alike."
+    },
+    {
+      "status": "intended",
+      "sample": "htmlx2jsx/style-directive",
+      "kind": "style",
+      "ours": "`string${mixed}`",
+      "upstream": "` ${mixed}`",
+      "reason": "Static text in a style directive's template value: svelte2tsx replaces it with a space, we keep it. A template literal is a string either way."
+    },
+    {
+      "status": "intended",
+      "sample": "htmlx2jsx/style-directive",
+      "kind": "style",
+      "ours": "`${mixed}string`",
+      "upstream": "`${mixed} `",
+      "reason": "Static text in a style directive's template value: svelte2tsx replaces it with a space, we keep it. A template literal is a string either way."
+    },
+    {
+      "status": "intended",
+      "sample": "htmlx2jsx/style-directive",
+      "kind": "style",
+      "ours": "`string${mixed}string`",
+      "upstream": "` ${mixed} `",
+      "reason": "Static text in a style directive's template value: svelte2tsx replaces it with a space, we keep it. A template literal is a string either way."
     }
   ]
 }

@@ -121,33 +121,6 @@
     },
     {
       "status": "bug",
-      "sample": "svelte2tsx/export-list",
-      "kind": "result",
-      "label": "props",
-      "ours": ["name2?", "renamed2?"],
-      "upstream": ["name2", "renamed2"],
-      "reason": "A `let` without initializer exported by `export { … }` (`name2`, and `rename2 as renamed2`) is a required prop upstream (left out of svelte2tsx's partial list); ours makes it optional."
-    },
-    {
-      "status": "bug",
-      "sample": ["svelte2tsx/ts-export-list", "svelte2tsx/ts-export-list-runes-false"],
-      "kind": "result",
-      "label": "props",
-      "ours": ["name2?", "name4?", "renamed2?"],
-      "upstream": ["name2", "name4", "renamed2"],
-      "reason": "A `let` without initializer exported by `export { … }` (`name2`, `name4`, `rename2 as renamed2`) is a required prop upstream; ours makes it optional."
-    },
-    {
-      "status": "bug",
-      "sample": ["svelte2tsx/uses-accessors-attr-present", "svelte2tsx/uses-accessors-mustachetag-true"],
-      "kind": "result",
-      "label": "props",
-      "ours": "class?",
-      "upstream": "class",
-      "reason": "`export { clazz as class }` of a `let` without initializer is a required prop upstream; ours makes it optional."
-    },
-    {
-      "status": "bug",
       "sample": "svelte2tsx/sveltekit-autotypes",
       "file": "+page.svelte",
       "kind": "result",

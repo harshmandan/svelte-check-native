@@ -273,8 +273,13 @@ pub fn closing_brace(text: &str) -> Result<u32, bool> {
         if result.is_ok() && parser.ty == token::Tok::Slash && awaits {
             result = parser.read_regexp();
         }
-        if result.is_err() {
-            return Err(parser.pos >= units.units.len());
+        if let Err(stop) = &result {
+            // The tokenizer ran out of text where it stopped at the end,
+            // or inside a block comment, which it reports at the
+            // comment's start.
+            let ran_out = parser.pos >= units.units.len()
+                || matches!(stop, Stop::Error(raised) if raised.message == "Unterminated comment");
+            return Err(ran_out);
         }
         if parser.ty == token::Tok::Prefix
             && parser.value == "!"

@@ -13,7 +13,7 @@ function $$render_d01ef561() {
         { svelteHTML.createElement("p", {});             w;
         }
     });
-    return { props: undefined as any as (Record<string, never>), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (Record<string, never>), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(''), exports: undefined as any as ({}) };
 }
 $$render_d01ef561;
 interface $$IsomorphicComponent {

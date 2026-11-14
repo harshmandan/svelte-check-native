@@ -20,7 +20,7 @@ function $$render_aad4163e() {
             { svelteHTML.createElement("span", {});             }
         }
     });
-    return { props: undefined as any as (PageProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
+    return { props: undefined as any as (PageProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(''), exports: undefined as any as ({}) };
 }
 $$render_aad4163e;
 const __svn_component_default: import('svelte').Component<

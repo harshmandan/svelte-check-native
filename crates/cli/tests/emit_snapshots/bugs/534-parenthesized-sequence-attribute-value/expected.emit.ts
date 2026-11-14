@@ -8,7 +8,7 @@ function $$render_18ae338e() {
         // template type-check body (incremental)
         x;
     });
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(''), exports: undefined as any as ({}) };
 }
 $$render_18ae338e;
 const __svn_component_default: import('svelte').Component<

@@ -14,7 +14,7 @@ function $$render_e40e2c10<T>() {
             __svn_create_slot("default", { x, y });
         }
     });
-    return { props: undefined as any as (Props), events: undefined as any as $$Events, slots: { 'default': { x: (x), y: (y) } }, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
+    return { props: undefined as any as (Props), events: undefined as any as $$Events, slots: { 'default': { x: (x), y: (y) } }, bindings: __svn_$$bindings(''), exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;
 declare class __svn_Render_e40e2c10<T> {

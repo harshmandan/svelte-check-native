@@ -315,7 +315,7 @@ pub(crate) fn emit_render_body_return(
         let events_ty = crate::util::jsdoc_safe_type(
             synth_events_alias_body.unwrap_or("{ [evt: string]: CustomEvent<any> }"),
         );
-        let bindings_field = build_bindings_field(props_info, false);
+        let bindings_field = build_bindings_field(props_info, false, runes_mode);
         let _ = write!(
             buf,
             "    return {{ props: {props_expr}, events: /** @type {{{events_ty}}} */ ({{}}), slots: ",
@@ -366,7 +366,7 @@ pub(crate) fn emit_render_body_return(
     //   - Svelte-4 mode: `string` — every `export let` /
     //     `export function` is bindable, so the iso ctor's
     //     `$$bindings?: string` accepts any name.
-    let bindings_field: String = build_bindings_field(props_info, true);
+    let bindings_field: String = build_bindings_field(props_info, true, runes_mode);
     // The `slots:` field literal is written straight into the emit
     // buffer at its splice site — see [`write_slots_field_type`] for
     // shape. Single-line output, so bypassing EmitBuffer's line
@@ -484,14 +484,14 @@ pub(crate) fn emit_render_body_return(
 /// Mirrors upstream svelte2tsx's `createBindingsStr`
 /// (`ExportedNames.ts:764-771`):
 ///
-/// - Runes mode (`PropsSource::RuneAnnotation` or a destructure the
-///   props are synthesised from): collect every destructure entry with
+/// - Runes mode (the component's, whatever its script language or
+///   props source): collect every destructure entry with
 ///   `is_bindable: true` (the `$bindable()` marker on the default) and
 ///   emit `__svn_$$bindings('a', 'b')`. The shim returns
 ///   `Bindings[number]`, i.e. the literal-string union `'a' | 'b'`.
 ///   Drives TS2322 on `inst.$$bindings = '<not-bindable>'` post-
 ///   instance checks.
-/// - Svelte-4 mode (any other source): emit `undefined as any as
+/// - Legacy mode: emit `undefined as any as
 ///   string`. Every `export let` / `export function` is bindable, so
 ///   the iso ctor's `$$bindings?: string` accepts any name and the
 ///   post-instance check stays silent.
@@ -500,13 +500,12 @@ pub(crate) fn emit_render_body_return(
 /// `as` cast, so they emit the JSDoc equivalent `/** @type {string} */
 /// ('')` — same `string` field type. The runes-mode
 /// `__svn_$$bindings(...)` call is plain JS and shared by both modes.
-fn build_bindings_field(props_info: &svn_analyze::PropsInfo, is_ts: bool) -> String {
-    let is_runes = matches!(
-        props_info.source,
-        svn_analyze::PropsSource::RuneAnnotation
-            | svn_analyze::PropsSource::SynthesisedFromDestructure
-    );
-    if !is_runes {
+fn build_bindings_field(
+    props_info: &svn_analyze::PropsInfo,
+    is_ts: bool,
+    runes_mode: bool,
+) -> String {
+    if !runes_mode {
         return if is_ts {
             "undefined as any as string".to_string()
         } else {
@@ -521,15 +520,10 @@ fn build_bindings_field(props_info: &svn_analyze::PropsInfo, is_ts: bool) -> Str
         .filter(|p| p.is_bindable && !p.local_only)
         .collect();
     if bindable.is_empty() {
-        // Runes-mode component with no `$bindable()` props — emit
-        // `__svn_$$bindings()` returning `never`. Any `bind:NAME`
-        // post-instance check fires TS2322 against `never`. Mirrors
-        // upstream's `__sveltets_$$bindings('')` empty-string call
-        // (which returns `''`, the empty literal type), but our
-        // helper signature uses `Bindings[number]` so a no-arg call
-        // returns `never` — strictly equivalent in firing TS2322 on
-        // any `inst.$$bindings = '<NAME>'` assignment.
-        return "__svn_$$bindings()".to_string();
+        // Runes-mode component with no `$bindable()` props: upstream's
+        // `__sveltets_$$bindings('')`, the empty literal type, which no
+        // `bind:NAME` matches.
+        return "__svn_$$bindings('')".to_string();
     }
     let mut out = String::from("__svn_$$bindings(");
     let mut first = true;

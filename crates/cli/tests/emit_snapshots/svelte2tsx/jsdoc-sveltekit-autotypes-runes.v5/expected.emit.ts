@@ -9,7 +9,7 @@ function $$render_aad4163e() {
         // template type-check body (incremental)
     });
     void snapshot;
-    return { props: /** @type {$$ComponentProps} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ snapshot: typeof snapshot; }} */ ({}) };
+    return { props: /** @type {$$ComponentProps} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: __svn_$$bindings(''), exports: /** @type {{ snapshot: typeof snapshot; }} */ ({}) };
 }
 $$render_aad4163e;
 /** @type {import('svelte').Component<Awaited<ReturnType<typeof $$render_aad4163e>>['props'], Awaited<ReturnType<typeof $$render_aad4163e>>['exports'], Awaited<ReturnType<typeof $$render_aad4163e>>['bindings']>} */

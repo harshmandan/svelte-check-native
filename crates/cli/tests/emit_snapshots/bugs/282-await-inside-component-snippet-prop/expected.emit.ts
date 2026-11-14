@@ -10,7 +10,7 @@ function $$render_d33db870() {
         // template type-check body (incremental)
         __svn_ensure_snippet(row('a'));
     });
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(''), exports: undefined as any as ({}) };
 }
 $$render_d33db870;
 const __svn_component_default: import('svelte').Component<
@@ -33,7 +33,7 @@ function $$render_74f92bad() {
         // template type-check body (incremental)
         __svn_ensure_snippet(children());
     });
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(''), exports: undefined as any as ({}) };
 }
 $$render_74f92bad;
 const __svn_component_default: import('svelte').Component<

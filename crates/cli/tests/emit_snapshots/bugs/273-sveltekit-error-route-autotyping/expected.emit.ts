@@ -17,7 +17,7 @@ function $$render_1d27d78b() {
         { svelteHTML.createElement("p", {});             error.message;
         }
     });
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(''), exports: undefined as any as ({}) };
 }
 $$render_1d27d78b;
 const __svn_component_default: import('svelte').Component<

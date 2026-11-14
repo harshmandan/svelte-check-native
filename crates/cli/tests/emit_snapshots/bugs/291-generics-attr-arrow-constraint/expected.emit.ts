@@ -12,7 +12,7 @@ function $$render_18ae338e<T extends () => void, U>() {
             c;
         }
     });
-    return { props: undefined as any as (Props), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
+    return { props: undefined as any as (Props), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(''), exports: undefined as any as ({}) };
 }
 $$render_18ae338e;
 declare class __svn_Render_18ae338e<T extends () => void, U> {

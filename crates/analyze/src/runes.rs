@@ -4,9 +4,11 @@
 //!
 //! - svelte2tsx (`ExportedNames.isRunesMode`): the script references
 //!   one of the `$state` / `$derived` / `$effect` globals, declares a
-//!   top-level variable from `$props()`, or awaits outside any
-//!   function. Every other rune (`$inspect`, `$host`, `$bindable`) is
-//!   ignored.
+//!   top-level variable from `$props()`, or awaits at its root scope:
+//!   outside any function and any block (`processInstanceScriptContent`
+//!   pushes a scope for both, and `hasTopLevelAwait` counts an `await`
+//!   only in the root one). Every other rune (`$inspect`, `$host`,
+//!   `$bindable`) is ignored.
 //! - the Svelte compiler (`analyze/index.js`): any rune name is
 //!   referenced, or an `await` sits outside a function.
 //!
@@ -18,7 +20,7 @@
 use std::collections::HashSet;
 
 use oxc_ast::ast::{
-    ArrowFunctionExpression, AwaitExpression, CallExpression, Expression, Function,
+    ArrowFunctionExpression, AwaitExpression, BlockStatement, CallExpression, Expression, Function,
     IdentifierReference, MethodDefinition, ObjectProperty, Program, PropertyKey, Statement,
     VariableDeclaration,
 };
@@ -51,6 +53,9 @@ pub struct RunesProbe<'b> {
     bound: &'b HashSet<String>,
     /// Nesting depth of function bodies; `await` only counts at 0.
     function_depth: u32,
+    /// Nesting depth of block statements, which bound svelte2tsx's
+    /// root scope.
+    block_depth: u32,
     pub found: bool,
 }
 
@@ -60,6 +65,7 @@ impl<'b> RunesProbe<'b> {
             rule,
             bound,
             function_depth: 0,
+            block_depth: 0,
             found: false,
         }
     }
@@ -149,10 +155,16 @@ impl<'a> Visit<'a> for RunesProbe<'_> {
     }
 
     fn visit_await_expression(&mut self, it: &AwaitExpression<'a>) {
-        if self.function_depth == 0 {
+        if self.function_depth == 0 && (self.rule == RunesRule::Compiler || self.block_depth == 0) {
             self.found = true;
         }
         walk::walk_await_expression(self, it);
+    }
+
+    fn visit_block_statement(&mut self, it: &BlockStatement<'a>) {
+        self.block_depth += 1;
+        walk::walk_block_statement(self, it);
+        self.block_depth -= 1;
     }
 
     fn visit_function(&mut self, it: &Function<'a>, flags: oxc_syntax::scope::ScopeFlags) {
@@ -199,6 +211,8 @@ mod tests {
         assert!(!probe(r, "const re = /$state(x)/;"));
         assert!(!probe(r, "const s = \"$state(0)\";"));
         assert!(!probe(r, "async function f() { await g(); }"));
+        assert!(!probe(r, "{ const x = await f(); }"));
+        assert!(!probe(r, "if (a) { await f(); }"));
         assert!(!probe(r, "const state = writable(0); $state.set(1);"));
         assert!(probe(r, "function $state(n) {} $state(1);"));
         assert!(!probe(r, "const o = { $state: 1 };"));

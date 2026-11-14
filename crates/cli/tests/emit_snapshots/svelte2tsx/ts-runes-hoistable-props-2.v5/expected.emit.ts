@@ -18,7 +18,7 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
     });
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(''), exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;
 const __svn_component_default: import('svelte').Component<

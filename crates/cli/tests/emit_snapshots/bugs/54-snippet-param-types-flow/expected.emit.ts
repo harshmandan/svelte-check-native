@@ -17,7 +17,7 @@ function $$render_74f92bad() {
         __svn_ensure_snippet(header(['id', 'label']));
         __svn_ensure_snippet(row({ id: 1, label: 'a' }));
     });
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(''), exports: undefined as any as ({}) };
 }
 $$render_74f92bad;
 const __svn_component_default: import('svelte').Component<

@@ -9,7 +9,7 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
     });
-    return { props: /** @type {{a: number, b: string}} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {{a: number, b: string}} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: __svn_$$bindings(''), exports: {} };
 }
 $$render_e40e2c10;
 /** @type {import('svelte').Component<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */

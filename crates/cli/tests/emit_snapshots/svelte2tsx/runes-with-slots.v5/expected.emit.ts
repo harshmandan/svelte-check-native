@@ -13,7 +13,7 @@ function $$render_e40e2c10() {
             __svn_create_slot("default", { x, y });
         }
     });
-    return { props: /** @type {SomeType} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { x: (x), y: (y) } }, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {SomeType} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { x: (x), y: (y) } }, bindings: __svn_$$bindings(''), exports: {} };
 }
 $$render_e40e2c10;
 /** @type {__SvnIsomorphicComponent<__SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], Awaited<ReturnType<typeof $$render_e40e2c10>>['slots'], Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */

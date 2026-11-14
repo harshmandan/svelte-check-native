@@ -1,0 +1,2 @@
+SelfClosing.svelte: Expected token >
+input.svelte: Expected token >

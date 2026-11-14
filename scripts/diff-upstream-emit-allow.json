@@ -75,7 +75,7 @@
     },
     {
       "status": "intended",
-      "sample": "bugs/444-svelte-4-install-has-no-implicit-children",
+      "sample": ["bugs/444-svelte-4-install-has-no-implicit-children", "bugs/570-each-nullable-rejected-under-svelte-4"],
       "kind": "result",
       "label": "bindings",
       "ours": "T<string>",
@@ -84,7 +84,7 @@
     },
     {
       "status": "intended",
-      "sample": "bugs/444-svelte-4-install-has-no-implicit-children",
+      "sample": ["bugs/444-svelte-4-install-has-no-implicit-children", "bugs/570-each-nullable-rejected-under-svelte-4"],
       "kind": "result",
       "label": "exports",
       "ours": "T<{}>",

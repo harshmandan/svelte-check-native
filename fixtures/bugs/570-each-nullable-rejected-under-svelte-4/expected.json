@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 4,
+            "column": 7,
+            "code": 2345
+        }
+    ],
+    "_note": "With a Svelte 4 install `{#each}` takes an array-like or iterable only: svelte2tsx's `__sveltets_2_ensureArray` widens its parameter to `undefined | null` just when `svelte` exports `mount` (Svelte 5). `items` may be undefined, so TS2345 at the each expression. The `node_modules/svelte` stub carries the part of Svelte 4's types the generated code reaches, without `mount`."
+}

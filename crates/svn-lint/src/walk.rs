@@ -307,41 +307,43 @@ pub fn walk_parsed(
                 .collect(),
             None => scripts,
         };
+        use crate::rules::js_parse_error::ScriptParseError;
         let script_error = script_parse_error(doc, source, &scripts, &settings).or_else(|| {
             merged.and_then(|(first, error)| {
-                error.map(|(message, range)| (message, range, first.start))
+                error.map(|(message, range)| ScriptParseError::Shown {
+                    message,
+                    range,
+                    script_opens: first.start,
+                })
             })
+        });
+        let script_opens = script_error.as_ref().map(|error| match error {
+            ScriptParseError::Shown { script_opens, .. }
+            | ScriptParseError::Hidden { script_opens } => *script_opens,
         });
         if template_error
             .as_ref()
-            .is_some_and(|(at, _)| script_error.as_ref().is_none_or(|(_, _, opens)| at < opens))
+            .is_some_and(|(at, _)| script_opens.is_none_or(|opens| *at < opens))
         {
             report_template_error(ctx);
         }
-        let script_errors = script_error.is_some();
-        if let Some((message, range, _)) = script_error {
-            ctx.emit_error(Code::js_parse_error, message, range);
+        match script_error {
+            Some(ScriptParseError::Shown { message, range, .. }) => {
+                ctx.emit_error(Code::js_parse_error, message, range);
+            }
+            Some(ScriptParseError::Hidden { .. }) => ctx.fail_silently(),
+            None => {}
         }
         // What the compiler reads of a script the language server's
-        // fallback preprocessor transpiles is TypeScript's print of it.
-        // For a script with nothing wrong that print is known; for one
-        // TypeScript has to repair, or one acorn would refuse as
-        // written, only the print itself says what the compiler meets
-        // and where.
+        // fallback preprocessor transpiles is TypeScript's print of it,
+        // and only that print says what the compiler meets and where:
+        // it moves code onto new lines, repairs what it cannot read and
+        // maps positions back through its own source map.
         if ctx.ts_scripts_transpiled
             && !ctx.preprocess_configured
-            && scripts.iter().any(|s| {
-                crate::rules::typescript_features::script_is_transpiled(s.section, true)
-                    && (script_errors
-                        || s.panicked
-                        || !s.errors.is_empty()
-                        || svn_acorn::parse(
-                            s.section.content,
-                            svn_acorn::Reading::Script,
-                            svn_acorn::Language::TypeScript,
-                        )
-                        .is_err())
-            })
+            && scripts
+                .iter()
+                .any(|s| crate::rules::typescript_features::script_is_transpiled(s.section, true))
         {
             ctx.needs_real_transpile = true;
         }

@@ -45,6 +45,7 @@ use serde::{Deserialize, Serialize};
 /// The bridge JS, baked into the binary so users don't need to install
 /// anything beyond `bun`/`node` and a `svelte` package.
 const BRIDGE_JS: &str = include_str!("bridge.mjs");
+const TRANSPILE_JS: &str = include_str!("transpile.mjs");
 
 /// Errors from the compiler bridge.
 #[derive(Debug, thiserror::Error)]
@@ -486,18 +487,23 @@ fn locate_svelte_config(start: &Path) -> Option<PathBuf> {
 /// across spawns lets node's module-resolver cache do its job (when we
 /// eventually pipeline workers).
 fn write_bridge_to_temp() -> std::io::Result<PathBuf> {
+    write_script_to_temp("bridge", BRIDGE_JS)
+}
+
+/// Write an embedded script to `<temp>/svelte-check-native/<name>.mjs`.
+fn write_script_to_temp(name: &str, text: &str) -> std::io::Result<PathBuf> {
     let dir = std::env::temp_dir().join("svelte-check-native");
     std::fs::create_dir_all(&dir)?;
-    let path = dir.join("bridge.mjs");
+    let path = dir.join(format!("{name}.mjs"));
     // Write to a per-writer sibling, then atomically rename into place.
-    // rename(2) is atomic within a filesystem, so concurrent worker spawns
-    // never observe a half-written bridge.mjs.
+    // rename(2) is atomic within a filesystem, so concurrent spawns
+    // never observe a half-written script.
     let tmp = dir.join(format!(
-        "bridge.{}.{:?}.mjs",
+        "{name}.{}.{:?}.mjs",
         std::process::id(),
         std::thread::current().id()
     ));
-    std::fs::write(&tmp, BRIDGE_JS)?;
+    std::fs::write(&tmp, text)?;
     std::fs::rename(&tmp, &path)?;
     Ok(path)
 }
@@ -702,6 +708,94 @@ fn split_into_chunks<T>(mut inputs: Vec<T>, n: usize) -> Vec<Vec<T>> {
         chunks.push(c);
     }
     chunks
+}
+
+/// One script as `ts.transpileModule` prints it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Transpiled {
+    /// The JavaScript, with its `sourceMappingURL` comment.
+    pub code: String,
+    /// The `mappings` of its source map.
+    pub mappings: String,
+}
+
+/// Transpile each `(file name, TypeScript)` with the workspace's own
+/// `typescript` package, exactly as svelte-check's fallback preprocessor
+/// calls it.
+///
+/// TypeScript prints on one thread, so the scripts are shared out over
+/// several JS processes once there are enough of them to pay for
+/// loading the package more than once.
+///
+/// `None` when that cannot be done at all: no JS runtime, or no
+/// `typescript` in the workspace that offers `transpileModule`. An entry
+/// is `None` where the transpile of that script threw.
+pub fn transpile_scripts(
+    workspace: &Path,
+    scripts: &[(&Path, &str)],
+) -> Option<Vec<Option<Transpiled>>> {
+    /// Fewer scripts than this are not worth a process of their own.
+    const PER_PROCESS: usize = 150;
+    if scripts.is_empty() {
+        return Some(Vec::new());
+    }
+    let runtime = pick_runtime().ok()?;
+    let script = write_script_to_temp("transpile", TRANSPILE_JS).ok()?;
+    // The script resolves `typescript` from here, which takes an
+    // absolute path.
+    let workspace = &std::path::absolute(workspace).ok()?;
+    let cores = thread::available_parallelism().map_or(1, usize::from);
+    let processes = scripts.len().div_ceil(PER_PROCESS).clamp(1, cores);
+    let per_process = scripts.len().div_ceil(processes);
+    thread::scope(|scope| {
+        let handles: Vec<_> = scripts
+            .chunks(per_process)
+            .map(|chunk| {
+                scope.spawn(|| transpile_in_one_process(&runtime, &script, workspace, chunk))
+            })
+            .collect();
+        let mut printed = Vec::with_capacity(scripts.len());
+        for handle in handles {
+            printed.extend(handle.join().ok()??);
+        }
+        Some(printed)
+    })
+}
+
+fn transpile_in_one_process(
+    runtime: &Path,
+    script: &Path,
+    workspace: &Path,
+    scripts: &[(&Path, &str)],
+) -> Option<Vec<Option<Transpiled>>> {
+    let request: Vec<serde_json::Value> = scripts
+        .iter()
+        .map(|(file, content)| {
+            serde_json::json!({ "fileName": file.to_string_lossy(), "content": content })
+        })
+        .collect();
+    let mut child = Command::new(runtime)
+        .arg(script)
+        .arg(workspace)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdin = child.stdin.take()?;
+    let body = serde_json::Value::Array(request).to_string();
+    // Written from its own thread: the child prints nothing until it
+    // has read everything, but a full pipe must not stall this one.
+    let writer = thread::spawn(move || {
+        let _ = stdin.write_all(body.as_bytes());
+    });
+    let output = child.wait_with_output().ok()?;
+    let _ = writer.join();
+    if !output.status.success() {
+        return None;
+    }
+    let printed: Option<Vec<Option<Transpiled>>> = serde_json::from_slice(&output.stdout).ok()?;
+    printed.filter(|printed| printed.len() == scripts.len())
 }
 
 #[cfg(test)]

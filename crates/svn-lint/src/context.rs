@@ -269,6 +269,17 @@ impl<'src> LintContext<'src> {
         });
     }
 
+    /// The compile failed with an error that is not shown: nothing
+    /// the compiler would have reported after it comes out. An error
+    /// raised first stands.
+    pub(crate) fn fail_silently(&mut self) {
+        if self.errored {
+            return;
+        }
+        self.errored = true;
+        self.warnings.clear();
+    }
+
     /// The compiler crashed on the component with a JavaScript exception
     /// whose message is `message`: nothing it would have reported
     /// survives, and nothing more is reported. An error the compiler

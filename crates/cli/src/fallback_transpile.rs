@@ -9,14 +9,16 @@
 //! and every position it reports is mapped back through the source map
 //! the preprocessing produced (`TraceMap` + `originalPositionFor`).
 //!
-//! The lint pass models that transpile on the original text. For
-//! components the model cannot follow (see `svn_lint::LintReport`),
-//! this module produces the real preprocessed component: tsgo prints
-//! each script (one batch process for the whole run), the scripts are
-//! spliced in exactly where the preprocessor splices them, and the
+//! This module produces that preprocessed component for every
+//! component with such a script: the workspace's own `typescript`
+//! prints each script, exactly as it does for svelte-check (tsgo prints
+//! instead where that package cannot be asked), the scripts are spliced
+//! in exactly where the preprocessor splices them, and the
 //! whole-component source map is rebuilt with the preprocessor's own
 //! rules. The component is then linted as the compiler sees it and each
-//! diagnostic is mapped back.
+//! diagnostic is mapped back. The lint pass's own model of the
+//! transpile, on the original text, stands only where no print could be
+//! had.
 //!
 //! The source map `svelte.preprocess` builds has two kinds of region:
 //!
@@ -298,22 +300,43 @@ pub(crate) struct PrintedScript {
     pub map: Vec<Vec<Segment>>,
 }
 
-/// Print every script with tsgo, the way `ts.transpileModule` prints it
-/// for the fallback preprocessor. `None` for a script tsgo cannot
-/// print.
+/// Print every script (its component's path, its content) the way
+/// `ts.transpileModule` prints it for the fallback preprocessor. `None`
+/// for a script that cannot be printed.
 ///
-/// The scripts go through tsgo in as few processes as possible. tsgo
-/// can crash printing a script TypeScript itself recovers from; a crash
-/// ends the whole process, possibly halfway through writing an output,
-/// so a batch that crashed is split in two and each half printed again,
-/// down to the single script that cannot be printed.
-pub(crate) fn print_scripts(workspace: &Path, contents: &[&str]) -> Vec<Option<PrintedScript>> {
+/// The workspace's own `typescript` package prints them, as it does for
+/// svelte-check: what TypeScript makes of a script it has to repair is
+/// its printer's business, and no other printer says the same. Where
+/// that package cannot be asked (no JS runtime, or a `typescript`
+/// without `transpileModule`), tsgo prints instead.
+pub(crate) fn print_scripts(
+    workspace: &Path,
+    scripts: &[(&Path, &str)],
+) -> Vec<Option<PrintedScript>> {
+    if let Some(printed) = svn_svelte_compiler::transpile_scripts(workspace, scripts) {
+        return printed
+            .into_iter()
+            .map(|script| {
+                let script = script?;
+                Some(PrintedScript {
+                    map: decode_mappings(&script.mappings)?,
+                    code: script.code,
+                })
+            })
+            .collect();
+    }
+    let contents: Vec<&str> = scripts.iter().map(|(_, content)| *content).collect();
     match svn_typecheck::discover(workspace) {
-        Ok(tsgo) => print_split(&tsgo, contents),
+        Ok(tsgo) => print_split(&tsgo, &contents),
         Err(_) => vec![None; contents.len()],
     }
 }
 
+/// Print with tsgo. It goes through as few processes as possible. tsgo
+/// can crash printing a script TypeScript itself recovers from; a crash
+/// ends the whole process, possibly halfway through writing an output,
+/// so a batch that crashed is split in two and each half printed again,
+/// down to the single script that cannot be printed.
 fn print_split(tsgo: &svn_typecheck::TsgoBinary, contents: &[&str]) -> Vec<Option<PrintedScript>> {
     if let Some(printed) = print_batch(tsgo, contents) {
         return printed;

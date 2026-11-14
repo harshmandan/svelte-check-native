@@ -1032,61 +1032,102 @@ impl NativeLint<'_> {
     }
 }
 
-/// Re-lint the components whose compiler diagnostics depend on what
-/// the fallback preprocessor's TypeScript transpile really prints (no
-/// Svelte config; see [`fallback_transpile`]): print their scripts with
-/// tsgo in one batch, lint each component as the compiler receives it,
-/// and map every diagnostic back the way the language server does.
-/// A component keeps its modelled result when anything here fails.
-/// Returns the preprocessed components, by index.
-fn relint_with_real_transpile(
+/// The scripts of the components the compiler reads as the fallback
+/// preprocessor's TypeScript transpile prints them (no Svelte config;
+/// see [`fallback_transpile`]), being printed on a thread of their own.
+struct RealTranspile {
+    /// The components, by index, each with its script tags.
+    wanted: Vec<(usize, Vec<fallback_transpile::ScriptTag>)>,
+    /// Every transpiled script of those components, in order.
+    printed: std::thread::JoinHandle<Vec<Option<fallback_transpile::PrintedScript>>>,
+}
+
+/// Start printing the scripts of every component whose lint result
+/// asks for the real transpile. TypeScript prints on one thread and
+/// takes a while over a large project, so it runs beside the type
+/// check; [`relint_with_real_transpile`] picks the prints up after it.
+fn start_real_transpile(
     workspace: &Path,
     sources: &[(PathBuf, std::sync::Arc<str>)],
-    results: &mut [Option<NativeFileDiagnostics>],
-    native: &NativeLint<'_>,
-) -> std::collections::HashMap<usize, fallback_transpile::Preprocessed> {
-    let mut preprocessed = std::collections::HashMap::new();
-    let wanted: Vec<usize> = results
+    results: &[Option<NativeFileDiagnostics>],
+) -> Option<RealTranspile> {
+    let wanted: Vec<(usize, Vec<fallback_transpile::ScriptTag>)> = results
         .iter()
         .enumerate()
         .filter(|(_, r)| {
             r.as_ref()
                 .is_some_and(|r| r.needs_real_transpile && !r.broken)
         })
-        .map(|(idx, _)| idx)
+        .map(|(idx, _)| (idx, fallback_transpile::script_tags(&sources[idx].1)))
         .collect();
-    if wanted.is_empty() {
-        return preprocessed;
-    }
-    let tags: Vec<Vec<fallback_transpile::ScriptTag>> = wanted
+    let scripts: Vec<(PathBuf, std::sync::Arc<str>, std::ops::Range<usize>)> = wanted
         .iter()
-        .map(|&idx| fallback_transpile::script_tags(&sources[idx].1))
-        .collect();
-    let contents: Vec<&str> = wanted
-        .iter()
-        .zip(&tags)
-        .flat_map(|(&idx, tags)| {
+        .flat_map(|(idx, tags)| {
+            let (path, source) = &sources[*idx];
             tags.iter()
                 .filter(|t| t.transpiled)
-                .map(move |t| &sources[idx].1[t.content.clone()])
+                .map(move |t| (path.clone(), source.clone(), t.content.clone()))
         })
         .collect();
-    if contents.is_empty() {
-        return preprocessed;
+    if scripts.is_empty() {
+        return None;
     }
-    let mut printed = fallback_transpile::print_scripts(workspace, &contents).into_iter();
-    for (&idx, tags) in wanted.iter().zip(&tags) {
-        let count = tags.iter().filter(|t| t.transpiled).count();
-        let scripts: Vec<_> = printed.by_ref().take(count).collect();
-        let Some(scripts) = scripts.into_iter().collect::<Option<Vec<_>>>() else {
-            continue;
-        };
-        let (path, source) = &sources[idx];
-        let pre = fallback_transpile::preprocess(source, tags, &scripts);
-        if let Some(relinted) = native.lint(idx, path, source, Some(&pre), 0) {
-            results[idx] = Some(relinted);
-            preprocessed.insert(idx, pre);
-        }
+    let workspace = workspace.to_path_buf();
+    let printed = std::thread::Builder::new()
+        .name("svn-transpile".into())
+        .spawn(move || {
+            let scripts: Vec<(&Path, &str)> = scripts
+                .iter()
+                .map(|(path, source, content)| (path.as_path(), &source[content.clone()]))
+                .collect();
+            fallback_transpile::print_scripts(&workspace, &scripts)
+        })
+        .ok()?;
+    Some(RealTranspile { wanted, printed })
+}
+
+/// Re-lint the components [`start_real_transpile`] printed the scripts
+/// of: lint each as the compiler receives it, and map every diagnostic
+/// back the way the language server does. A component keeps its
+/// modelled result when anything here fails. Returns the preprocessed
+/// components, by index.
+fn relint_with_real_transpile(
+    transpile: Option<RealTranspile>,
+    sources: &[(PathBuf, std::sync::Arc<str>)],
+    results: &mut [Option<NativeFileDiagnostics>],
+    native: &NativeLint<'_>,
+) -> std::collections::HashMap<usize, fallback_transpile::Preprocessed> {
+    let mut preprocessed = std::collections::HashMap::new();
+    let Some(RealTranspile { wanted, printed }) = transpile else {
+        return preprocessed;
+    };
+    let Ok(printed) = printed.join() else {
+        return preprocessed;
+    };
+    let mut printed = printed.into_iter();
+    // Each component's printed scripts, taken in order; the linting
+    // itself then runs across the components at once.
+    let jobs: Vec<_> = wanted
+        .iter()
+        .filter_map(|(idx, tags)| {
+            let count = tags.iter().filter(|t| t.transpiled).count();
+            let scripts: Vec<_> = printed.by_ref().take(count).collect();
+            let scripts = scripts.into_iter().collect::<Option<Vec<_>>>()?;
+            Some((*idx, tags, scripts))
+        })
+        .collect();
+    let relinted: Vec<_> = jobs
+        .into_par_iter()
+        .filter_map(|(idx, tags, scripts)| {
+            let (path, source) = &sources[idx];
+            let pre = fallback_transpile::preprocess(source, tags, &scripts);
+            let result = native.lint(idx, path, source, Some(&pre), 0)?;
+            Some((idx, result, pre))
+        })
+        .collect();
+    for (idx, result, pre) in relinted {
+        results[idx] = Some(result);
+        preprocessed.insert(idx, pre);
     }
     preprocessed
 }
@@ -2051,6 +2092,7 @@ fn check_project(
     }
     let compile_option_warnings = &compile_option_warnings;
     let mut native_results: Vec<Option<NativeFileDiagnostics>>;
+    let mut real_transpile: Option<RealTranspile> = None;
     // Components whose template the compiler's `parse()` rejects — left
     // out of the program, the diagnostics and the entry count.
     let mut dropped_files: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
@@ -2237,25 +2279,8 @@ fn check_project(
                 missing_modules.extend(modules);
             }
         }
-        if let Some(compat) = native_compat {
-            let native = NativeLint {
-                config_resolver: config_resolver_ref,
-                compat,
-                compile_option_warnings,
-            };
-            let preprocessed = relint_with_real_transpile(
-                workspace,
-                &svelte_sources,
-                &mut native_results,
-                &native,
-            );
-            carry_bidi_regex(
-                &svelte_sources,
-                &svelte_files_all,
-                &mut native_results,
-                &native,
-                &preprocessed,
-            );
+        if native_compat.is_some() {
+            real_transpile = start_real_transpile(workspace, &svelte_sources, &native_results);
         }
 
         // Kit files (`+server.ts`, `+page.ts`, hooks, params): run them
@@ -2349,6 +2374,29 @@ fn check_project(
             (Vec::new(), None, Vec::new())
         };
     let t_typecheck = mark.elapsed();
+
+    // The scripts printed beside the type check are in: lint their
+    // components as the compiler reads them.
+    if let Some(compat) = native_compat {
+        let native = NativeLint {
+            config_resolver: config_resolver_ref,
+            compat,
+            compile_option_warnings,
+        };
+        let preprocessed = relint_with_real_transpile(
+            real_transpile.take(),
+            &svelte_sources,
+            &mut native_results,
+            &native,
+        );
+        carry_bidi_regex(
+            &svelte_sources,
+            &svelte_files_all,
+            &mut native_results,
+            &native,
+            &preprocessed,
+        );
+    }
 
     // TSGO-ENHANCEMENT: merge native TS2307s for missing `.svelte` imports
     // (empty unless the js/ts source ran). tsgo usually can't see these —

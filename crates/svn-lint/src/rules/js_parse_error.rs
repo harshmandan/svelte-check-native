@@ -64,15 +64,32 @@ pub(crate) struct Settings {
     pub preprocess_configured: bool,
 }
 
-/// The `js_parse_error` svelte-check reports for the component's
-/// scripts, if any: the message (docs link and hint included), the
-/// offset it points at, and where the script it is in opens.
+/// What svelte-check makes of the syntax error the compiler throws in
+/// one of the component's scripts.
+pub(crate) enum ScriptParseError {
+    /// It reports the error: the message (docs link and hint included),
+    /// the offset it points at, and where the script it is in opens.
+    Shown {
+        message: String,
+        range: Range,
+        script_opens: u32,
+    },
+    /// It keeps the error to itself: the message says something was
+    /// "expected", the component names a language, and the project
+    /// configures no preprocessor, so the language server takes the
+    /// syntax for another preprocessor's. The compile failed all the
+    /// same, and nothing else comes out of it.
+    Hidden { script_opens: u32 },
+}
+
+/// The syntax error the compiler throws in the component's scripts, if
+/// any, as svelte-check treats it.
 pub(crate) fn script_parse_error(
     doc: &Document<'_>,
     source: &str,
     scripts: &[Script<'_, '_, '_>],
     settings: &Settings,
-) -> Option<(String, Range, u32)> {
+) -> Option<ScriptParseError> {
     let mut ordered: Vec<&Script<'_, '_, '_>> = scripts.iter().collect();
     ordered.sort_by_key(|s| s.section.content_range.start);
     for script in ordered {
@@ -102,17 +119,19 @@ pub(crate) fn script_parse_error(
         let mut message = format!("{}\nhttps://svelte.dev/e/js_parse_error", candidate.message);
         if message.contains("expected") {
             if !settings.preprocess_configured && has_language_attribute(doc) {
-                return None;
+                return Some(ScriptParseError::Hidden {
+                    script_opens: script.section.open_tag_range.start,
+                });
             }
             if in_script_tag(doc, at) {
                 message.push_str(PREPROCESS_HINT);
             }
         }
-        return Some((
+        return Some(ScriptParseError::Shown {
             message,
-            Range::new(at, at),
-            script.section.open_tag_range.start,
-        ));
+            range: Range::new(at, at),
+            script_opens: script.section.open_tag_range.start,
+        });
     }
     None
 }
@@ -2095,7 +2114,11 @@ mod tests {
             preprocess_ts,
             preprocess_configured,
         };
-        let (message, range, _) = script_parse_error(&doc, source, &scripts, &settings)?;
+        let ScriptParseError::Shown { message, range, .. } =
+            script_parse_error(&doc, source, &scripts, &settings)?
+        else {
+            return None;
+        };
         let positions = svn_core::PositionMap::new(source);
         let at = positions.position_of(range.start);
         let hint = if message.contains("If you expect") {

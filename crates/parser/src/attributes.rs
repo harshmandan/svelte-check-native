@@ -307,78 +307,22 @@ fn parse_named_attribute(
 ) -> Option<Attribute> {
     let start = scanner.pos();
 
-    // Read the attribute name. Directive names include `:`; HTML attrs
-    // can include hyphens, digits, underscores, and (rarely) `$`. `|`
-    // is part of directive-modifier syntax (`on:click|once`) — valid
-    // only after a `:` but harmless to allow generally since plain
-    // HTML attrs don't use pipes.
-    //
-    // The upstream Svelte compiler reads attribute and directive names
-    // by terminating only on `\s`, `=`, `/`, `>`, `"`, `'` — every other
-    // byte is part of the name. Mirror that here so Tailwind/UnoCSS
-    // class-directive shapes round-trip:
-    //   `class:!font-semibold={cond}`            — `!` important prefix
-    //   `class:*:bg-red-500={cond}`              — `*:` child variant
-    //   `class:[aspect-16/9]={cond}`             — `/` only inside `[…]`
-    //   `class:grid-cols-[1fr_500px]={cond}`     — bracketed value
-    //   `class:bg-[var(--my-prop)]={cond}`       — parens inside brackets
-    //   `class:grid-cols-[minmax(0,1fr)]={cond}` — commas inside brackets
-    // Terminator-set enforcement (instead of an alphanumeric allowlist)
-    // is what makes the parser robust to Tailwind's evolving sigil
-    // grammar without a code change per character — pre-fix, an
-    // unsupported byte truncated the name, the rest fell through to
-    // `parse_named_attribute` recovery as a separate plain attribute,
-    // and downstream emit reported it as an unknown DOM prop (TS2353
-    // — see gh#14). Bracket depth is still tracked so a closing `]`
-    // doesn't mistakenly terminate when the depth-0 terminator set
-    // (which excludes `]`) is in effect inside `[...]` — e.g. so
-    // `class:[&>li]:foo` doesn't end at the inner `>`.
-    //
-    // `<` is the only depth-0 terminator we keep that upstream's
-    // regex doesn't include — Svelte's parser allows `<` inside
-    // attribute names but practical templates don't, and stopping
-    // there speeds up malformed-tag recovery in the surrounding
-    // template walker.
-    //
-    // `/` keeps terminating at depth 0 — without lookahead, accepting
-    // it would swallow the self-closing `/>` terminator (`<input
-    // bind:value/>`). Inside `[...]` upstream allows it, and so do
-    // we; that's where Tailwind's `aspect-16/9` shape lives.
+    // Read the attribute name as the compiler's `read_tag_name` does:
+    // it ends at white space (the compiler's full set, Unicode spaces
+    // included), `/`, `>`, a quote or `=`, and every other character is
+    // part of it. So Tailwind / UnoCSS class-directive shapes such as
+    // `class:!font-semibold`, `class:*:bg-red-500` and
+    // `class:bg-[var(--my-prop)]` are one name, while a `>` or `/` ends
+    // the name even inside brackets: `class:[&>li]:x={c}` is the
+    // directive `class:[&` and the `>` closes the tag, and in
+    // `class:[aspect-16/9]` the `/` ends the name (the compiler then
+    // fails to find the tag's `>`). A `<` is part of the name.
     let name_start = scanner.pos();
-    let mut bracket_depth: u32 = 0;
     while let Some(b) = scanner.peek_byte() {
-        // Upstream terminates names on `\s` — the full JS whitespace
-        // class — so a Unicode space (NBSP etc.) between attributes
-        // ends the name like an ASCII space does. Other non-ASCII
-        // chars are part of the name.
-        if b >= 0x80 {
-            if is_svelte_whitespace_at(scanner.source().as_bytes(), scanner.pos() as usize) {
-                break;
-            }
-            scanner.advance_char();
-            continue;
-        }
-        if bracket_depth > 0 {
-            if matches!(b, b' ' | 0x09..=0x0d | b'=' | b'>' | b'<' | b'"' | b'\'') {
-                break;
-            }
-            if b == b'[' {
-                bracket_depth += 1;
-            } else if b == b']' {
-                bracket_depth -= 1;
-            }
-            scanner.advance_byte();
-        } else if matches!(
-            b,
-            b' ' | 0x09..=0x0d | b'=' | b'/' | b'>' | b'<' | b'"' | b'\''
-        ) {
+        if at_whitespace(scanner) || matches!(b, b'=' | b'/' | b'>' | b'"' | b'\'') {
             break;
-        } else if b == b'[' {
-            bracket_depth += 1;
-            scanner.advance_byte();
-        } else {
-            scanner.advance_byte();
         }
+        scanner.advance_char();
     }
     if scanner.pos() == name_start {
         return None;

@@ -947,6 +947,10 @@ fn native_diagnostics_for_parsed(
         compile_options: config.compile_options.clone(),
         compile_option_warnings,
         bidi_last_index,
+        // A template the compiler's parser rejects never gets here:
+        // the component is left out before it is linted. The text of
+        // a second, transpiled reading has not been asked about.
+        template_parse_accepted: !already_transpiled,
     };
     let report = svn_lint::lint_parsed(doc, fragment, source, pm, path, options, compat);
     // A compiler crash reaches svelte-check as an exception with no

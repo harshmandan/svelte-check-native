@@ -95,6 +95,11 @@ pub struct LintOptions {
     /// holds when this component is compiled: it is shared by every
     /// compile in the process (see [`LintReport::bidi`]).
     pub bidi_last_index: u32,
+    /// The caller has already asked [`template_parse_rejected`] about
+    /// this template and it is not rejected. Reading every expression
+    /// of the template again to find the parser's first error would
+    /// find none, at the cost of the whole first reading.
+    pub template_parse_accepted: bool,
 }
 
 /// Report the compile options' validation before anything else: its
@@ -191,6 +196,7 @@ pub fn lint_parsed<'src>(
     ctx.ts_scripts_transpiled = options.ts_scripts_transpiled;
     ctx.preprocess_configured = options.preprocess_configured;
     ctx.bidi_last_index = options.bidi_last_index;
+    ctx.template_parse_accepted = options.template_parse_accepted;
     report_compile_options(&options, &mut ctx);
     crate::walk::walk_parsed(doc, fragment, source, path, options.runes, &mut ctx);
     let exception = ctx.take_exception();

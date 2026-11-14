@@ -149,6 +149,8 @@ pub struct LintContext<'src> {
     /// Where the compiler's bidi regex starts (see
     /// [`crate::LintOptions::bidi_last_index`]).
     pub(crate) bidi_last_index: u32,
+    /// See [`crate::LintOptions::template_parse_accepted`].
+    pub(crate) template_parse_accepted: bool,
     /// What compiling the component does to that regex.
     pub(crate) bidi_trace: crate::rules::bidi_state::BidiTrace,
     pub(crate) first_slot: Option<(SmolStr, Range)>,
@@ -193,6 +195,7 @@ impl<'src> LintContext<'src> {
             needs_real_transpile: false,
             real_transpile_unavailable: false,
             bidi_last_index: 0,
+            template_parse_accepted: false,
             bidi_trace: crate::rules::bidi_state::BidiTrace::Untouched,
             first_slot: None,
             compile_options_late_error: None,

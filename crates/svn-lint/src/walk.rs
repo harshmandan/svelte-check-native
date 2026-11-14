@@ -280,7 +280,11 @@ pub fn walk_parsed(
     // analysis. The compiler parses each script where it stands while
     // it reads the component, so of a template error and a script's
     // syntax error, the one the parser reaches first is thrown.
-    let template_error = crate::parse_errors::first_template_parse_error_at(fragment, source);
+    let template_error = if ctx.template_parse_accepted {
+        None
+    } else {
+        crate::parse_errors::first_template_parse_error_at(fragment, source)
+    };
     let report_template_error = |ctx: &mut LintContext<'_>| {
         if let Some((_, finding)) = &template_error {
             if finding.exception {

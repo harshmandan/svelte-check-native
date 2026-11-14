@@ -56,10 +56,10 @@ struct Cli {
     /// discovery (and disables nested config lookup), mirroring upstream
     /// svelte-check's `--config` (added in #3031 / #3066). For a
     /// `vite.config`, the Svelte-config surface we consume
-    /// (`warningFilter`, `kit.files`, `namespace`) is read from the inline
-    /// `sveltekit()` / `svelte()` plugin options when statically
-    /// resolvable (SvelteKit 2.62+, svelte/kit#15944); otherwise it falls
-    /// back to the `svelte.config`-style default export.
+    /// (`warningFilter`, `kit.files`, `preprocess`, `compilerOptions`) is
+    /// read from the inline `sveltekit()` / `svelte()` plugin options when
+    /// statically resolvable (SvelteKit 2.62+, svelte/kit#15944); otherwise
+    /// it falls back to the `svelte.config`-style default export.
     #[arg(long)]
     config: Option<PathBuf>,
 
@@ -1391,8 +1391,8 @@ fn merge_native_diagnostics(
     }
 
     // Phase 2: all warnings, in source order — matches the old lint
-    // pass's emission slot. Dedups by [`WarningKey`] so
-    // `--svelte-warnings=both` doesn't double-report against the bridge.
+    // pass's emission slot. Each is recorded by its [`WarningKey`], which
+    // keeps a warning the compiler repeats at one position as two.
     for (path, warnings) in warning_files {
         let mut occurrences = std::collections::HashMap::new();
         for w in warnings {
@@ -2527,9 +2527,9 @@ fn check_project(
     // and report only the syntax error.
     let mut broken_files: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     if sources.svelte {
-        // Track which (code, path, offset) tuples we've already
-        // pushed so `--svelte-warnings=both` can dedup bridge/native
-        // overlap without double-counting.
+        // The warnings already reported, by [`WarningKey`]. Only one of
+        // the native pass and the bridge runs, and the key counts repeats
+        // at one position, so nothing the compiler said twice is lost.
         let mut seen: std::collections::HashSet<WarningKey> = std::collections::HashSet::new();
 
         if run_native {

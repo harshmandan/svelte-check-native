@@ -33,7 +33,7 @@
 //! A position that maps nowhere lands at the file's start (the language
 //! server clamps the negative line it gets).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 /// One `<script>` tag as `svelte.preprocess` finds it.
@@ -369,22 +369,20 @@ fn print_batch(
     contents: &[&str],
 ) -> Option<Vec<Option<PrintedScript>>> {
     let dir = scratch_dir()?;
-    let printed = print_in(&dir, tsgo, contents);
-    let _ = std::fs::remove_dir_all(&dir);
-    printed
+    print_in(dir.path(), tsgo, contents)
 }
 
-fn scratch_dir() -> Option<PathBuf> {
-    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    let dir = std::env::temp_dir().join(format!(
-        "svelte-check-native-transpile-{}-{nanos}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
-    std::fs::create_dir_all(dir.join("in")).ok()?;
+/// A directory for one tsgo batch, with its `in/` folder: created with a
+/// random name and readable by this user only, and removed when the
+/// handle is dropped (on a panic too).
+fn scratch_dir() -> Option<tempfile::TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("svelte-check-native-transpile-");
+    // tempfile leaves a directory's mode to the umask.
+    #[cfg(unix)]
+    builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
+    let dir = builder.tempdir().ok()?;
+    std::fs::create_dir(dir.path().join("in")).ok()?;
     Some(dir)
 }
 

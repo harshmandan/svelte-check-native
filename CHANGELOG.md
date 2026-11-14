@@ -6,6 +6,107 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Targets Svelte 5.57.3 (the pinned compiler checkout moves from 5.55.4).
+JavaScript and TypeScript in components are now read by a Rust port of
+acorn and acorn-typescript, the parsers Svelte itself uses, so parse
+errors match the compiler's code, message and position. Expect new
+errors where the compiler rejects syntax we used to read past.
+
+### Added
+
+- **Parse errors read the way the compiler reads them.** Scripts,
+  template expressions, `{#each}` / `{#await}` / `{#snippet}` heads,
+  `{@…}` tags, patterns and declaration tags end and split where
+  Svelte's parser ends them, and report acorn's and acorn-typescript's
+  own errors, including strict-mode early errors and regular
+  expression errors.
+- **Imports of a component the compiler rejects** (tsgo enhancement)
+  report what the default engine reports at those imports, also when
+  the rejected component is outside the tsconfig but imported by the
+  program.
+
+### Changed
+
+- **`--svelte-warnings=bridge` fails the run when it cannot run
+  `svelte/compiler`** (no JS runtime, no `svelte` package, or a worker
+  that died): the reason on stderr, nothing on stdout, exit 1. It used
+  to carry on and could exit 0.
+- **Bridge mode compiles every discovered component**, not only those
+  in the tsconfig.
+- New dependency: `stacker`, which grows the stack on demand for deeply
+  nested input.
+
+### Fixed
+
+- Svelte 5.57.3 compiler messages, a11y role handling and analysis
+  errors (`let:` beside a children snippet, exported state before
+  `export let`, a tag reusing a snippet parameter).
+- Eight lint rules brought into line with the compiler; element a11y
+  warnings are raised in the compiler's order; script `svelte-ignore`
+  comments attach to the node acorn attaches them to.
+- Emit matches svelte2tsx for generic component signatures, `{@attach}`
+  on components, bare `data-*` attributes, quoted single-expression
+  props, `<svelte:self>`, get/set DOM bindings, `slot=` outside a slot
+  position, typed `{#each}` patterns, a `<style>` nested in the
+  template, and parenthesized comma sequences in attribute values.
+- `bind:` attribute key errors and positions inside generated
+  statements map where svelte-check puts them.
+- A component whose script exports everything from a module is left
+  out as upstream leaves it out; fallback-transpiled scripts are read
+  as TypeScript prints them.
+- **A component with a non-breaking space (or other Unicode white
+  space) inside a tag is checked.** `<div class= "x">` used to be
+  rejected and the file silently left out: no type errors, not counted.
+  Tags now use the compiler's white-space set, and attribute names end
+  where the compiler ends them.
+- **Top-level `<script>` / `<style>` tags are read as the compiler
+  reads them**: `<script lang = "ts">`, `<script />`, a duplicate
+  attribute or a missing value report the compiler's error.
+- **Declaration tags, `{#each}` patterns and nested raw-text
+  `<style>` / `<script>`** end and report errors where the compiler
+  does; an unterminated block comment inside a tag no longer cuts the
+  tag short.
+- **`svelte-ignore` comments match the compiler**: `unknown_code` is
+  reported once, not once per nested node; an ignore applies to every
+  node inside the one it leads (switch cases, destructuring defaults,
+  catch parameters, `for` headers); `<svelte:options>` no longer hides
+  the comments before the next element; comments inside template
+  expressions and before `<style>` are checked; positions in
+  multi-line block comments and fuzzy-match suggestions match.
+- **Warnings come out in the compiler's order**: `state_referenced_locally`
+  and its siblings interleave with the other script warnings.
+- **Comma-sequence attribute values** map their errors to upstream's
+  start and end columns, and no longer add an internal error.
+- **Component props match svelte2tsx**: destructured exports (nested,
+  rest, array holes), `export { x }` of a variable declared without a
+  value (now required), duplicate keys in SvelteKit auto-typed props,
+  and `$$Props` beside other exports. `$$props` in a TypeScript
+  component no longer rejects every prop as `never`.
+- **`bind:` follows the component's runes mode**: a JavaScript runes
+  component no longer accepts `bind:` on every prop.
+- **`style:x="{value}"`** type-checks the value as upstream does.
+- **`{#each}` over a possibly-`undefined` value under Svelte 4**
+  reports TS2345 as upstream does.
+- **Bridge mode finds `svelte` per component** (from the file's
+  directory up, then from where svelte-check-native is installed), so
+  pnpm monorepos whose root has no `svelte` work.
+- **Helper scripts run from a private, per-run temp directory** (mode
+  0700), and early exits stop the transpile worker and remove its
+  scratch directory.
+- **Imports of a rejected component** drop only the diagnostics the
+  rejection causes (an unused-import TS6133 is still reported), honour
+  `/* @ts-ignore */` block-comment directives, and follow the
+  component's fallback script only.
+- Program files whose path contains ` - ` are no longer dropped from
+  the import checks.
+- One failed transpile worker no longer sends every component to the
+  fallback printer.
+- A crash exits 1 with "svelte-check failed", not 101. The check runs
+  on a thread pool that falls back to smaller stacks, with a note, when
+  the system refuses large ones.
+- A component our parser rejects but the compiler accepts gets a note
+  on stderr instead of being skipped silently.
+
 ## [1.11.1]
 
 One fix to the missing-`.svelte`-import check.

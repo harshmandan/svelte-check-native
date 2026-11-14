@@ -1,0 +1,77 @@
+# Cross-build gate: every release target builds and links.
+#
+# A release cross-builds the binary for the five targets in
+# scripts/targets.mjs with `cargo zigbuild` (scripts/build-all.mjs), from
+# one machine, only at release time. Some dependencies compile C or
+# assembly per target through `cc` (`stacker` → `psm`, for the deep
+# stacks the check runs on), and a target whose build script or link
+# breaks would otherwise surface only then.
+#
+# The Linux and Windows targets build here the way the release builds
+# them, with cargo-zigbuild and Zig as the C compiler and linker. The
+# macOS targets need Apple's SDK, which Zig does not ship; they build
+# with plain cargo on a macOS runner, as on the release machine. The dev
+# profile is enough to run every build script and link the binary; the
+# release profile's thin LTO would only make the job slower.
+
+name: cross-build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: cross-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  zigbuild:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-musl
+          - x86_64-pc-windows-gnu
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+      # rust-toolchain.toml pins the toolchain; add the target to that one.
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      # The versions the release machine builds with.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild@0.23.4
+      - name: Build
+        run: cargo zigbuild --locked --target ${{ matrix.target }} -p svelte-check-native
+
+  macos:
+    name: ${{ matrix.target }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --locked --target ${{ matrix.target }} -p svelte-check-native

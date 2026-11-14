@@ -111,13 +111,13 @@
       "reason": "Same type: svelte2tsx declares `type $$ComponentProps = Record<string, any>` for the nested destructuring and casts to the name; we cast to `Record<string, any>` itself."
     },
     {
-      "status": "bug",
+      "status": "intended",
       "sample": ["svelte2tsx/props-variable-and-$props.id.v5", "bugs/500-props-type-argument-reported"],
       "kind": "result",
       "label": "props",
       "ours": "T<any>",
       "upstream": "T<$$ComponentProps>",
-      "reason": "For `let props = $props()` (no destructuring) svelte2tsx casts the props to `$$ComponentProps` without declaring that name, an unresolved type; we write `any`. Not established that the two give the same diagnostics."
+      "reason": "Same type, same diagnostics: for `let props = $props()` (no destructuring) svelte2tsx casts the props to `$$ComponentProps` without declaring that name. TypeScript gives an unresolved name its error type, which is assignable both ways like `any`, so a consumer may pass any prop to either; and the TS2304 for the missing name sits in the render function's generated `return`, which maps to no source text, so svelte-check drops it (bugs/500 locks that no error but the TS2558 is reported)."
     },
     {
       "status": "intended",

@@ -47,33 +47,6 @@
       "reason": "Our render result declares `bindings: string` for this runes component, so every prop accepts `bind:`; svelte2tsx lists the `$bindable()` props, `l` and `m`."
     },
     {
-      "status": "bug",
-      "sample": ["svelte2tsx/ts-event-dispatcher-typed", "svelte2tsx/ts-event-dispatchers", "svelte2tsx/ts-event-dispatchers-same-event"],
-      "kind": "result",
-      "label": "bindings",
-      "ours": null,
-      "upstream": "T<string>",
-      "reason": "Our events type for a typed `createEventDispatcher<{…}>()` copies the user's type argument, JSDoc comments included, into a JSDoc cast `/** @type {…} */`; the first `*/` of a copied comment ends the cast, and the rest of the render result is read as code (TypeScript reports `',' expected`). The keys after `events` are lost; svelte2tsx writes the events as `__sveltets_2_toEventTypings<…>()` in code."
-    },
-    {
-      "status": "bug",
-      "sample": ["svelte2tsx/ts-event-dispatcher-typed", "svelte2tsx/ts-event-dispatchers", "svelte2tsx/ts-event-dispatchers-same-event"],
-      "kind": "result",
-      "label": "exports",
-      "ours": null,
-      "upstream": "T<{}>",
-      "reason": "Same cause as this sample's missing `bindings`: a JSDoc comment copied into the events cast closes it early, and the keys after it are not part of the result."
-    },
-    {
-      "status": "bug",
-      "sample": ["svelte2tsx/ts-event-dispatcher-typed", "svelte2tsx/ts-event-dispatchers", "svelte2tsx/ts-event-dispatchers-same-event"],
-      "kind": "result",
-      "label": "slots",
-      "ours": null,
-      "upstream": "T<{}>",
-      "reason": "Same cause as this sample's missing `bindings`: a JSDoc comment copied into the events cast closes it early, and the keys after it are not part of the result."
-    },
-    {
       "status": "intended",
       "sample": ["bugs/444-svelte-4-install-has-no-implicit-children", "bugs/570-each-nullable-rejected-under-svelte-4"],
       "kind": "result",

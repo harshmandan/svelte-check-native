@@ -589,6 +589,9 @@ impl Parser {
             return self.raise(start, "Invalid regular expression flag");
         }
         if let Some(reason) = regexp::pattern_error(&pattern, &flags) {
+            if reason == regexp::STACK_EXHAUSTED {
+                return self.stack_exhausted();
+            }
             let source = String::from_utf16_lossy(&pattern);
             return self.raise(
                 start,

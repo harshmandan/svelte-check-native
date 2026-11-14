@@ -2,7 +2,7 @@
 
 use crate::identifier::{is_keyword, is_reserved, is_reserved_strict};
 use crate::state::{
-    Bind, DestructuringErrors, ForInit, Lit, Node, PResult, Parser, SCOPE_ARROW,
+    Bind, DestructuringErrors, ForInit, Lit, Nest, Node, PResult, Parser, SCOPE_ARROW,
     SCOPE_DIRECT_SUPER, SCOPE_SUPER, SCOPE_VAR, Ty, function_flags, with_stack,
 };
 use crate::token::{Ctx, Tok};
@@ -163,6 +163,7 @@ impl Parser {
             }
             node.a = Some(Box::new(left));
             self.next()?;
+            self.chain_link = true;
             node.b = Some(Box::new(self.parse_maybe_assign(for_init, None)?));
             if old_double_proto > -1 {
                 errors.double_proto = old_double_proto;
@@ -199,6 +200,7 @@ impl Parser {
             let node = self.start_node_at(start_pos);
             self.parse_maybe_assign(ForInit::No, None)?;
             self.expect(Tok::Colon)?;
+            self.chain_link = true;
             self.parse_maybe_assign(for_init, None)?;
             return Ok(self.finish_node(node, Ty::Other));
         }
@@ -229,7 +231,12 @@ impl Parser {
         min_prec: i32,
         for_init: ForInit,
     ) -> PResult<Node> {
+        let mut operators = 0;
         loop {
+            operators += 1;
+            if operators > crate::state::MAX_BINARY_CHAIN {
+                return self.stack_exhausted();
+            }
             if self.ts {
                 match self.ts_parse_as_or_satisfies(left, left_start, min_prec)? {
                     Ok(node) => {
@@ -291,8 +298,8 @@ impl Parser {
         // Nesting is counted where the enclosing expression is read; a
         // run of prefix operators nests without one.
         self.unary_depth += 1;
-        if self.unary_depth > 8 * crate::state::MAX_DEPTH {
-            return self.raise(self.start, "Not enough stack space to parse input");
+        if self.unary_depth > crate::state::MAX_UNARY_DEPTH {
+            return self.stack_exhausted();
         }
         let result = with_stack(|| {
             if self.ts && self.ts_match_left_relational() {
@@ -711,8 +718,13 @@ impl Parser {
                 let node = self.start_node();
                 self.parse_class(node, crate::statement::ClassPosition::Expression)
             }
-            Tok::KwNew if self.ts => self.ts_parse_new(),
-            Tok::KwNew => self.parse_new(),
+            Tok::KwNew => self.nested(Nest::Atom, |p| {
+                if p.ts {
+                    p.ts_parse_new()
+                } else {
+                    p.parse_new()
+                }
+            }),
             Tok::BackQuote => {
                 let mut node = self.start_node();
                 let substitutions = self.parse_template(false)?;

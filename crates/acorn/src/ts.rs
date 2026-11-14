@@ -255,6 +255,7 @@ impl Parser {
                 let error = match stop {
                     Stop::Error(raised) => raised,
                     Stop::Crash(message) => return Err(Stop::Crash(message)),
+                    Stop::StackExhausted(raised) => return Err(Stop::StackExhausted(raised)),
                     Stop::InvalidTemplateEscape => Raised {
                         pos: self.start as u32,
                         message: "Unexpected token".to_string(),
@@ -692,7 +693,7 @@ impl Parser {
                 self.parse_literal()?;
                 None
             } else {
-                Some(self.parse_ident(true)?.name)
+                Some(std::mem::take(&mut self.parse_ident(true)?.name))
             };
             self.next()?;
             let name = key.unwrap_or_else(|| "\u{0}undefined".to_string());

@@ -81,7 +81,7 @@ impl Units {
 
     fn error(&self, stop: Stop) -> SyntaxError {
         match stop {
-            Stop::Error(raised) => SyntaxError {
+            Stop::Error(raised) | Stop::StackExhausted(raised) => SyntaxError {
                 message: raised.message,
                 pos: self.byte(raised.pos),
                 column_of: raised.column_of,
@@ -198,3 +198,8 @@ pub fn regexp_pattern_error(pattern: &str, flags: &str) -> Option<&'static str> 
     let units: Vec<u16> = pattern.encode_utf16().collect();
     regexp::pattern_error(&units, flags)
 }
+
+/// What `regexp_pattern_error` answers for a pattern nested deeper than
+/// acorn has stack for. acorn reports it as it stands, not as an
+/// invalid regular expression.
+pub const REGEXP_STACK_EXHAUSTED: &str = regexp::STACK_EXHAUSTED;

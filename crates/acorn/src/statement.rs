@@ -2,9 +2,9 @@
 
 use crate::identifier::{is_identifier_char, is_identifier_start};
 use crate::state::{
-    Bind, DestructuringErrors, ForInit, Label, LabelKind, Node, PResult, Parser, PrivateNames,
-    SCOPE_CLASS_FIELD_INIT, SCOPE_CLASS_STATIC_BLOCK, SCOPE_SIMPLE_CATCH, SCOPE_SUPER,
-    SCOPE_SWITCH, StatementContext, Ty, function_flags, with_stack,
+    Bind, DestructuringErrors, ForInit, Label, LabelKind, Nest, Node, PResult, Parser,
+    PrivateNames, SCOPE_CLASS_FIELD_INIT, SCOPE_CLASS_STATIC_BLOCK, SCOPE_SIMPLE_CATCH,
+    SCOPE_SUPER, SCOPE_SWITCH, StatementContext, Ty, function_flags, with_stack,
 };
 use crate::token::Tok;
 
@@ -264,9 +264,9 @@ impl Parser {
         } else if self.ty != Tok::Name {
             return self.unexpected();
         } else {
-            let label = self.parse_ident(false)?;
+            let mut label = self.parse_ident(false)?;
             self.semicolon()?;
-            Some(label.name)
+            Some(std::mem::take(&mut label.name))
         };
 
         // The label or enclosing statement this jumps out of.
@@ -843,10 +843,17 @@ impl Parser {
     }
 
     /// A class, from `class`.
-    pub(crate) fn parse_class(&mut self, mut node: Node, position: ClassPosition) -> PResult<Node> {
-        if self.ts {
-            return self.ts_parse_class(node, position);
-        }
+    pub(crate) fn parse_class(&mut self, node: Node, position: ClassPosition) -> PResult<Node> {
+        self.nested(Nest::Atom, |p| {
+            if p.ts {
+                p.ts_parse_class(node, position)
+            } else {
+                p.parse_class_inner(node, position)
+            }
+        })
+    }
+
+    fn parse_class_inner(&mut self, mut node: Node, position: ClassPosition) -> PResult<Node> {
         self.next()?;
 
         // A class is strict code throughout.

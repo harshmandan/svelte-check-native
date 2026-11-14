@@ -1,7 +1,7 @@
 //! acorn-typescript's type parser: everything after a `:`, inside
 //! `<…>`, and in the body of an interface or type alias.
 
-use crate::state::{ForInit, Node, PResult, Parser, Stop, Ty};
+use crate::state::{ForInit, Nest, Node, PResult, Parser, Stop, Ty};
 use crate::token::Tok;
 use crate::ts::{
     INVALID_MODIFIER_ON_TYPE_MEMBER, INVALID_MODIFIER_ON_TYPE_PARAMETER,
@@ -220,7 +220,7 @@ impl Parser {
             },
         };
         self.ts_parse_modifiers(&mut node, &rules)?;
-        node.name = self.parse_ident(false)?.name;
+        node.name = std::mem::take(&mut self.parse_ident(false)?.name);
         self.ts_eat_then_parse_type(Tok::KwExtends)?;
         self.ts_eat_then_parse_type(Tok::Eq)?;
         Ok(self.finish_node(node, Ty::TsType))
@@ -865,6 +865,13 @@ impl Parser {
     }
 
     fn ts_parse_type_operator_or_higher(&mut self) -> PResult<Node> {
+        self.nested(
+            Nest::TypeOperator,
+            Self::ts_parse_type_operator_or_higher_inner,
+        )
+    }
+
+    fn ts_parse_type_operator_or_higher_inner(&mut self) -> PResult<Node> {
         let is_type_operator =
             matches!(self.ty, Tok::TsKeyof | Tok::TsReadonly | Tok::TsUnique) && !self.contains_esc;
         if is_type_operator {
@@ -942,6 +949,10 @@ impl Parser {
 
     /// A type.
     pub(crate) fn ts_parse_type(&mut self) -> PResult<Node> {
+        self.nested(Nest::Type, Self::ts_parse_type_inner)
+    }
+
+    fn ts_parse_type_inner(&mut self) -> PResult<Node> {
         let checked = self.ts_parse_non_conditional_type()?;
         if self.in_disallow_conditional_types_context
             || self.has_preceding_line_break()

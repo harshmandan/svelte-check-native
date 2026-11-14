@@ -27,6 +27,10 @@ pub(crate) enum Stop {
     /// does not have. The JavaScript engine's error text is kept. It is
     /// no syntax error, so no attempt that may fail holds it back.
     Crash(&'static str),
+    /// Nesting deeper than acorn has stack for. In JavaScript that is a
+    /// `RangeError`, which acorn turns into a syntax error only once it
+    /// has left the whole parse: no attempt that may fail holds it back.
+    StackExhausted(Raised),
     /// An escape a template may not hold. Thrown inside the tokenizer
     /// and caught by it: the template is then read as an invalid one.
     InvalidTemplateEscape,
@@ -228,6 +232,18 @@ pub(crate) struct Node {
     pub list: Vec<Option<Node>>,
 }
 
+/// A member chain `a.b.c.…` is as deep a tree as it is long, and no
+/// nesting count bounds its length: the chain is taken apart link by
+/// link, so that dropping it does not recurse once for each.
+impl Drop for Node {
+    fn drop(&mut self) {
+        let mut next = self.a.take();
+        while let Some(mut node) = next {
+            next = node.a.take();
+        }
+    }
+}
+
 impl Node {
     pub(crate) fn at(start: u32) -> Node {
         Node {
@@ -403,6 +419,13 @@ pub(crate) struct Parser {
     /// runs out by expression nesting whatever the statement around it.
     pub depth: u32,
     pub statement_depth: u32,
+    /// How deep each kind of `Nest` is.
+    pub nest: [u32; 5],
+    /// The expression about to be read is one more link of a `?:` or
+    /// `=` chain.
+    pub chain_link: bool,
+    /// What each open expression added to `depth`.
+    pub depth_costs: Vec<u32>,
     /// How long the chain of prefix operators being read is.
     pub unary_depth: u32,
     /// Keep a parenthesized expression as a node of its own. The
@@ -434,6 +457,40 @@ pub(crate) struct Parser {
 /// engine it runs in and varies from run to run; this is about where
 /// Node 24 does for nested arrays.
 pub(crate) const MAX_DEPTH: u32 = 984;
+
+/// What `depth` counts in: one nested expression costs this much, one
+/// more link of a `?:` or `=` chain costs one. acorn spends about a
+/// quarter of the stack on a link that it spends on a nested array.
+pub(crate) const DEPTH_UNIT: u32 = 4;
+
+/// Statements nest deeper than expressions before acorn runs out:
+/// about this far for nested blocks in Node 24.
+pub(crate) const MAX_STATEMENT_DEPTH: u32 = 2800;
+
+/// How long a run of prefix operators acorn reads in Node 24.
+pub(crate) const MAX_UNARY_DEPTH: u32 = 3870;
+
+/// How many binary operators in a row acorn reads in Node 24: it
+/// calls itself once for each.
+pub(crate) const MAX_BINARY_CHAIN: u32 = 6195;
+
+/// Recursion that no expression or statement count sees, each with
+/// about the depth acorn reaches in Node 24.
+#[derive(Clone, Copy)]
+pub(crate) enum Nest {
+    /// A type inside a type: parentheses, type arguments, tuples.
+    Type,
+    /// `keyof keyof …`: a run of type operators.
+    TypeOperator,
+    /// A binding pattern inside a binding pattern.
+    Pattern,
+    /// `class extends class extends …` and `new new …`.
+    Atom,
+    /// `namespace A.B.C`: one level for each name.
+    Namespace,
+}
+
+const NEST_LIMITS: [u32; 5] = [984, 3000, 1171, 1875, 3000];
 
 /// Runs one level of the parser's recursion with room on the stack:
 /// more is taken from the heap when little is left.
@@ -471,6 +528,9 @@ impl Parser {
             private_name_stack: Vec::new(),
             depth: 0,
             statement_depth: 0,
+            nest: [0; 5],
+            chain_link: false,
+            depth_costs: Vec::new(),
             unary_depth: 0,
             preserve_parens: false,
             forget_undefined_exports: false,
@@ -534,26 +594,60 @@ impl Parser {
         }))
     }
 
+    /// acorn's answer to running out of stack.
+    pub(crate) fn stack_exhausted<T>(&self) -> PResult<T> {
+        Err(Stop::StackExhausted(Raised {
+            pos: self.start as u32,
+            message: "Not enough stack space to parse input".to_string(),
+            column_of: false,
+            no_position: false,
+        }))
+    }
+
     /// Guards one level of expression nesting.
     pub(crate) fn descend(&mut self) -> PResult<()> {
-        self.depth += 1;
-        if self.depth > MAX_DEPTH {
-            return self.raise(self.start, "Not enough stack space to parse input");
+        let cost = if std::mem::take(&mut self.chain_link) {
+            1
+        } else {
+            DEPTH_UNIT
+        };
+        self.depth += cost;
+        self.depth_costs.push(cost);
+        if self.depth > MAX_DEPTH * DEPTH_UNIT {
+            return self.stack_exhausted();
         }
         Ok(())
     }
 
     pub(crate) fn ascend(&mut self) {
-        self.depth -= 1;
+        self.depth -= self.depth_costs.pop().unwrap_or(DEPTH_UNIT);
     }
 
     /// Guards one level of statement nesting.
     pub(crate) fn descend_statement(&mut self) -> PResult<()> {
         self.statement_depth += 1;
-        if self.statement_depth > MAX_DEPTH {
-            return self.raise(self.start, "Not enough stack space to parse input");
+        if self.statement_depth > MAX_STATEMENT_DEPTH {
+            return self.stack_exhausted();
         }
         Ok(())
+    }
+
+    /// Runs one level of a recursion the expression and statement
+    /// counts do not see, with room on the stack.
+    pub(crate) fn nested<T>(
+        &mut self,
+        kind: Nest,
+        f: impl FnOnce(&mut Self) -> PResult<T>,
+    ) -> PResult<T> {
+        let i = kind as usize;
+        self.nest[i] += 1;
+        let result = if self.nest[i] > NEST_LIMITS[i] {
+            self.stack_exhausted()
+        } else {
+            with_stack(|| f(self))
+        };
+        self.nest[i] -= 1;
+        result
     }
 
     pub(crate) fn ascend_statement(&mut self) {

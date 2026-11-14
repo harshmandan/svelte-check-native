@@ -3,7 +3,9 @@
 //! checking what a pattern binds or assigns to.
 
 use crate::identifier::is_reserved_strict_bind;
-use crate::state::{Bind, DestructuringErrors, ForInit, Node, PResult, Parser, Ty};
+use crate::state::{
+    Bind, DestructuringErrors, ForInit, Nest, Node, PResult, Parser, Ty, with_stack,
+};
 use crate::token::Tok;
 
 impl Parser {
@@ -17,14 +19,17 @@ impl Parser {
         is_binding: bool,
         errors: Option<&DestructuringErrors>,
     ) -> PResult<()> {
-        if self.ts {
-            // acorn's own callers drop what acorn-typescript returns:
-            // a wrapper it would unwrap stays where it is.
-            return self
-                .ts_to_assignable(node, is_binding, errors, false)
-                .map(|_| ());
-        }
-        self.to_assignable_base(node, is_binding, errors)
+        // As deep as the expression is nested, which the parser bounds.
+        with_stack(|| {
+            if self.ts {
+                // acorn's own callers drop what acorn-typescript returns:
+                // a wrapper it would unwrap stays where it is.
+                return self
+                    .ts_to_assignable(node, is_binding, errors, false)
+                    .map(|_| ());
+            }
+            self.to_assignable_base(node, is_binding, errors)
+        })
     }
 
     // Named as in acorn, which converts the node in place.
@@ -152,6 +157,10 @@ impl Parser {
     }
 
     pub(crate) fn parse_binding_atom(&mut self) -> PResult<Node> {
+        self.nested(Nest::Pattern, Self::parse_binding_atom_inner)
+    }
+
+    fn parse_binding_atom_inner(&mut self) -> PResult<Node> {
         if self.ts && self.ty == Tok::KwThis {
             return self.parse_ident(true);
         }
@@ -352,12 +361,13 @@ impl Parser {
         mut clashes: Option<&mut Vec<String>>,
     ) -> PResult<()> {
         match expr.ty {
-            Ty::ObjectPattern | Ty::ArrayPattern => {
+            // As deep as the pattern is nested, which the parser bounds.
+            Ty::ObjectPattern | Ty::ArrayPattern => with_stack(|| {
                 for element in expr.list.iter().flatten() {
                     self.check_lval_inner_pattern(element, binding, clashes.as_deref_mut())?;
                 }
                 Ok(())
-            }
+            }),
             _ => self.check_lval_simple(expr, binding, clashes),
         }
     }

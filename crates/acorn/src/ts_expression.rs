@@ -30,10 +30,10 @@ impl Parser {
 
     /// `(a: T)` as the parameter it is in an arrow function's list:
     /// the expression, carrying the annotation.
-    pub(crate) fn type_cast_to_parameter(cast: Node) -> Node {
+    pub(crate) fn type_cast_to_parameter(mut cast: Node) -> Node {
         let end = cast.end;
         let annotation = cast.annotation;
-        let mut expression = match cast.a {
+        let mut expression = match cast.a.take() {
             Some(expression) => *expression,
             None => return Node::at(cast.start),
         };
@@ -336,6 +336,7 @@ impl Parser {
             }
             node.a = Some(Box::new(left));
             self.next()?;
+            self.chain_link = true;
             node.b = Some(Box::new(self.parse_maybe_assign(for_init, None)?));
             if old_double_proto > -1 {
                 errors.double_proto = old_double_proto;
@@ -363,6 +364,7 @@ impl Parser {
             let node = self.start_node_at(start_pos);
             self.parse_maybe_assign(ForInit::No, None)?;
             self.expect(Tok::Colon)?;
+            self.chain_link = true;
             self.parse_maybe_assign(for_init, None)?;
             return Ok(self.finish_node(node, Ty::Other));
         }

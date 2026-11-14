@@ -37,9 +37,18 @@ pub(crate) fn pattern_error(pattern: &[u16], flags: &str) -> Option<&'static str
         back_reference_names: Vec::new(),
         branches: Vec::new(),
         branch: None,
+        depth: 0,
     };
     state.validate().err()
 }
+
+/// The reason given for a pattern nested deeper than acorn has stack
+/// for. It is no fault of the pattern: acorn reports it without the
+/// `Invalid regular expression` wording, at the literal's start.
+pub(crate) const STACK_EXHAUSTED: &str = "Not enough stack space to parse input";
+
+/// About how deep groups nest before acorn runs out of stack in Node 24.
+const MAX_GROUP_DEPTH: u32 = 2500;
 
 /// A reason to reject the pattern.
 type Raised = &'static str;
@@ -87,6 +96,8 @@ struct State {
     back_reference_names: Vec<String>,
     branches: Vec<Branch>,
     branch: Option<usize>,
+    /// How deep groups and classes are nested.
+    depth: u32,
 }
 
 const END: i32 = -1;
@@ -321,7 +332,23 @@ impl State {
         Ok(())
     }
 
+    /// Runs one level of group or class nesting with room on the stack.
+    fn nested<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, Raised>) -> Result<T, Raised> {
+        self.depth += 1;
+        let result = if self.depth > MAX_GROUP_DEPTH {
+            Err(STACK_EXHAUSTED)
+        } else {
+            crate::state::with_stack(|| f(self))
+        };
+        self.depth -= 1;
+        result
+    }
+
     fn disjunction(&mut self) -> Result<(), Raised> {
+        self.nested(Self::disjunction_inner)
+    }
+
+    fn disjunction_inner(&mut self) -> Result<(), Raised> {
         let first = self.branches.len();
         self.branches.push(Branch {
             parent: self.branch,
@@ -921,6 +948,10 @@ impl State {
     }
 
     fn class_contents(&mut self) -> Result<CharSet, Raised> {
+        self.nested(Self::class_contents_inner)
+    }
+
+    fn class_contents_inner(&mut self) -> Result<CharSet, Raised> {
         if self.current() == ch(']') {
             return Ok(CharSet::Ok);
         }

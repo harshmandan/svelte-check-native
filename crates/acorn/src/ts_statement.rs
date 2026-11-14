@@ -2,7 +2,7 @@
 //! declarations only TypeScript has.
 
 use crate::state::{
-    Bind, ForInit, Lit, Node, OuterKind, PResult, Parser, PrivateNames, SCOPE_TOP, Stop,
+    Bind, ForInit, Lit, Nest, Node, OuterKind, PResult, Parser, PrivateNames, SCOPE_TOP, Stop,
     TS_SCOPE_OTHER, TS_SCOPE_TS_MODULE, Ty, function_flags,
 };
 use crate::statement::{
@@ -325,7 +325,9 @@ impl Parser {
         node.a = Some(Box::new(id));
         if self.eat(Tok::Dot)? {
             let inner = self.start_node();
-            self.ts_parse_module_or_namespace_declaration(inner, true)?;
+            self.nested(Nest::Namespace, |p| {
+                p.ts_parse_module_or_namespace_declaration(inner, true)
+            })?;
         } else {
             self.enter_scope(TS_SCOPE_TS_MODULE);
             self.ts_parse_module_block()?;

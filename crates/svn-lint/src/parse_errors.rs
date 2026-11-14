@@ -180,12 +180,30 @@ impl Finder<'_> {
     /// than a syntax error in strict-mode module code (a private name
     /// outside its class, `yield` as a name, an octal literal).
     fn expression(&mut self, range: Range) {
+        self.expression_read_before(range, None);
+    }
+
+    /// [`Self::expression`] for the expression a tag opens with, when
+    /// reading the tag failed at `error`: the compiler had read the
+    /// expression by then if it ends before the error.
+    fn first_expression(
+        &mut self,
+        range: Range,
+        error: Option<&svn_parser::tag_read::TagReadError>,
+    ) {
+        self.expression_read_before(range, error.map(|e| e.at));
+    }
+
+    fn expression_read_before(&mut self, range: Range, limit: Option<u32>) {
         let text = range.slice(self.source);
         let svn_parser::acorn::Read::Expression { end, .. } =
             svn_parser::acorn::read_expression(text, self.ts)
         else {
             return;
         };
+        if limit.is_some_and(|limit| range.start + end > limit) {
+            return;
+        }
         let text = &text[..end as usize];
         if is_plain_reference(text) {
             return;
@@ -301,15 +319,11 @@ impl Finder<'_> {
             }
             Node::IfBlock(b) => {
                 self.read_error(b.open_error.as_ref());
-                if b.open_error.is_none() {
-                    self.expression(b.condition_range);
-                }
+                self.first_expression(b.condition_range, b.open_error.as_ref());
                 self.fragment(&b.consequent, false);
                 for arm in &b.elseif_arms {
                     self.read_error(arm.open_error.as_ref());
-                    if arm.open_error.is_none() {
-                        self.expression(arm.condition_range);
-                    }
+                    self.first_expression(arm.condition_range, arm.open_error.as_ref());
                     self.fragment(&arm.body, false);
                 }
                 if let Some(alt) = &b.alternate {
@@ -318,8 +332,8 @@ impl Finder<'_> {
             }
             Node::EachBlock(b) => {
                 self.read_error(b.open_error.as_ref());
+                self.first_expression(b.expression_range, b.open_error.as_ref());
                 if b.open_error.is_none() {
-                    self.expression(b.expression_range);
                     let context = b.as_clause.as_ref().and_then(|c| c.context_range);
                     self.pattern(context.map(|r| r.start));
                     if let Some(key) = b.as_clause.as_ref().and_then(|c| c.key_range) {
@@ -333,9 +347,7 @@ impl Finder<'_> {
             }
             Node::AwaitBlock(b) => {
                 self.read_error(b.open_error.as_ref());
-                if b.open_error.is_none() {
-                    self.expression(b.expression_range);
-                }
+                self.first_expression(b.expression_range, b.open_error.as_ref());
                 if let Some(pending) = &b.pending {
                     self.fragment(pending, false);
                 }
@@ -356,9 +368,7 @@ impl Finder<'_> {
             }
             Node::KeyBlock(b) => {
                 self.read_error(b.open_error.as_ref());
-                if b.open_error.is_none() {
-                    self.expression(b.expression_range);
-                }
+                self.first_expression(b.expression_range, b.open_error.as_ref());
                 self.fragment(&b.body, false);
             }
             Node::SnippetBlock(b) => {

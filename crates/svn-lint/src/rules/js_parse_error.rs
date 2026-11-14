@@ -193,12 +193,23 @@ pub(crate) fn first_error_in(
             .first()
             .and_then(|d| d.labels.first())
             .map_or(0, |l| l.span().start);
+        // Where oxc gave up: nothing it reports lies past that.
+        let gave_up_at = errors
+            .iter()
+            .filter_map(|d| d.labels.first())
+            .map(|l| l.span().start)
+            .max()
+            .unwrap_or(0);
         let before = early_error_before(text, stop, mode);
         let same_line = early_error_in_typescript_reading(text, stop, mode);
-        [before, same_line, regexp_error_before(text, mode)]
-            .into_iter()
-            .flatten()
-            .min_by_key(|c| c.detect)
+        [
+            before,
+            same_line,
+            early_error_in_completed_prefix(text, gave_up_at, mode),
+        ]
+        .into_iter()
+        .flatten()
+        .min_by_key(|c| c.detect)
     } else {
         first_early_error(program, text, mode)
     };
@@ -243,52 +254,104 @@ fn early_error_before(text: &str, stop: u32, mode: Mode) -> Option<Candidate> {
     None
 }
 
-/// The first invalid regular expression in a text oxc gave up on.
+/// How many tokens [`early_error_in_completed_prefix`] adds at most.
+const COMPLETION_ATTEMPTS: usize = 16;
+
+/// The early errors acorn raises before `stop`, the token oxc gave up
+/// at, in the statement that token is part of.
 ///
-/// acorn checks a regular expression's pattern when it has read the
-/// literal, before the next token, so a bad pattern comes before the
-/// syntax error that follows it. oxc keeps no tree here to find the
-/// literals in. Asked to check patterns too, it reports the ones it
-/// rejects, and keeps those reports when it gives up later. Each one
-/// points into a literal, which acorn's own check then judges.
-fn regexp_error_before(text: &str, mode: Mode) -> Option<Candidate> {
-    if !text.contains('/') {
+/// acorn raises an early error where it meets one, so `let = ;` is a
+/// reserved word at `let`, not an unexpected `;`. [`early_error_before`]
+/// sees only the whole lines before the error. Here the text is cut at
+/// `stop` and completed into something oxc can parse. Everything before
+/// `stop` in that tree is what acorn had read, so the checks run on it
+/// find what acorn found there.
+fn early_error_in_completed_prefix(text: &str, stop: u32, mode: Mode) -> Option<Candidate> {
+    let prefix = text.get(..stop as usize)?;
+    // Inside a token the tokenizer failed, and what it read of the
+    // token is not text acorn got past.
+    let word = |c: Option<char>| c.is_some_and(oxc_syntax::identifier::is_identifier_part);
+    if word(prefix.chars().next_back()) && word(text[stop as usize..].chars().next()) {
         return None;
     }
-    let source_type = oxc_span::SourceType::default()
-        .with_module(true)
-        .with_typescript(mode.ts);
-    let labels_of = |text: &str, check_patterns: bool, wanted: &str| {
+    // acorn-typescript reads a word by what follows it: `interface` and
+    // `private` are keywords before some tokens and names before others.
+    // The completion follows the last word with something else, so in
+    // TypeScript only what lies before that word is read the same way.
+    let trusted = if mode.ts {
+        let read = prefix.trim_end();
+        let last_word = read
+            .char_indices()
+            .rev()
+            .take_while(|&(_, c)| oxc_syntax::identifier::is_identifier_part(c))
+            .last()
+            .map_or(read.len(), |(i, _)| i);
+        last_word as u32
+    } else {
+        stop
+    };
+    // The cut may come where an expression is due (`x = `) or where
+    // one would be wrong (`f(a) `): try the prefix with and without one.
+    ["", " 0"].into_iter().find_map(|expression| {
+        let completed = completed_prefix(prefix, expression, mode)?;
         let allocator = oxc_allocator::Allocator::default();
-        let options = oxc_parser::ParseOptions {
-            parse_regular_expression: check_patterns,
-            ..oxc_parser::ParseOptions::default()
-        };
-        oxc_parser::Parser::new(&allocator, text, source_type)
-            .with_options(options)
-            .parse()
+        let parsed = oxc_parser::Parser::new(&allocator, &completed, source_type_of(mode)).parse();
+        first_error_in(
+            &completed,
+            &parsed.program,
+            &parsed.diagnostics,
+            false,
+            mode,
+        )
+        .filter(|c| c.detect < trusted)
+        // `{ a = 1 }` is an error only once acorn sees no `=` after the
+        // object, which is past the cut.
+        .filter(|c| !c.message.starts_with("Shorthand property assignments"))
+    })
+}
+
+fn source_type_of(mode: Mode) -> oxc_span::SourceType {
+    oxc_span::SourceType::default()
+        .with_module(true)
+        .with_typescript(mode.ts)
+}
+
+/// `prefix` and `seed` followed by the tokens oxc asks for until it
+/// parses: a `0` where it wants an expression, and each closing token
+/// it names. `None` when that does not get there.
+fn completed_prefix(prefix: &str, seed: &str, mode: Mode) -> Option<String> {
+    let mut completed = format!("{prefix}{seed}");
+    for _ in 0..COMPLETION_ATTEMPTS {
+        let allocator = oxc_allocator::Allocator::default();
+        let parsed = oxc_parser::Parser::new(&allocator, &completed, source_type_of(mode)).parse();
+        if !parsed.fatal_error {
+            return Some(completed);
+        }
+        // Where oxc gave up: nothing it reports lies past that.
+        let (at, fatal) = parsed
             .diagnostics
             .iter()
-            .filter(|d| d.message.starts_with(wanted))
-            .filter_map(|d| d.labels.first().map(|label| label.span().start))
-            .collect::<Vec<_>>()
-    };
-    labels_of(text, true, "Invalid regular expression:")
-        .into_iter()
-        .find_map(|inside| {
-            // Cut inside the pattern, the literal is the last token oxc
-            // reaches and cannot read: its last report is at the `/`
-            // that opens it.
-            let cut = text.get(..inside as usize)?;
-            let slash = labels_of(cut, false, "").into_iter().max()?;
-            if text.as_bytes().get(slash as usize) != Some(&b'/') {
-                return None;
+            .filter_map(|d| Some((d.labels.first()?.span().start as usize, d)))
+            .max_by_key(|&(at, _)| at)?;
+        let message = fatal.message.as_ref();
+        let wanted = message
+            .strip_prefix("Expected `")
+            .and_then(|rest| rest.strip_suffix("` but found `EOF`"));
+        match wanted {
+            Some(token) => {
+                completed.push(' ');
+                completed.push_str(token);
             }
-            let end = svn_parser::typescript_regex_end(text, slash as usize);
-            let raw = text.get(slash as usize..end)?;
-            let message = crate::rules::acorn_early_errors::regexp_pattern_error(raw)?;
-            Some(Candidate::at(slash + 1, message).in_token(slash))
-        })
+            // Reported at the function's parameters.
+            None if message == "Expected function body" => completed.push_str(" {}"),
+            // Inside the prefix it is an error no completion repairs.
+            None if message == "Unexpected token" && at >= prefix.len() => {
+                completed.push_str(" 0");
+            }
+            None => return None,
+        }
+    }
+    None
 }
 
 /// The early errors before `stop` in a JavaScript script oxc gave up on
@@ -403,7 +466,9 @@ fn translate(
             return Some(Candidate::at(at, message).in_token(s));
         }
         if message == "Invalid characters after number" {
-            return Some(Candidate::at(s, *acorn).in_token(number_start(text, s)));
+            // Where acorn reads the number whole, what follows it is a
+            // token of its own that nothing allows there.
+            return number_error(message, text, s).or_else(|| unexpected(s));
         }
         return Some(Candidate::at(s, *acorn));
     }
@@ -441,6 +506,11 @@ fn translate(
             // `let` there is read as an identifier, `const` as nothing.
             if word_at(text, s) == "let" {
                 return Some(Candidate::at(s, "The keyword 'let' is reserved"));
+            }
+            // acorn has no `using` declaration: the word is a name, and
+            // the name after it has no business there.
+            if word_at(text, s) == "using" {
+                return unexpected(next_token_start(text, s + 5));
             }
             return unexpected(s);
         }
@@ -1606,8 +1676,8 @@ fn acorn_wording(
     }
 }
 
-/// acorn's errors for a malformed numeric literal, which oxc reports
-/// at the character that does not fit (`at`).
+/// acorn's error for a malformed numeric literal, which oxc reports at
+/// the character that does not fit (`at`).
 fn number_error(message: &str, text: &str, at: u32) -> Option<Candidate> {
     let unfit = message == "Unexpected end of file"
         || message.starts_with("Invalid Character `")
@@ -1615,63 +1685,127 @@ fn number_error(message: &str, text: &str, at: u32) -> Option<Candidate> {
     if !unfit {
         return None;
     }
+    // The sign of an exponent is part of the literal.
     let before = text.get(..at as usize)?;
-    let bytes = before.as_bytes();
-    // An exponent without digits: `1e`, `1e+`.
-    let mantissa = before.trim_end_matches(['+', '-']);
-    if let Some(digits) = mantissa.strip_suffix(['e', 'E']) {
-        let start = digits
-            .rfind(|c: char| !c.is_ascii_digit() && c != '.' && c != '_')
-            .map_or(0, |i| i + 1);
-        let number = &digits[start..];
-        if number.starts_with(|c: char| c.is_ascii_digit())
-            && !digits[..start].ends_with(|c: char| c.is_alphanumeric() || c == '_' || c == '$')
-        {
-            return Some(Candidate::at(start as u32, "Invalid number"));
-        }
-    }
-    let here = text.as_bytes().get(at as usize).copied();
-    let start = number_start(text, at);
-    let literal = &before[start as usize..];
-    if literal.is_empty() || !literal.as_bytes()[0].is_ascii_digit() {
+    let unsigned = before.trim_end_matches(['+', '-']);
+    let end = if unsigned.ends_with(['e', 'E']) {
+        unsigned.len() as u32
+    } else {
+        at
+    };
+    let start = number_start(text, end);
+    if !text.as_bytes().get(start as usize)?.is_ascii_digit() {
         return None;
     }
-    let radix = match literal.to_ascii_lowercase().as_str() {
-        "0x" => Some(16),
-        "0o" => Some(8),
-        "0b" => Some(2),
-        _ => None,
+    let (at, message) = acorn_number_error(text, start as usize)?;
+    Some(Candidate::at(at, message).in_token(start))
+}
+
+/// The error acorn's tokenizer raises reading the number that starts at
+/// `start` (a digit), and where: its `readNumber`, `readRadixNumber` and
+/// `readInt`, in strict mode. `None` when it reads the number whole.
+fn acorn_number_error(text: &str, start: usize) -> Option<(u32, &'static str)> {
+    let bytes = text.as_bytes();
+    let byte = |i: usize| bytes.get(i).copied();
+    let identifier_start = |i: usize| {
+        text.get(i..)
+            .and_then(|rest| rest.chars().next())
+            .is_some_and(|c| c == '$' || c == '_' || oxc_syntax::identifier::is_identifier_start(c))
     };
-    if let Some(radix) = radix {
-        if here == Some(b'_') {
-            return Some(Candidate::at(
-                at,
-                "Numeric separator is not allowed at the first of digits",
+    // `readInt`: where the digits end and whether there were any, or
+    // the error a numeric separator is.
+    let read_int = |from: usize, radix: u32, plain_integer: bool| {
+        let legacy_octal = plain_integer && byte(from) == Some(b'0');
+        let mut pos = from;
+        let mut last = 0u8;
+        while let Some(code) = byte(pos) {
+            if code == b'_' {
+                if legacy_octal {
+                    return Err((
+                        pos as u32,
+                        "Numeric separator is not allowed in legacy octal numeric literals",
+                    ));
+                }
+                if last == b'_' {
+                    return Err((
+                        pos as u32,
+                        "Numeric separator must be exactly one underscore",
+                    ));
+                }
+                if pos == from {
+                    return Err((
+                        pos as u32,
+                        "Numeric separator is not allowed at the first of digits",
+                    ));
+                }
+                last = code;
+                pos += 1;
+                continue;
+            }
+            if !char::from(code).is_digit(radix) {
+                break;
+            }
+            last = code;
+            pos += 1;
+        }
+        if last == b'_' {
+            return Err((
+                pos as u32 - 1,
+                "Numeric separator is not allowed at the last of digits",
             ));
         }
-        return Some(
-            Candidate::at(at, format!("Expected number in radix {radix}")).in_token(start),
-        );
-    }
-    if here == Some(b'_') && bytes[start as usize] == b'0' {
-        return Some(
-            Candidate::at(
-                at,
-                "Numeric separator is not allowed in legacy octal numeric literals",
-            )
-            .in_token(start),
-        );
-    }
-    if literal.ends_with('_') && here != Some(b'_') {
-        return Some(
-            Candidate::at(
-                at - 1,
-                "Numeric separator is not allowed at the last of digits",
-            )
-            .in_token(start),
-        );
-    }
-    None
+        Ok((pos, pos != from))
+    };
+    let after_number = |pos: usize| {
+        identifier_start(pos).then_some((pos as u32, "Identifier directly after number"))
+    };
+    let replay = || -> Result<Option<(u32, &'static str)>, (u32, &'static str)> {
+        let radix = match (byte(start), byte(start + 1).map(|b| b.to_ascii_lowercase())) {
+            (Some(b'0'), Some(b'x')) => Some((16, "Expected number in radix 16")),
+            (Some(b'0'), Some(b'o')) => Some((8, "Expected number in radix 8")),
+            (Some(b'0'), Some(b'b')) => Some((2, "Expected number in radix 2")),
+            _ => None,
+        };
+        if let Some((radix, expected)) = radix {
+            let (pos, any) = read_int(start + 2, radix, false)?;
+            if !any {
+                return Ok(Some((start as u32 + 2, expected)));
+            }
+            if byte(pos) == Some(b'n') {
+                return Ok(None);
+            }
+            return Ok(after_number(pos));
+        }
+        let invalid = Some((start as u32, "Invalid number"));
+        let (mut pos, any) = read_int(start, 10, true)?;
+        if !any {
+            return Ok(invalid);
+        }
+        // More than one digit after a leading zero: a legacy octal
+        // literal, which strict code has none of.
+        if pos - start >= 2 && byte(start) == Some(b'0') {
+            return Ok(invalid);
+        }
+        if byte(pos) == Some(b'n') {
+            return Ok(after_number(pos + 1));
+        }
+        if byte(pos) == Some(b'.') {
+            (pos, _) = read_int(pos + 1, 10, false)?;
+        }
+        if matches!(byte(pos), Some(b'e' | b'E')) {
+            pos += 1;
+            if matches!(byte(pos), Some(b'+' | b'-')) {
+                pos += 1;
+            }
+            let (end, any) = read_int(pos, 10, false)?;
+            if !any {
+                return Ok(invalid);
+            }
+            pos = end;
+        }
+        Ok(after_number(pos))
+    };
+    replay().unwrap_or_else(Some)
 }
 
 /// `word` with its `\uXXXX` / `\u{…}` escapes decoded.

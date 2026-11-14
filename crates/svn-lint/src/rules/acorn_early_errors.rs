@@ -487,6 +487,18 @@ impl<'s, 't> Checker<'s, 't> {
         }
     }
 
+    /// The body of an `if`, a loop or a label is a statement. In strict
+    /// code a function or class declaration is none, and acorn stops at
+    /// its first token.
+    fn declaration_as_body(&mut self, body: &Statement<'_>) {
+        if matches!(
+            body,
+            Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_)
+        ) {
+            self.error(body.span().start, "Unexpected token");
+        }
+    }
+
     /// acorn's `checkUnreserved`, for every identifier it reads.
     fn check_unreserved(&mut self, name: &str, at: u32) {
         let ctx = self.context();
@@ -1158,15 +1170,9 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
     }
 
     fn visit_if_statement(&mut self, it: &IfStatement<'a>) {
-        // Strict mode has no function declaration as the body of an
-        // `if`.
-        for branch in [Some(&it.consequent), it.alternate.as_ref()]
-            .into_iter()
-            .flatten()
-        {
-            if let Statement::FunctionDeclaration(function) = branch {
-                self.error(function.span.start, "Unexpected token");
-            }
+        self.declaration_as_body(&it.consequent);
+        if let Some(alternate) = &it.alternate {
+            self.declaration_as_body(alternate);
         }
         walk::walk_if_statement(self, it);
     }
@@ -1334,6 +1340,7 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
         if let Some(update) = &it.update {
             self.visit_expression(update);
         }
+        self.declaration_as_body(&it.body);
         self.with_loop_label(LabelKind::Loop, |this| this.visit_statement(&it.body));
         self.pop_scope();
     }
@@ -1361,10 +1368,12 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
 
     fn visit_while_statement(&mut self, it: &WhileStatement<'a>) {
         self.visit_expression(&it.test);
+        self.declaration_as_body(&it.body);
         self.with_loop_label(LabelKind::Loop, |this| this.visit_statement(&it.body));
     }
 
     fn visit_do_while_statement(&mut self, it: &DoWhileStatement<'a>) {
+        self.declaration_as_body(&it.body);
         self.with_loop_label(LabelKind::Loop, |this| this.visit_statement(&it.body));
         self.visit_expression(&it.test);
     }
@@ -1396,6 +1405,7 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
         while let Statement::LabeledStatement(inner) = body {
             body = &inner.body;
         }
+        self.declaration_as_body(&it.body);
         let kind = match body {
             Statement::ForStatement(_)
             | Statement::ForInStatement(_)
@@ -1773,6 +1783,7 @@ impl<'a> Checker<'_, 'a> {
             }
         }
         self.visit_expression(right);
+        self.declaration_as_body(body);
         self.with_loop_label(LabelKind::Loop, |this| this.visit_statement(body));
         self.pop_scope();
     }

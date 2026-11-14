@@ -236,27 +236,57 @@ struct Cli {
     disable_enhance: bool,
 }
 
-/// Stack for the thread the check runs on and for each worker thread.
-/// The script parser and the tree walks recurse once per level of
-/// nesting, and a generated type or expression can nest thousands deep.
-/// The memory is reserved, not used, until a thread goes that deep.
+/// Stack for each thread the check runs on. The script parser and the
+/// tree walks recurse once per level of nesting, and a generated type
+/// or expression can nest thousands deep. The memory is reserved, not
+/// used, until a thread goes that deep.
 const DEEP_STACK: usize = 256 * 1024 * 1024;
 
+/// The stacks asked for, largest first. A system that commits reserved
+/// memory up front (Linux with `vm.overcommit_memory=2`) may refuse
+/// [`DEEP_STACK`] for every thread, and a smaller stack still holds far
+/// more nesting than the platform default.
+const STACK_SIZES: [usize; 3] = [DEEP_STACK, 64 * 1024 * 1024, 16 * 1024 * 1024];
+
 fn main() -> ExitCode {
-    // Before the first parallel iteration, which would start the pool
-    // with the platform's small default stacks.
-    let _ = rayon::ThreadPoolBuilder::new()
-        .stack_size(DEEP_STACK)
-        .build_global();
-    let run = std::thread::Builder::new()
-        .name("main".into())
-        .stack_size(DEEP_STACK)
-        .spawn(run);
-    match run {
-        Ok(handle) => finished(handle.join()),
-        // No thread to be had: run where we stand.
-        Err(_) => self::run(),
+    // The check runs inside a pool of its own, so it and every parallel
+    // iteration in it get the stacks the pool was built with. Rayon's
+    // global pool can be configured once only, and a failed attempt
+    // leaves it unusable, so a refused size could not be retried there.
+    let pool = first_that_builds(&STACK_SIZES, |size| {
+        rayon::ThreadPoolBuilder::new()
+            .stack_size(size)
+            .build()
+            .ok()
+    });
+    let Some((stack, pool)) = pool else {
+        eprintln!(
+            "svelte-check-native: could not start threads with room for deeply nested \
+             input; checking on the platform's default stacks"
+        );
+        return finished(std::panic::catch_unwind(run));
+    };
+    if stack < DEEP_STACK {
+        eprintln!(
+            "svelte-check-native: could not reserve {} MiB stacks for the check's threads; \
+             using {} MiB, which very deeply nested input can overflow",
+            DEEP_STACK >> 20,
+            stack >> 20
+        );
     }
+    finished(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || pool.install(run),
+    )))
+}
+
+/// The first of `sizes` that `build` succeeds with, and what it built.
+fn first_that_builds<T>(
+    sizes: &[usize],
+    mut build: impl FnMut(usize) -> Option<T>,
+) -> Option<(usize, T)> {
+    sizes
+        .iter()
+        .find_map(|&size| build(size).map(|built| (size, built)))
 }
 
 /// The exit code of a check that ran to its end or panicked.
@@ -2862,6 +2892,17 @@ mod tests {
 
     /// A crash is a failed run: svelte-check prints the error and
     /// "svelte-check failed" and exits 1, like any other failure.
+    #[test]
+    fn a_refused_stack_size_falls_to_the_next_smaller() {
+        let built = first_that_builds(&STACK_SIZES, |size| (size <= 16 << 20).then_some(()));
+        assert_eq!(built, Some((16 << 20, ())));
+        assert_eq!(first_that_builds(&STACK_SIZES, |_| None::<()>), None);
+        assert_eq!(
+            first_that_builds(&STACK_SIZES, |_| Some(())),
+            Some((DEEP_STACK, ()))
+        );
+    }
+
     #[test]
     fn a_panicked_check_exits_1() {
         let panicked: std::thread::Result<ExitCode> = Err(Box::new("boom"));

@@ -69,7 +69,7 @@ pub(crate) fn let_directive_snippet_conflict(
     let expression = match &directive.value {
         Some(DirectiveValue::Expression {
             expression_range, ..
-        }) => Some(expression_range.slice(ctx.source).trim()),
+        }) => Some(expression_source(expression_range.slice(ctx.source))),
         _ => None,
     };
     let pattern = match expression {
@@ -81,6 +81,29 @@ pub(crate) fn let_directive_snippet_conflict(
         messages::let_directive_snippet_conflict(&pattern),
         directive.range,
     );
+}
+
+/// The text of the expression a directive's braces hold, as the
+/// compiler's node for it spans: without parentheses around the whole
+/// of it, and without comments before or after.
+fn expression_source(text: &str) -> &str {
+    use oxc_ast::ast::Expression;
+    use oxc_span::GetSpan;
+    let allocator = oxc_allocator::Allocator::default();
+    let source_type = oxc_span::SourceType::default()
+        .with_module(true)
+        .with_typescript(true);
+    let Ok(parsed) = oxc_parser::Parser::new(&allocator, text, source_type).parse_expression()
+    else {
+        return text.trim();
+    };
+    let mut expression = &parsed;
+    while let Expression::ParenthesizedExpression(inner) = expression {
+        expression = &inner.expression;
+    }
+    let span = expression.span();
+    text.get(span.start as usize..span.end as usize)
+        .unwrap_or(text.trim())
 }
 
 /// The compiler's first pass over a component's attributes

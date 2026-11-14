@@ -49,11 +49,11 @@ pub fn role_supports_prop(role: &str, prop: &str) -> bool {
 
 /// Represents what the walker knows about an attribute: absent,
 /// present-but-dynamic (or bare), or present with a literal string.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum AttrState<'a> {
     Absent,
     Dynamic,
-    Literal(&'a str),
+    Literal(std::borrow::Cow<'a, str>),
 }
 
 /// Does this element match *any* interactive-element-role schema?

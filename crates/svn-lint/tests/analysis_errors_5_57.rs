@@ -299,6 +299,26 @@ const CASES: &[(&str, Expected)] = &[
             33,
         )),
     ),
+    // Parentheses around the whole expression and comments beside it
+    // are not part of it.
+    (
+        "<script>import C from './C.svelte';</script>\n<C let:item={(item)}>{#snippet children()}x{/snippet}</C>",
+        Some((
+            "let_directive_snippet_conflict",
+            "Cannot use `let:` directives on a component that has a `children` snippet. Use snippet parameters instead (e.g. `{#snippet children({ item })}`)",
+            48,
+            65,
+        )),
+    ),
+    (
+        "<script>import C from './C.svelte';</script>\n<C let:item={({a})}>{#snippet children()}x{/snippet}</C>",
+        Some((
+            "let_directive_snippet_conflict",
+            "Cannot use `let:` directives on a component that has a `children` snippet. Use snippet parameters instead (e.g. `{#snippet children({ item: {a} })}`)",
+            48,
+            64,
+        )),
+    ),
 ];
 
 #[test]

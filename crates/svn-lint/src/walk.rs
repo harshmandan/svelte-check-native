@@ -62,31 +62,47 @@ fn scripts_signal_runes(
 }
 
 /// Whether the instance script has syntax only a legacy component has:
-/// a `$:` statement or an exported `let` (the compiler's `maybe_runes`).
-fn has_legacy_only_syntax(program: &oxc_ast::ast::Program<'_>) -> bool {
+/// a `$:` statement, an exported `let`, or an `export { name }` of
+/// something declared with `let` (the compiler's `maybe_runes`).
+///
+/// The compiler looks at the script once TypeScript's own declarations
+/// are gone from it, so `export declare let` does not count. It looks
+/// the exported name up from the instance scope outwards: a `let`
+/// taken apart by destructuring counts, and so does one in the module
+/// script.
+fn has_legacy_only_syntax(
+    program: &oxc_ast::ast::Program<'_>,
+    tree: &crate::scope::ScopeTree,
+) -> bool {
     use oxc_ast::ast::{Declaration, Statement, VariableDeclarationKind};
-    let top_level_lets: Vec<&str> = program
-        .body
-        .iter()
-        .filter_map(|statement| match statement {
-            Statement::VariableDeclaration(v) if v.kind == VariableDeclarationKind::Let => Some(v),
-            _ => None,
+    let declared_with_let = |name: &str| {
+        tree.resolve(tree.instance_root, name).is_some_and(|id| {
+            tree.binding(id).declaration_kind == crate::scope_types::DeclarationKind::Let
         })
-        .flat_map(|v| v.declarations.iter())
-        .filter_map(|d| d.id.get_identifier_name())
-        .map(|name| name.as_str())
-        .collect();
+    };
     program.body.iter().any(|statement| match statement {
         Statement::LabeledStatement(_) => true,
         Statement::ExportDeclaration(export) => matches!(
             &export.declaration,
-            Declaration::VariableDeclaration(v) if v.kind == VariableDeclarationKind::Let
+            Declaration::VariableDeclaration(v)
+                if v.kind == VariableDeclarationKind::Let && !v.declare
         ),
         Statement::ExportNamedDeclaration(export) => export
             .specifiers
             .iter()
-            .any(|specifier| top_level_lets.contains(&specifier.local.name().as_str())),
+            .any(|specifier| declared_with_let(specifier.local.name().as_str())),
         _ => false,
+    })
+}
+
+/// Whether anything in the component refers to `$$props` or
+/// `$$restProps`: a reference, not the text of a comment or a string.
+fn references_legacy_props(tree: &crate::scope::ScopeTree) -> bool {
+    ["$$props", "$$restProps"].into_iter().any(|name| {
+        tree.unresolved_refs.iter().any(|r| r.name == name)
+            || tree
+                .resolve(tree.instance_root, name)
+                .is_some_and(|id| !tree.binding(id).references.is_empty())
     })
 }
 
@@ -253,9 +269,8 @@ pub fn walk_parsed(
     // warnings and the walk-time binding rules.
     ctx.maybe_runes = !ctx.runes
         && forced != Some(false)
-        && !source.contains("$$props")
-        && !source.contains("$$restProps")
-        && !instance_program.is_some_and(has_legacy_only_syntax);
+        && !references_legacy_props(&tree)
+        && !instance_program.is_some_and(|program| has_legacy_only_syntax(program, &tree));
     let script_rule_events = std::mem::take(&mut tree.script_rule_events);
     ctx.pending_template_events = std::mem::take(&mut tree.template_rule_events).into();
     let declaration_error = tree.declaration_error.take();
@@ -1153,10 +1168,10 @@ fn walk_fragment_nodes(
                 crate::rules::block_rules::visit_snippet_after_body(b, ctx);
             }
             Node::Text(t) => {
-                // `regex_not_whitespace`: anything but space, tab, CR, LF.
+                // `regex_not_whitespace`: anything but space, tab, CR, LF,
+                // in the text with its character references decoded.
                 if let Some(parent) = parent_tag
-                    && t.range
-                        .slice(source)
+                    && crate::html_decode::decode_character_references(t.range.slice(source), false)
                         .chars()
                         .any(|c| !matches!(c, ' ' | '\t' | '\r' | '\n'))
                 {

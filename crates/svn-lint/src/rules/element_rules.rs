@@ -590,7 +590,7 @@ pub(crate) fn visit_attribute(
                 let msg = messages::attribute_invalid_property_name(name, correct);
                 ctx.emit(Code::attribute_invalid_property_name, msg, e.range);
             }
-            if parent_is_regular_or_svelte && name.starts_with("on") && name.len() > 2 {
+            if checks_global_event_reference && name.starts_with("on") && name.len() > 2 {
                 global_event_reference(name, e.expression_range, e.range, ctx);
             }
         }

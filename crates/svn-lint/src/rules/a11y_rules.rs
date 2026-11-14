@@ -151,7 +151,7 @@ fn check_element(
             && !has_spread
             && let Some(Attribute::Plain(p)) = attribute_map.get("alt")
             && let Some(alt) = get_static_text_value(p, source)
-            && contains_redundant_img_word(alt)
+            && contains_redundant_img_word(&alt)
         {
             let msg = messages::a11y_img_redundant_alt();
             ctx.emit(Code::a11y_img_redundant_alt, msg, range);
@@ -213,10 +213,14 @@ fn check_element(
     // literal value — a dynamic `inert={expr}` does NOT suppress).
     if !is_dynamic && (name == "button" || name == "a") && !has_spread {
         let is_labelled = has_labelling_attr(&attribute_map);
-        let aria_hidden_true = attribute_map.get("aria-hidden").and_then(|a| match a {
-            Attribute::Plain(p) => get_static_text_value(p, source),
-            _ => None,
-        }) == Some("true");
+        let aria_hidden_true = attribute_map
+            .get("aria-hidden")
+            .and_then(|a| match a {
+                Attribute::Plain(p) => get_static_text_value(p, source),
+                _ => None,
+            })
+            .as_deref()
+            == Some("true");
         let inert = attribute_map.get("inert").is_some_and(|a| match a {
             Attribute::Plain(p) => p.value.is_none() || get_static_text_value(p, source).is_some(),
             _ => false,
@@ -235,10 +239,14 @@ fn check_element(
     // <track kind="captions"> child. Skipped on aria-hidden="true"
     // or when src isn't set.
     if !is_dynamic && name == "video" {
-        let aria_hidden_true = attribute_map.get("aria-hidden").and_then(|a| match a {
-            Attribute::Plain(p) => get_static_text_value(p, source),
-            _ => None,
-        }) == Some("true");
+        let aria_hidden_true = attribute_map
+            .get("aria-hidden")
+            .and_then(|a| match a {
+                Attribute::Plain(p) => get_static_text_value(p, source),
+                _ => None,
+            })
+            .as_deref()
+            == Some("true");
         // Upstream returns early on `muted`, `aria-hidden="true"`, OR a
         // spread (which may carry src/muted we can't see statically) —
         // missing the muted/spread guards made us fire where upstream
@@ -300,12 +308,10 @@ fn check_element(
     // stands, so an invalid role keeps its own diagnostics.
     // The compiler holds the value with its character references
     // decoded (`&#9;` is a tab between two roles).
-    let role_decoded = role_attr
-        .and_then(|a| match a {
-            Attribute::Plain(p) => get_static_text_value(p, source),
-            _ => None,
-        })
-        .map(|value| crate::html_decode::decode_character_references(value, true));
+    let role_decoded = role_attr.and_then(|a| match a {
+        Attribute::Plain(p) => get_static_text_value(p, source),
+        _ => None,
+    });
     let role_static_value = role_decoded.as_deref().map(|value| {
         value
             .split_ascii_whitespace()
@@ -411,9 +417,7 @@ fn check_element(
                 // a11y_no_abstract_role / a11y_unknown_role /
                 // a11y_no_redundant_roles — all drive off the role's
                 // text value. Each word is evaluated separately.
-                if let Some(val) = static_value {
-                    let decoded = crate::html_decode::decode_character_references(val, true);
-                    let val = decoded.as_ref();
+                if let Some(val) = static_value.as_deref() {
                     // Role tokens are separated by ASCII whitespace and
                     // matched without regard to ASCII case.
                     for role_word in val.split_ascii_whitespace() {
@@ -578,7 +582,7 @@ fn check_element(
                 // attribute and `null` (→ 0) for a dynamic one.
                 let numeric = match plain {
                     Some(p) if p.value.is_none() => 1.0,
-                    _ => static_value.map_or(0.0, js_number),
+                    _ => static_value.as_deref().map_or(0.0, js_number),
                 };
                 if numeric > 0.0 {
                     let msg = messages::a11y_positive_tabindex();
@@ -603,7 +607,7 @@ fn check_element(
             _ => None,
         };
         let has_interactive_role = role_static_value.is_some_and(is_interactive_role);
-        let nonneg_tabindex = value.is_none_or(|v| js_number(v) >= 0.0);
+        let nonneg_tabindex = value.is_none_or(|v| js_number(&v) >= 0.0);
         if !is_interactive && !has_interactive_role && nonneg_tabindex {
             let msg = messages::a11y_no_noninteractive_tabindex();
             ctx.emit(Code::a11y_no_noninteractive_tabindex, msg, range);
@@ -794,18 +798,22 @@ fn check_element(
                 if let Some(a) = href_attr {
                     if let Attribute::Plain(p) = a
                         && let Some(val) = get_static_text_value(p, source)
-                        && (val.is_empty() || val == "#" || regex_js_prefix(val))
+                        && (val.is_empty() || val == "#" || regex_js_prefix(&val))
                     {
-                        let msg = messages::a11y_invalid_attribute(val, p.name.as_str());
+                        let msg = messages::a11y_invalid_attribute(&val, p.name.as_str());
                         ctx.emit(Code::a11y_invalid_attribute, msg, p.range);
                     }
                 } else if !has_spread {
                     let id_truthy = static_nonempty(&attribute_map, "id", source);
                     let name_truthy = static_nonempty(&attribute_map, "name", source);
-                    let aria_disabled = attribute_map.get("aria-disabled").and_then(|a| match a {
-                        Attribute::Plain(p) => get_static_text_value(p, source),
-                        _ => None,
-                    }) == Some("true");
+                    let aria_disabled = attribute_map
+                        .get("aria-disabled")
+                        .and_then(|a| match a {
+                            Attribute::Plain(p) => get_static_text_value(p, source),
+                            _ => None,
+                        })
+                        .as_deref()
+                        == Some("true");
                     if !id_truthy && !name_truthy && !aria_disabled {
                         let seq = join_sequence(&["href"]);
                         let msg = messages::a11y_missing_attribute("a", article_for("href"), &seq);
@@ -819,7 +827,7 @@ fn check_element(
                     Attribute::Plain(p) => get_static_text_value(p, source),
                     _ => None,
                 });
-                let is_image = type_value == Some("image");
+                let is_image = type_value.as_deref() == Some("image");
                 // Only `<input type="image">` has a missing-attribute
                 // check — others are handled by
                 // `a11y_autocomplete_valid` / the role-based rules
@@ -848,8 +856,8 @@ fn check_element(
                     && let Some(Attribute::Plain(p)) = attribute_map.get("autocomplete")
                 {
                     let state = classify_autocomplete_value(p, source);
-                    if !is_valid_autocomplete(state) {
-                        let display_value = match state {
+                    if !is_valid_autocomplete(&state) {
+                        let display_value: &str = match &state {
                             AutocompleteValue::Bare => "true",
                             AutocompleteValue::Literal(s) => s,
                             // Dynamic is treated as valid — we don't
@@ -857,7 +865,7 @@ fn check_element(
                             // due to the is_valid_autocomplete check.
                             AutocompleteValue::Dynamic => "",
                         };
-                        let display_type = type_value.unwrap_or("...");
+                        let display_type = type_value.as_deref().unwrap_or("...");
                         let msg = messages::a11y_autocomplete_valid(display_value, display_type);
                         ctx.emit(Code::a11y_autocomplete_valid, msg, p.range);
                     }
@@ -917,12 +925,12 @@ fn event_name(name: &str) -> Option<&str> {
 /// one of three states: a literal string, `true` (bare attribute), or
 /// `null` (dynamic expression / absent). We model the same tri-state
 /// so `is_valid_autocomplete` can mirror the JS logic exactly.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum AutocompleteValue<'a> {
     /// `autocomplete` present with no `=value` — upstream `true`.
     Bare,
     /// `autocomplete="…"` with a literal string (possibly empty).
-    Literal(&'a str),
+    Literal(std::borrow::Cow<'a, str>),
     /// `autocomplete={expr}` — we can't resolve, treat as valid.
     Dynamic,
 }
@@ -933,9 +941,11 @@ fn classify_autocomplete_value<'a>(
 ) -> AutocompleteValue<'a> {
     match p.value.as_ref() {
         None => AutocompleteValue::Bare,
-        Some(v) if v.parts.is_empty() && v.quoted => AutocompleteValue::Literal(""),
+        Some(v) if v.parts.is_empty() && v.quoted => AutocompleteValue::Literal("".into()),
         Some(v) if v.parts.len() == 1 => match &v.parts[0] {
-            AttrValuePart::Text { range } => AutocompleteValue::Literal(range.slice(source)),
+            AttrValuePart::Text { range } => AutocompleteValue::Literal(
+                crate::html_decode::decode_character_references(range.slice(source), true),
+            ),
             AttrValuePart::Expression { .. } => AutocompleteValue::Dynamic,
         },
         _ => AutocompleteValue::Dynamic,
@@ -955,8 +965,8 @@ fn classify_autocomplete_value<'a>(
 ///
 /// Empty string and dynamic values are valid; bare `autocomplete` is
 /// invalid (treated as literal `'true'`).
-fn is_valid_autocomplete(value: AutocompleteValue<'_>) -> bool {
-    let raw = match value {
+fn is_valid_autocomplete(value: &AutocompleteValue<'_>) -> bool {
+    let raw: &str = match value {
         AutocompleteValue::Bare => return false,
         AutocompleteValue::Dynamic => return true,
         AutocompleteValue::Literal(s) => s,
@@ -1048,9 +1058,9 @@ fn get_implicit_role(
 ) -> Option<&'static str> {
     if name == "menuitem" {
         return attrs.get("type").and_then(|a| match a {
-            Attribute::Plain(p) => {
-                get_static_text_value(p, source).and_then(menuitem_type_to_implicit_role)
-            }
+            Attribute::Plain(p) => get_static_text_value(p, source)
+                .as_deref()
+                .and_then(menuitem_type_to_implicit_role),
             _ => None,
         });
     }
@@ -1059,7 +1069,7 @@ fn get_implicit_role(
             Attribute::Plain(p) => get_static_text_value(p, source),
             _ => None,
         });
-        return type_str.and_then(|ty| {
+        return type_str.as_deref().and_then(|ty| {
             if attrs.contains_key("list") && COMBOBOX_IF_LIST.contains(&ty) {
                 Some("combobox")
             } else {
@@ -1093,7 +1103,7 @@ fn is_hidden_from_screen_reader(
 ) -> bool {
     if name == "input"
         && attrs.get("type").is_some_and(|a| match a {
-            Attribute::Plain(p) => get_static_text_value(p, source) == Some("hidden"),
+            Attribute::Plain(p) => get_static_text_value(p, source).as_deref() == Some("hidden"),
             _ => false,
         })
     {
@@ -1101,7 +1111,7 @@ fn is_hidden_from_screen_reader(
     }
     match attrs.get("aria-hidden") {
         None => false,
-        Some(Attribute::Plain(p)) => match get_static_text_value(p, source) {
+        Some(Attribute::Plain(p)) => match get_static_text_value(p, source).as_deref() {
             None => true, // bare `<div aria-hidden>` → hidden
             Some("true") => true,
             _ => false,
@@ -1160,8 +1170,13 @@ fn is_word_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
+/// Whether a text node holds anything JavaScript's `trim()` leaves.
+/// The compiler looks at the text with its character references
+/// decoded: `&nbsp;` alone is white space.
 fn has_non_whitespace_text(s: &str) -> bool {
-    s.chars().any(|c| !c.is_whitespace())
+    crate::html_decode::decode_character_references(s, false)
+        .chars()
+        .any(|c| !(c.is_whitespace() || c == '\u{feff}'))
 }
 
 /// True if any attribute form (`Plain` / `Expression` / `Shorthand`)
@@ -1332,15 +1347,18 @@ fn validate_aria_value(
     ctx: &mut LintContext<'_>,
 ) {
     let source = ctx.source;
-    // Determine a static-string value. None == dynamic → skip.
-    let value: Option<&str> = match p.value.as_ref() {
-        None => Some(""), // bare attribute `aria-level`
+    // Determine a static-string value, with its character references
+    // decoded as the compiler holds it. None == dynamic → skip.
+    let decoded: Option<std::borrow::Cow<'_, str>> = match p.value.as_ref() {
+        None => Some("".into()), // bare attribute `aria-level`
         Some(v) => {
             if v.parts.is_empty() && v.quoted {
-                Some("")
+                Some("".into())
             } else if v.parts.len() == 1 {
                 match &v.parts[0] {
-                    AttrValuePart::Text { range } => Some(range.slice(source)),
+                    AttrValuePart::Text { range } => Some(
+                        crate::html_decode::decode_character_references(range.slice(source), true),
+                    ),
                     AttrValuePart::Expression { .. } => None,
                 }
             } else {
@@ -1348,6 +1366,7 @@ fn validate_aria_value(
             }
         }
     };
+    let value: Option<&str> = decoded.as_deref();
     let Some(val) = value else { return };
     let lower = val.to_ascii_lowercase();
     match def.ty {
@@ -1498,7 +1517,7 @@ fn has_disabled_attr(attrs: &HashMap<String, &Attribute>, source: &str) -> bool 
         return true;
     }
     attrs.get("aria-disabled").is_some_and(|a| match a {
-        Attribute::Plain(p) => get_static_text_value(p, source) == Some("true"),
+        Attribute::Plain(p) => get_static_text_value(p, source).as_deref() == Some("true"),
         _ => false,
     })
 }
@@ -1574,7 +1593,7 @@ fn video_has_caption_track(frag: &Fragment, source: &str) -> bool {
     track.attributes.iter().any(|a| match a {
         Attribute::Spread(_) => true,
         Attribute::Plain(p) if p.name.as_str() == "kind" => {
-            get_static_text_value(p, source) == Some("captions")
+            get_static_text_value(p, source).as_deref() == Some("captions")
         }
         _ => false,
     })
@@ -1658,16 +1677,24 @@ fn js_number(s: &str) -> f64 {
     t.parse::<f64>().unwrap_or(f64::NAN)
 }
 
-fn get_static_text_value<'a>(p: &svn_parser::ast::PlainAttr, source: &'a str) -> Option<&'a str> {
+/// An attribute's value when it is one piece of text, as the compiler
+/// holds it: with its character references decoded (`&#35;` is `#`).
+fn get_static_text_value<'a>(
+    p: &svn_parser::ast::PlainAttr,
+    source: &'a str,
+) -> Option<std::borrow::Cow<'a, str>> {
     let v = p.value.as_ref()?;
     if v.parts.is_empty() && v.quoted {
-        return Some("");
+        return Some("".into());
     }
     if v.parts.len() != 1 {
         return None;
     }
     match &v.parts[0] {
-        AttrValuePart::Text { range } => Some(range.slice(source)),
+        AttrValuePart::Text { range } => Some(crate::html_decode::decode_character_references(
+            range.slice(source),
+            true,
+        )),
         AttrValuePart::Expression { .. } => None,
     }
 }

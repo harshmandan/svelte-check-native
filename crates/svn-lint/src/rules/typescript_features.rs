@@ -183,10 +183,9 @@ impl<'a> Visit<'a> for Checker<'_> {
 
     fn visit_export_declaration(&mut self, it: &oxc_ast::ast::ExportDeclaration<'a>) {
         // The compiler drops an export of anything declared before it
-        // looks inside, so a declared enum never throws there.
-        if !self.transpiled
-            && matches!(&it.declaration, Declaration::TSEnumDeclaration(e) if e.declare)
-        {
+        // looks inside, so nothing in a declared enum, namespace or
+        // class throws there.
+        if !self.transpiled && it.declaration.declare() {
             return;
         }
         walk::walk_export_declaration(self, it);

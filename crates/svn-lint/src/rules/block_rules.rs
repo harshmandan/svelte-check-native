@@ -123,29 +123,6 @@ pub fn visit_await(b: &AwaitBlock, ctx: &mut LintContext<'_>) {
 /// in runes mode, then no rest parameter (`SnippetBlock.js`).
 pub fn visit_snippet(b: &SnippetBlock, ctx: &mut LintContext<'_>) {
     visit_block_fragment_for_empty(&b.body, ctx);
-    // A snippet at the top level of the template may not take a name
-    // the instance script declares.
-    if ctx.template_path.is_empty()
-        && let Some(tag) = ctx.source.get(b.range.start as usize..b.range.end as usize)
-        && let Some(keyword) = tag.find("snippet")
-        && let Some(name_at) = tag[keyword + 7..].find(b.name.as_str())
-    {
-        let start = b.range.start + (keyword + 7 + name_at) as u32;
-        let range = svn_core::Range::new(start, start + b.name.len() as u32);
-        let clashes = ctx.scope_tree.as_ref().is_some_and(|tree| {
-            tree.scope(tree.instance_root)
-                .declarations
-                .get(b.name.as_str())
-                .is_some_and(|existing| tree.binding(*existing).range != range)
-        });
-        if clashes {
-            ctx.emit_error(
-                Code::declaration_duplicate,
-                messages::declaration_duplicate(b.name.as_str()),
-                range,
-            );
-        }
-    }
     if ctx.runes {
         validate_opening_tag(b.range.start, b'#', ctx);
     }
@@ -194,19 +171,38 @@ pub fn visit_declaration_tag(tag: &Interpolation, ctx: &mut LintContext<'_>) {
     let duplicate = declaration
         .declarations
         .iter()
-        .flat_map(|d| d.id.get_binding_identifiers())
-        .find_map(|id| {
-            let range = svn_core::Range::new(
-                (i64::from(id.span.start) + offset) as u32,
-                (i64::from(id.span.end) + offset) as u32,
-            );
+        .flat_map(|d| {
+            // The compiler's node for a declarator's plain name takes in
+            // its type annotation.
+            let typed_end = match &d.id {
+                oxc_ast::ast::BindingPattern::BindingIdentifier(_) => {
+                    d.type_annotation.as_ref().map(|a| a.span.end)
+                }
+                _ => None,
+            };
+            d.id.get_binding_identifiers()
+                .into_iter()
+                .map(move |id| (id, typed_end))
+        })
+        .find_map(|(id, typed_end)| {
+            let at = |position: u32| (i64::from(position) + offset) as u32;
+            let range = svn_core::Range::new(at(id.span.start), at(id.span.end));
             let tree = ctx.scope_tree.as_ref()?;
-            let existing = tree
-                .scope(tree.instance_root)
-                .declarations
-                .get(id.name.as_str())?;
-            // The tag's own name is not a clash with itself.
-            (tree.binding(*existing).range != range).then(|| (id.name.to_string(), range))
+            let existing = tree.binding(
+                *tree
+                    .scope(tree.instance_root)
+                    .declarations
+                    .get(id.name.as_str())?,
+            );
+            // The tag's own name is not a clash with itself, and an
+            // import belongs to the module's scope.
+            (existing.range != range
+                && existing.declaration_kind != crate::scope_types::DeclarationKind::Import)
+                .then(|| {
+                    let reported =
+                        svn_core::Range::new(range.start, typed_end.map_or(range.end, at));
+                    (id.name.to_string(), reported)
+                })
         });
     if let Some((name, range)) = duplicate {
         ctx.emit_error(
@@ -400,6 +396,36 @@ fn snippet_rest_parameter(b: &SnippetBlock, source: &str) -> Option<svn_core::Ra
 /// and an explicit `{#snippet children()}` conflicts with implicit
 /// children content (`snippet_conflict`).
 pub fn visit_snippet_after_body(b: &SnippetBlock, ctx: &mut LintContext<'_>) {
+    // A snippet at the top level of the template may not take a name
+    // the instance script declares. The compiler checks once it has
+    // visited the snippet's body, so an error in there comes first.
+    if ctx.template_path.is_empty()
+        && let Some(tag) = ctx.source.get(b.range.start as usize..b.range.end as usize)
+        && let Some(keyword) = tag.find("snippet")
+        && let Some(name_at) = tag[keyword + 7..].find(b.name.as_str())
+    {
+        let start = b.range.start + (keyword + 7 + name_at) as u32;
+        let range = svn_core::Range::new(start, start + b.name.len() as u32);
+        let clashes = ctx.scope_tree.as_ref().is_some_and(|tree| {
+            tree.scope(tree.instance_root)
+                .declarations
+                .get(b.name.as_str())
+                .map(|existing| tree.binding(*existing))
+                // An import belongs to the module's scope, not the
+                // instance script's.
+                .is_some_and(|existing| {
+                    existing.range != range
+                        && existing.declaration_kind != crate::scope_types::DeclarationKind::Import
+                })
+        });
+        if clashes {
+            ctx.emit_error(
+                Code::declaration_duplicate,
+                messages::declaration_duplicate(b.name.as_str()),
+                range,
+            );
+        }
+    }
     if let Some(crate::walk::PathFrame::Component {
         kind: crate::walk::ComponentKind::Component,
         props,

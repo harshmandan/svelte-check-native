@@ -466,6 +466,13 @@ fn parse_directive_value(
                 }
             };
             scanner.set_pos(end + 1);
+            // As for any attribute, an unquoted value runs on past the
+            // expression until a terminator: `style:color={a}b` is one
+            // value of two chunks.
+            if !unquoted_value_ends(scanner) {
+                scanner.set_pos(start);
+                return parse_unquoted_value(scanner).map(DirectiveValue::Quoted);
+            }
 
             // For bind:foo={getter, setter}, detect the pair comma.
             // Textual comma scanning can't decide this: the depth
@@ -523,30 +530,9 @@ fn parse_directive_value(
             }
             Some(DirectiveValue::Quoted(quoted))
         }
-        _ => {
-            // Unquoted directive values aren't standard; treat as a plain
-            // text run for now.
-            let start = scanner.pos();
-            let text_start = start;
-            while let Some(b) = scanner.peek_byte() {
-                if at_whitespace(scanner) || matches!(b, b'>' | b'"' | b'\'' | b'=' | b'<' | b'`') {
-                    break;
-                }
-                // A bare `/` is part of an unquoted value; only `/>` ends it.
-                if b == b'/' && scanner.peek_byte_at(1) == Some(b'>') {
-                    break;
-                }
-                scanner.advance_char();
-            }
-            let end = scanner.pos();
-            Some(DirectiveValue::Quoted(AttrValue {
-                parts: vec![AttrValuePart::Text {
-                    range: Range::new(text_start, end),
-                }],
-                range: Range::new(start, end),
-                quoted: false,
-            }))
-        }
+        // The compiler reads an unquoted directive value as it reads any
+        // attribute's: text and `{…}` chunks (`style:color=string{mixed}`).
+        _ => parse_unquoted_value(scanner).map(DirectiveValue::Quoted),
     }
 }
 
@@ -570,14 +556,7 @@ fn parse_attr_value(scanner: &mut Scanner<'_>, errors: &mut Vec<ParseError>) -> 
             // An unquoted value runs on past the expression until a
             // terminator (`{a}{b}` and `{a}px` are one value of several
             // chunks); re-read such a value as a sequence.
-            let ends_value = match scanner.peek_byte() {
-                None => true,
-                Some(b'/') => scanner.peek_byte_at(1) == Some(b'>'),
-                Some(b) => {
-                    at_whitespace(scanner) || matches!(b, b'>' | b'"' | b'\'' | b'=' | b'<' | b'`')
-                }
-            };
-            if !ends_value {
+            if !unquoted_value_ends(scanner) {
                 scanner.set_pos(start);
                 return parse_unquoted_value(scanner);
             }
@@ -591,6 +570,16 @@ fn parse_attr_value(scanner: &mut Scanner<'_>, errors: &mut Vec<ParseError>) -> 
             })
         }
         _ => parse_unquoted_value(scanner),
+    }
+}
+
+/// Whether an unquoted value ends at the scanner: at white space, a
+/// quote, `=`, `<`, `>`, a backtick, `/>` or the end of the text.
+fn unquoted_value_ends(scanner: &Scanner<'_>) -> bool {
+    match scanner.peek_byte() {
+        None => true,
+        Some(b'/') => scanner.peek_byte_at(1) == Some(b'>'),
+        Some(b) => at_whitespace(scanner) || matches!(b, b'>' | b'"' | b'\'' | b'=' | b'<' | b'`'),
     }
 }
 

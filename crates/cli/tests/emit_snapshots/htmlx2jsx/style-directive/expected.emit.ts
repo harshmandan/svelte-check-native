@@ -17,7 +17,7 @@ function $$render_e40e2c10() {
         }
         { svelteHTML.createElement("div", {});             __svn_ensure_type(String, Number, `string${mixed}`);
         }
-        { svelteHTML.createElement("div", {});             __svn_ensure_type(String, Number, `string{mixed}`);
+        { svelteHTML.createElement("div", {});             __svn_ensure_type(String, Number, `string${mixed}`);
         }
         { svelteHTML.createElement("div", {});             __svn_ensure_type(String, Number, `${mixed}string`);
         }

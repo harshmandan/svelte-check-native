@@ -438,3 +438,147 @@ fn importers_typescript_does_not_question() {
     )];
     assert_eq!(found, want);
 }
+
+/// A `// @ts-ignore` or `// @ts-expect-error` above an import takes the
+/// error TypeScript would give there. The expectation is met, so it is
+/// not reported as unused either.
+#[test]
+fn comment_directives_above_an_import_take_its_error() {
+    let dir = workspace(&[
+        (
+            "src/App.svelte",
+            "<script lang=\"ts\">\n  // @ts-ignore\n  import A from './NoModule.svelte';\n  // @ts-expect-error\n  import B from './NoModule.svelte';\n\n  // @ts-expect-error\n  // a note\n  import C from './NoModule.svelte';\n  import D from './NoModule.svelte';\n  void [A, B, C, D];\n</script>\n",
+        ),
+        (
+            "src/ambient.d.ts",
+            "declare module '*.svelte' {\n  const component: any;\n  export default component;\n}\n",
+        ),
+        ("src/NoModule.svelte", UNCLOSED),
+    ]);
+    let (diagnostics, _) = check(dir.path(), &[]);
+    let found: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| matches!(d["code"].as_i64(), Some(2306 | 1192 | 2305 | 2578)))
+        .map(|d| {
+            (
+                d["start"]["line"].as_i64().unwrap(),
+                d["start"]["character"].as_i64().unwrap(),
+                d["code"].as_i64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(found, [(9, 16, 2306)]);
+}
+
+/// What TypeScript says of a name a module does not export depends on
+/// what the module does hold: an export spelled nearly alike, a default
+/// export, a declaration it keeps to itself or exports under another
+/// name. Each expectation is TypeScript 6.0.3's for the same imports of
+/// plain modules with these scripts.
+#[test]
+fn a_missing_member_gets_the_error_typescript_chooses() {
+    let dir = workspace(&[
+        (
+            "src/main.ts",
+            "import { tick, fooBr, local, nothing, renamed, FOOBAR, foobarx, fo } from \"./Bad.svelte\";\nimport { tick as t2, zzz, local as l2, defalt } from \"./Def.svelte\";\nexport { fooBr as q, local as r } from \"./Bad.svelte\";\nvoid [tick, fooBr, local, nothing, renamed, FOOBAR, foobarx, fo, t2, zzz, l2, defalt];\n",
+        ),
+        (
+            "src/ambient.d.ts",
+            "declare module '*.svelte' {\n  const component: any;\n  export default component;\n}\n",
+        ),
+        (
+            "src/Bad.svelte",
+            "<script lang=\"ts\">\n  import { tick } from \"./tick\";\n  export const fooBar = tick;\n  const local = 1;\n  const renamed = 2;\n  export { renamed as other };\n  void local;\n</script>\n<div>\n",
+        ),
+        (
+            "src/Def.svelte",
+            "<script lang=\"ts\">\n  import { tick } from \"./tick\";\n  const local = tick;\n  export default local;\n</script>\n<div>\n",
+        ),
+        ("src/tick.ts", "export const tick = 1;\n"),
+    ]);
+    let (diagnostics, _) = check(dir.path(), &[]);
+    let mut found: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["filename"] == "src/main.ts")
+        .filter(|d| matches!(d["code"].as_i64(), Some(2305 | 2459 | 2460 | 2614 | 2724)))
+        .map(|d| {
+            (
+                d["start"]["line"].as_i64().unwrap(),
+                d["start"]["character"].as_i64().unwrap(),
+                d["code"].as_i64().unwrap(),
+                d["message"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    found.sort();
+    let bad = "\"./Bad.svelte\"";
+    let def = "\"./Def.svelte\"";
+    let local_only =
+        |name: &str| format!("Module '{bad}' declares '{name}' locally, but it is not exported.");
+    let did_you_mean = |module: &str, name: &str, other: &str| {
+        format!("'{module}' has no exported member named '{name}'. Did you mean '{other}'?")
+    };
+    let no_member = |name: &str| format!("Module '{bad}' has no exported member '{name}'.");
+    let import_default = |name: &str| {
+        format!(
+            "Module '{def}' has no exported member '{name}'. Did you mean to use 'import {name} from {def}' instead?"
+        )
+    };
+    let want = vec![
+        (0, 9, 2459, local_only("tick")),
+        (0, 15, 2724, did_you_mean(bad, "fooBr", "fooBar")),
+        (0, 22, 2459, local_only("local")),
+        (0, 29, 2305, no_member("nothing")),
+        (
+            0,
+            38,
+            2460,
+            format!("Module '{bad}' declares 'renamed' locally, but it is exported as 'other'."),
+        ),
+        (0, 47, 2724, did_you_mean(bad, "FOOBAR", "fooBar")),
+        (0, 55, 2724, did_you_mean(bad, "foobarx", "fooBar")),
+        (0, 64, 2305, no_member("fo")),
+        (1, 9, 2614, import_default("tick")),
+        (1, 21, 2614, import_default("zzz")),
+        (1, 26, 2614, import_default("local")),
+        (1, 39, 2724, did_you_mean(def, "defalt", "local")),
+        (2, 9, 2724, did_you_mean(bad, "fooBr", "fooBar")),
+        (2, 21, 2459, local_only("local")),
+    ];
+    assert_eq!(found, want);
+}
+
+/// A rejected component is a file of the default engine's program (as
+/// the script it falls back to), so a component it imports is in the
+/// program too, outside the tsconfig or not, and one that imports in
+/// turn.
+#[test]
+fn imports_are_followed_through_rejected_components() {
+    let importing = |target: &str| {
+        format!(
+            "<script>\n  import Next from '{target}';\n  export const next = Next;\n</script>\n<div>\n"
+        )
+    };
+    let dir = workspace(&[
+        ("src/First.svelte", &importing("../lib/Second.svelte")),
+        ("lib/Second.svelte", &importing("./Third.svelte")),
+        ("lib/Third.svelte", UNCLOSED),
+        ("lib/Lonely.svelte", UNCLOSED),
+        (
+            "src/ambient.d.ts",
+            "declare module '*.svelte' {\n  const component: any;\n  export default component;\n}\n",
+        ),
+    ]);
+    let (diagnostics, completed) = check(dir.path(), &[]);
+    let mut files: Vec<String> = diagnostics
+        .iter()
+        .filter(|d| d["code"] == "element_unclosed")
+        .map(|d| d["filename"].as_str().unwrap().to_string())
+        .collect();
+    files.sort();
+    assert_eq!(
+        files,
+        ["lib/Second.svelte", "lib/Third.svelte", "src/First.svelte"]
+    );
+    assert!(completed.starts_with("COMPLETED 3 FILES"), "{completed}");
+}

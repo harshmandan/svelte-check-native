@@ -2521,8 +2521,18 @@ fn check_project(
                 .filter(|(p, _)| dropped_files.contains(p))
                 .map(|(p, _)| p.clone())
                 .collect();
+            // A rejected component inside the tsconfig is a file of the
+            // default engine's program (as the script it falls back to),
+            // so what it imports is in the program as well.
+            let mut importers = program_files.clone();
+            importers.extend(
+                svelte_sources[..svelte_sources_in_scope_end]
+                    .iter()
+                    .filter(|(p, _)| dropped_files.contains(p))
+                    .map(|(p, _)| p.clone()),
+            );
             let imported: std::collections::HashSet<PathBuf> =
-                svn_enhance::components_imported_by(tsconfig, &program_files, &rejected_outside)
+                svn_enhance::components_imported_by(tsconfig, &importers, &rejected_outside)
                     .into_iter()
                     .collect();
             let rejected: Vec<(PathBuf, String)> = svelte_sources
@@ -2553,7 +2563,31 @@ fn check_project(
                 .into_iter()
                 .filter(|(p, _)| rejections_reported.contains(p))
                 .collect();
-            for d in svn_enhance::rejected_import_diagnostics(tsconfig, &program_files, &reported) {
+            let at_imports =
+                svn_enhance::rejected_import_diagnostics(tsconfig, &program_files, &reported);
+            // A `// @ts-expect-error` above such an import has its error
+            // now; the compiler saw none there and called it unused.
+            if !at_imports.satisfied_expectations.is_empty() {
+                diagnostics.retain(|d| {
+                    !(matches!(d.code, svn_typecheck::DiagnosticCode::Numeric(2578))
+                        && at_imports
+                            .satisfied_expectations
+                            .iter()
+                            .any(|(file, line)| *file == d.source_path && *line == d.line))
+                });
+            }
+            // What the compiler said of a name imported from a rejected
+            // component, it said of svelte's `*.svelte` declaration.
+            if !at_imports.judged_names.is_empty() {
+                diagnostics.retain(|d| {
+                    !(d.source == svn_typecheck::DiagnosticSource::Ts
+                        || d.source == svn_typecheck::DiagnosticSource::Js)
+                        || !at_imports.judged_names.iter().any(|(file, line, column)| {
+                            *file == d.source_path && *line == d.line && *column == d.column
+                        })
+                });
+            }
+            for d in at_imports.diagnostics {
                 let script_is_ts = d.file.extension().is_some_and(|e| e == "svelte")
                     && std::fs::read_to_string(&d.file)
                         .is_ok_and(|source| svn_parser::is_ts_svelte(&source));

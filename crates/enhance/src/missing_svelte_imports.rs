@@ -321,7 +321,8 @@ pub fn missing_svelte_import_diagnostics_in_script(
 }
 
 /// The components among `components` that a file in `program_files`
-/// imports, in `components`' order.
+/// imports, or that one of those components imports in turn, in
+/// `components`' order.
 ///
 /// The default engine diagnoses the files of the TypeScript program, and
 /// that program follows an import to a component outside the tsconfig's
@@ -340,7 +341,13 @@ pub fn components_imported_by(
     let wanted: HashSet<PathBuf> = components.iter().map(|c| canonical(c)).collect();
     let resolver = Resolver::new(resolve_options(tsconfig));
     let mut imported: HashSet<PathBuf> = HashSet::new();
-    for file in program_files {
+    // A component found this way is a file of the program too, and what
+    // it imports is followed like any other file's imports.
+    let mut files: Vec<PathBuf> = program_files.to_vec();
+    let mut next = 0;
+    while let Some(file) = files.get(next).cloned() {
+        next += 1;
+        let file = &file;
         if file.components().any(|c| c.as_os_str() == "node_modules") {
             continue;
         }
@@ -368,8 +375,8 @@ pub fn components_imported_by(
         for r in refs {
             if let Ok(resolution) = resolver.resolve(dir, &r.specifier) {
                 let target = canonical(resolution.path());
-                if wanted.contains(&target) {
-                    imported.insert(target);
+                if wanted.contains(&target) && imported.insert(target.clone()) {
+                    files.push(target);
                 }
             }
         }

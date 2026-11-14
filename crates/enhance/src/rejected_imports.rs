@@ -39,9 +39,67 @@ struct Fallback {
     es_syntax: bool,
     /// TypeScript reads it as TypeScript (a `lang="ts"` script).
     ts: bool,
-    /// Every name it exports; `None` when that can't be told (`export =`,
-    /// or an `export *` whose module can't be read).
-    exports: Option<HashSet<String>>,
+    /// Every name it exports, in the order it exports them; `None` when
+    /// that can't be told (`export =`, or an `export *` whose module
+    /// can't be read).
+    exports: Option<Vec<String>>,
+    /// The names its script declares or imports at the top level.
+    locals: HashSet<String>,
+    /// Local names exported under another name (`export { a as b }`).
+    exported_as: HashMap<String, String>,
+    /// What the default export is called in the module, where it has
+    /// a name there (`export default local`, `export default function
+    /// f`): the name TypeScript shows it by.
+    default_name: Option<String>,
+}
+
+/// What the imports of rejected components come to.
+#[derive(Default)]
+pub struct RejectedImports {
+    /// The diagnostics TypeScript gives at those imports.
+    pub diagnostics: Vec<EnhancementDiagnostic>,
+    /// The `// @ts-expect-error` comments (file, 1-based line) that one
+    /// of those diagnostics satisfies. The compiler that checked the
+    /// program saw no error there and calls each one unused (`TS2578`);
+    /// with the error it expects, it is not.
+    pub satisfied_expectations: Vec<(PathBuf, u32)>,
+    /// Where a name is imported from a rejected component (file,
+    /// 1-based line and column). The compiler that checked the program
+    /// resolved the import to svelte's `*.svelte` declaration and judged
+    /// the name against that; what it says there is about the wrong
+    /// module, and `diagnostics` holds what holds of the right one.
+    pub judged_names: Vec<(PathBuf, u32, u32)>,
+}
+
+/// TypeScript's comment directive for the line `offset` is on: the
+/// 0-based line of a `// @ts-ignore` or `// @ts-expect-error` comment
+/// on the line before, or before that across blank lines and lines
+/// that are only a `//` comment. The flag says it expects the error.
+fn comment_directive(source: &str, offset: u32) -> Option<(u32, bool)> {
+    let before = source.get(..offset as usize)?;
+    let mut lines: Vec<&str> = before.lines().collect();
+    // The line the diagnostic is on.
+    if !before.ends_with('\n') {
+        lines.pop();
+    }
+    for (index, line) in lines.iter().enumerate().rev() {
+        let comment = line
+            .find("//")
+            .map(|at| line[at + 2..].trim_start_matches('/'));
+        if let Some(text) = comment.map(str::trim_start) {
+            if text.starts_with("@ts-expect-error") {
+                return Some((index as u32, true));
+            }
+            if text.starts_with("@ts-ignore") {
+                return Some((index as u32, false));
+            }
+        }
+        let trimmed = line.trim();
+        if !(trimmed.is_empty() || trimmed.starts_with("//")) {
+            return None;
+        }
+    }
+    None
 }
 
 /// The diagnostics at every import, in a file of `program_files`, of one
@@ -50,9 +108,9 @@ pub fn rejected_import_diagnostics(
     tsconfig: &Path,
     program_files: &[PathBuf],
     rejected: &[(PathBuf, String)],
-) -> Vec<EnhancementDiagnostic> {
+) -> RejectedImports {
     if rejected.is_empty() {
-        return Vec::new();
+        return RejectedImports::default();
     }
     let options = svn_core::tsconfig::load(tsconfig)
         .map(|config| config.compiler_options)
@@ -84,6 +142,8 @@ pub fn rejected_import_diagnostics(
         .collect();
 
     let mut out = Vec::new();
+    let mut satisfied_expectations = Vec::new();
+    let mut judged_names = Vec::new();
     let mut seen: HashSet<&Path> = HashSet::new();
     for file in program_files {
         if !seen.insert(file) || file.components().any(|c| c.as_os_str() == "node_modules") {
@@ -108,6 +168,15 @@ pub fn rejected_import_diagnostics(
         let dir = file.parent().unwrap_or_else(|| Path::new("."));
         let pm = PositionMap::new(&source);
         let mut push = |start: u32, end: u32, code: u32, message: String| {
+            // A comment directive above the line takes the error.
+            match comment_directive(&source, start) {
+                Some((line, true)) => {
+                    satisfied_expectations.push((file.clone(), line + 1));
+                    return;
+                }
+                Some((_, false)) => return,
+                None => {}
+            }
             let (s, e) = pm.range_positions(Range::new(start, end));
             out.push(EnhancementDiagnostic {
                 file: file.clone(),
@@ -130,6 +199,14 @@ pub fn rejected_import_diagnostics(
             let Some(fallback) = fallbacks.get(&target) else {
                 continue;
             };
+            for name in &r.names {
+                let at = pm.position_of(name.start);
+                judged_names.push((
+                    file.clone(),
+                    at.line.saturating_add(1),
+                    at.character.saturating_add(1),
+                ));
+            }
             // TypeScript and tsgo name a file with forward slashes.
             let path = fallback.path.to_string_lossy().replace('\\', "/");
             if !(fallback.es_syntax || force_modules) {
@@ -161,20 +238,69 @@ pub fn rejected_import_diagnostics(
                         );
                     }
                 } else if exported == Some(false) {
-                    push(
-                        name.start,
-                        name.end,
-                        2305,
-                        format!(
-                            "Module '\"{}\"' has no exported member '{}'.",
-                            r.specifier, name.name
-                        ),
-                    );
+                    // What TypeScript says of a missing member, in the
+                    // order it looks: a near spelling among the exports,
+                    // a default export to import instead, a declaration
+                    // the module keeps to itself.
+                    let module = &r.specifier;
+                    let missing = &name.name;
+                    let candidates = fallback.exports.iter().flatten().map(String::as_str);
+                    let has_default = fallback
+                        .exports
+                        .as_ref()
+                        .is_some_and(|exports| exports.iter().any(|e| e == "default"));
+                    // The default export is matched as `default` and
+                    // shown by the name it has in the module.
+                    let suggestion = spelling_suggestion(missing, candidates).map(|found| {
+                        match (&fallback.default_name, found) {
+                            (Some(name), "default") => name.as_str(),
+                            _ => found,
+                        }
+                    });
+                    let (code, message) = if let Some(suggestion) = suggestion {
+                        (
+                            2724,
+                            format!(
+                                "'\"{module}\"' has no exported member named '{missing}'. Did you mean '{suggestion}'?"
+                            ),
+                        )
+                    } else if has_default {
+                        (
+                            2614,
+                            format!(
+                                "Module '\"{module}\"' has no exported member '{missing}'. Did you mean to use 'import {missing} from \"{module}\"' instead?"
+                            ),
+                        )
+                    } else if let Some(other) = fallback.exported_as.get(missing) {
+                        (
+                            2460,
+                            format!(
+                                "Module '\"{module}\"' declares '{missing}' locally, but it is exported as '{other}'."
+                            ),
+                        )
+                    } else if fallback.locals.contains(missing) {
+                        (
+                            2459,
+                            format!(
+                                "Module '\"{module}\"' declares '{missing}' locally, but it is not exported."
+                            ),
+                        )
+                    } else {
+                        (
+                            2305,
+                            format!("Module '\"{module}\"' has no exported member '{missing}'."),
+                        )
+                    };
+                    push(name.start, name.end, code, message);
                 }
             }
         }
     }
-    out
+    RejectedImports {
+        diagnostics: out,
+        satisfied_expectations,
+        judged_names,
+    }
 }
 
 /// The path with its symbolic links resolved, written as the rest of
@@ -216,19 +342,30 @@ fn fallback(path: &Path, source: &str, resolver: &Resolver) -> Fallback {
             path: path.to_path_buf(),
             es_syntax: false,
             ts: false,
-            exports: Some(HashSet::new()),
+            exports: Some(Vec::new()),
+            locals: HashSet::new(),
+            exported_as: HashMap::new(),
+            default_name: None,
         };
     };
-    let ts = script.lang == ScriptLang::Ts;
+    // The fallback is TypeScript when either script is.
+    let ts = [doc.instance_script.as_ref(), doc.module_script.as_ref()]
+        .into_iter()
+        .flatten()
+        .any(|script| script.lang == ScriptLang::Ts);
     let allocator = Allocator::default();
     let parsed = svn_parser::parse_script_body(&allocator, script.content, script.lang);
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let mut visited = HashSet::from([path.to_path_buf()]);
+    let (locals, exported_as, default_name) = top_level_names(&parsed.program);
     Fallback {
         path: path.to_path_buf(),
         es_syntax: has_module_syntax(&parsed.program),
         ts,
         exports: exports(&parsed.program, dir, resolver, &mut visited),
+        locals,
+        exported_as,
+        default_name,
     }
 }
 
@@ -255,6 +392,175 @@ fn has_module_syntax(program: &Program<'_>) -> bool {
     }
 }
 
+/// Adds `name` unless it is there already.
+fn add(names: &mut Vec<String>, name: &str) {
+    if !names.iter().any(|n| n == name) {
+        names.push(name.to_string());
+    }
+}
+
+/// The names `program` declares or imports at its top level, the local
+/// names it exports under another name, and the name of its default
+/// export where that has one of its own.
+fn top_level_names(
+    program: &Program<'_>,
+) -> (HashSet<String>, HashMap<String, String>, Option<String>) {
+    use oxc_ast::ast::{
+        ExportDefaultDeclarationKind, ImportDeclarationSpecifier, ModuleExportName,
+    };
+    let mut locals = HashSet::new();
+    let mut exported_as = HashMap::new();
+    let mut default_name = None;
+    let declare = |declaration: &Declaration<'_>, locals: &mut HashSet<String>| match declaration {
+        Declaration::VariableDeclaration(v) => {
+            for declarator in &v.declarations {
+                for id in declarator.id.get_binding_identifiers() {
+                    locals.insert(id.name.to_string());
+                }
+            }
+        }
+        other => {
+            if let Some(id) = other.id() {
+                locals.insert(id.name.to_string());
+            }
+        }
+    };
+    for statement in &program.body {
+        if let Some(declaration) = statement.as_declaration() {
+            declare(declaration, &mut locals);
+            continue;
+        }
+        match statement.as_module_declaration() {
+            Some(ModuleDeclaration::ImportDeclaration(import)) => {
+                for specifier in import.specifiers.iter().flatten() {
+                    let local = match specifier {
+                        ImportDeclarationSpecifier::ImportSpecifier(s) => &s.local,
+                        ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => &s.local,
+                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => &s.local,
+                    };
+                    locals.insert(local.name.to_string());
+                }
+            }
+            Some(ModuleDeclaration::ExportDeclaration(export)) => {
+                declare(&export.declaration, &mut locals);
+            }
+            Some(ModuleDeclaration::ExportNamedDeclaration(named)) => {
+                for specifier in &named.specifiers {
+                    if let ModuleExportName::IdentifierReference(local) = &specifier.local
+                        && specifier.exported.name() != local.name
+                    {
+                        exported_as
+                            .entry(local.name.to_string())
+                            .or_insert_with(|| specifier.exported.name().to_string());
+                    }
+                }
+            }
+            Some(ModuleDeclaration::ExportDefaultDeclaration(default)) => {
+                default_name = match &default.declaration {
+                    ExportDefaultDeclarationKind::Identifier(id) => Some(id.name.to_string()),
+                    ExportDefaultDeclarationKind::FunctionDeclaration(f) => {
+                        f.id.as_ref().map(|id| id.name.to_string())
+                    }
+                    ExportDefaultDeclarationKind::ClassDeclaration(c) => {
+                        c.id.as_ref().map(|id| id.name.to_string())
+                    }
+                    _ => None,
+                };
+                if let Some(name) = &default_name
+                    && !matches!(
+                        &default.declaration,
+                        ExportDefaultDeclarationKind::Identifier(_)
+                    )
+                {
+                    locals.insert(name.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    (locals, exported_as, default_name)
+}
+
+/// TypeScript's spelling suggestion for `name` among `candidates`
+/// (`getSpellingSuggestion`): the first candidate close enough, and
+/// after it only one that is closer.
+fn spelling_suggestion<'a>(
+    name: &str,
+    candidates: impl Iterator<Item = &'a str>,
+) -> Option<&'a str> {
+    let name_units: Vec<u16> = name.encode_utf16().collect();
+    let length = name_units.len() as f64;
+    let maximum_length_difference = (length * 0.34).floor().max(2.0);
+    let mut best_distance = (length * 0.4).floor() + 1.0;
+    let mut best = None;
+    for candidate in candidates {
+        let candidate_units: Vec<u16> = candidate.encode_utf16().collect();
+        if candidate == name
+            || (candidate_units.len() as f64 - length).abs() > maximum_length_difference
+        {
+            continue;
+        }
+        if candidate_units.len() < 3 && candidate.to_lowercase() != name.to_lowercase() {
+            continue;
+        }
+        let Some(distance) = levenshtein_with_max(name, candidate, best_distance - 0.1) else {
+            continue;
+        };
+        best_distance = distance;
+        best = Some(candidate);
+    }
+    best
+}
+
+/// TypeScript's `levenshteinWithMax`: an insertion or a deletion costs
+/// one, a change of letter two, a change of case a tenth. `None` past
+/// `max`.
+fn levenshtein_with_max(s1: &str, s2: &str, max: f64) -> Option<f64> {
+    let a: Vec<char> = s1.chars().collect();
+    let b: Vec<char> = s2.chars().collect();
+    let big = max + 0.01;
+    let mut previous: Vec<f64> = (0..=b.len()).map(|i| i as f64).collect();
+    let mut current: Vec<f64> = vec![0.0; b.len() + 1];
+    for i in 1..=a.len() {
+        let c1 = a[i - 1];
+        let i_f = i as f64;
+        let min_j = (if i_f > max { i_f - max } else { 1.0 }).ceil() as usize;
+        let max_j = (if b.len() as f64 > max + i_f {
+            max + i_f
+        } else {
+            b.len() as f64
+        })
+        .floor() as usize;
+        current[0] = i_f;
+        let mut col_min = i_f;
+        for cell in current.iter_mut().take(min_j.min(b.len() + 1)).skip(1) {
+            *cell = big;
+        }
+        for j in min_j..=max_j.min(b.len()) {
+            let same_letter = c1.to_lowercase().eq(b[j - 1].to_lowercase());
+            let substitution = previous[j - 1] + if same_letter { 0.1 } else { 2.0 };
+            let distance = if c1 == b[j - 1] {
+                previous[j - 1]
+            } else {
+                (previous[j] + 1.0)
+                    .min(current[j - 1] + 1.0)
+                    .min(substitution)
+            };
+            current[j] = distance;
+            col_min = col_min.min(distance);
+        }
+        for cell in current.iter_mut().skip(max_j + 1) {
+            *cell = big;
+        }
+        if col_min > max {
+            return None;
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    let result = previous[b.len()];
+    (result <= max).then_some(result)
+}
+
 /// The names `program` exports, following `export *` into the modules
 /// it names (which never re-export a `default`).
 fn exports(
@@ -262,8 +568,8 @@ fn exports(
     dir: &Path,
     resolver: &Resolver,
     visited: &mut HashSet<PathBuf>,
-) -> Option<HashSet<String>> {
-    let mut names = HashSet::new();
+) -> Option<Vec<String>> {
+    let mut names: Vec<String> = Vec::new();
     for statement in &program.body {
         let Some(declaration) = statement.as_module_declaration() else {
             continue;
@@ -273,32 +579,32 @@ fn exports(
                 Declaration::VariableDeclaration(v) => {
                     for declarator in &v.declarations {
                         for id in declarator.id.get_binding_identifiers() {
-                            names.insert(id.name.to_string());
+                            add(&mut names, id.name.as_str());
                         }
                     }
                 }
                 other => {
                     if let Some(id) = other.id() {
-                        names.insert(id.name.to_string());
+                        add(&mut names, id.name.as_str());
                     }
                 }
             },
             ModuleDeclaration::ExportNamedDeclaration(named) => {
                 for specifier in &named.specifiers {
-                    names.insert(specifier.exported.name().to_string());
+                    add(&mut names, specifier.exported.name().as_str());
                 }
             }
             ModuleDeclaration::ExportFromDeclaration(from) => {
                 for specifier in &from.specifiers {
-                    names.insert(specifier.exported.name().to_string());
+                    add(&mut names, specifier.exported.name().as_str());
                 }
             }
             ModuleDeclaration::ExportDefaultDeclaration(_) => {
-                names.insert("default".to_string());
+                add(&mut names, "default");
             }
             ModuleDeclaration::ExportAllDeclaration(all) => match &all.exported {
                 Some(name) => {
-                    names.insert(name.name().to_string());
+                    add(&mut names, name.name().as_str());
                 }
                 None => {
                     let target = resolver.resolve(dir, all.source.value.as_str()?).ok()?;
@@ -314,9 +620,10 @@ fn exports(
                         return None;
                     }
                     let target_dir = target.parent().unwrap_or_else(|| Path::new("."));
-                    let mut inner = exports(&parsed.program, target_dir, resolver, visited)?;
-                    inner.remove("default");
-                    names.extend(inner);
+                    let inner = exports(&parsed.program, target_dir, resolver, visited)?;
+                    for name in inner.iter().filter(|name| *name != "default") {
+                        add(&mut names, name);
+                    }
                 }
             },
             ModuleDeclaration::TSExportAssignment(_) => return None,

@@ -120,15 +120,6 @@
       "reason": "For `let props = $props()` (no destructuring) svelte2tsx casts the props to `$$ComponentProps` without declaring that name, an unresolved type; we write `any`. Not established that the two give the same diagnostics."
     },
     {
-      "status": "bug",
-      "sample": "svelte2tsx/ts-uses-$$props",
-      "kind": "result",
-      "label": "props",
-      "ours": "T<Record<string,never>>",
-      "upstream": "T<{}>",
-      "reason": "A component reading `$$props` with no declared props: svelte2tsx's render result types its props `{}`, ours `Record<string, never>`. Not established whether our default export's props wrapper makes the two accept the same props."
-    },
-    {
       "status": "intended",
       "sample": "svelte2tsx/component-slot-crazy-attributes",
       "kind": "result",

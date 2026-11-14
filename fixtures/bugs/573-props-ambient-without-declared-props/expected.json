@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A component that reads `$$props` and declares no props takes any prop. svelte2tsx types its render result's props as `{}` (TypeScript and JavaScript alike), which the any-prop widening keeps open. We typed a TypeScript one's as `Record<string, never>`, whose `never` index signature survived the widening and rejected every prop passed to it (`Type 'string' is not assignable to type 'never'`)."
+}

@@ -133,6 +133,44 @@ impl Finder<'_> {
     /// later pass replayed on the tree (`yield` as a name, a private name
     /// outside its class, a parameter named twice, an octal literal).
     fn acorn_read_error(&mut self, read: AcornRead) -> bool {
+        // JavaScript is read by acorn itself: the port says what acorn
+        // says. An expression is read where it stands in the template,
+        // as the compiler reads it; a pattern, a parameter list or a
+        // statement in the text the compiler builds around it.
+        if !self.ts {
+            let result = match read.shape {
+                AcornReadShape::Expression => {
+                    svn_acorn::parse_expression_at(self.source, read.range.start)
+                }
+                shape => {
+                    let (wrapped, origin) = read.wrapped(self.source);
+                    let result = if shape == AcornReadShape::Statement {
+                        svn_acorn::parse_statement_at(&wrapped, 0)
+                    } else {
+                        svn_acorn::parse_expression_at(&wrapped, 0)
+                    };
+                    result.map_err(|mut error| {
+                        error.pos += origin;
+                        error
+                    })
+                }
+            };
+            let Err(error) = result else {
+                return false;
+            };
+            // In the text the wrapping adds after the read, the
+            // wrapping itself is at fault.
+            if error.pos > read.range.end && read.shape != AcornReadShape::Expression {
+                return false;
+            }
+            self.report(
+                error.pos,
+                Code::js_parse_error,
+                format!("{}\nhttps://svelte.dev/e/js_parse_error", error.message),
+                Self::point(error.pos),
+            );
+            return true;
+        }
         let (wrapped, origin) = read.wrapped(self.source);
         let allocator = Allocator::default();
         let source_type = SourceType::default()

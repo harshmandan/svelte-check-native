@@ -39,9 +39,15 @@ exports.parse = () => ({});
 /// A workspace with the mock `svelte` package, a tsconfig that includes
 /// only `src/`, and the given files.
 fn workspace(files: &[(&str, &str)]) -> tempfile::TempDir {
+    workspace_with_svelte_in("", files)
+}
+
+/// [`workspace`] with the mock `svelte` package installed in the
+/// `node_modules` of the directory `package` (relative to the root).
+fn workspace_with_svelte_in(package: &str, files: &[(&str, &str)]) -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("temp workspace");
     let root = dir.path();
-    let svelte = root.join("node_modules/svelte");
+    let svelte = root.join(package).join("node_modules/svelte");
     fs::create_dir_all(svelte.join("compiler")).unwrap();
     fs::write(
         svelte.join("package.json"),
@@ -141,6 +147,21 @@ fn a_tsconfig_with_no_components_still_gets_their_warnings() {
     let dir = workspace(&[("apps/app/src/A.svelte", WARNS)]);
     let (files, completed, stderr) = check(dir.path());
     assert_eq!(files, ["apps/app/src/A.svelte"], "stderr: {stderr}");
+    assert_eq!(
+        completed,
+        "COMPLETED 1 FILES 0 ERRORS 1 WARNINGS 1 FILES_WITH_PROBLEMS"
+    );
+}
+
+/// A monorepo root has no `svelte` of its own: each package installs
+/// the one it depends on. svelte-check loads the compiler for a
+/// component from the component's own directory upwards, so each
+/// package's components are compiled by that package's `svelte`.
+#[test]
+fn a_component_is_compiled_by_the_svelte_its_package_installs() {
+    let dir = workspace_with_svelte_in("packages/app", &[("packages/app/src/A.svelte", WARNS)]);
+    let (files, completed, stderr) = check(dir.path());
+    assert_eq!(files, ["packages/app/src/A.svelte"], "stderr: {stderr}");
     assert_eq!(
         completed,
         "COMPLETED 1 FILES 0 ERRORS 1 WARNINGS 1 FILES_WITH_PROBLEMS"

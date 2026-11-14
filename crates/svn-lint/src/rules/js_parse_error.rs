@@ -65,14 +65,14 @@ pub(crate) struct Settings {
 }
 
 /// The `js_parse_error` svelte-check reports for the component's
-/// scripts, if any: the message (docs link and hint included) and the
-/// offset it points at.
+/// scripts, if any: the message (docs link and hint included), the
+/// offset it points at, and where the script it is in opens.
 pub(crate) fn script_parse_error(
     doc: &Document<'_>,
     source: &str,
     scripts: &[Script<'_, '_, '_>],
     settings: &Settings,
-) -> Option<(String, Range)> {
+) -> Option<(String, Range, u32)> {
     let mut ordered: Vec<&Script<'_, '_, '_>> = scripts.iter().collect();
     ordered.sort_by_key(|s| s.section.content_range.start);
     for script in ordered {
@@ -91,6 +91,7 @@ pub(crate) fn script_parse_error(
         let mut at = match candidate.at {
             Position::At(rel) => base + candidate.token_start.filter(|_| transpiled).unwrap_or(rel),
             Position::ColumnOf(rel) => column_as_offset(source, base + rel),
+            Position::Nowhere => 0,
         };
         if transpiled
             && let Some(mapped) =
@@ -107,7 +108,11 @@ pub(crate) fn script_parse_error(
                 message.push_str(PREPROCESS_HINT);
             }
         }
-        return Some((message, Range::new(at, at)));
+        return Some((
+            message,
+            Range::new(at, at),
+            script.section.open_tag_range.start,
+        ));
     }
     None
 }
@@ -172,6 +177,9 @@ fn first_error(script: &Script<'_, '_, '_>, mode: Mode) -> Option<Candidate> {
                 let mut candidate = Candidate::at(error.pos, error.message);
                 if error.column_of {
                     candidate.at = Position::ColumnOf(error.pos);
+                }
+                if error.no_position {
+                    candidate.at = Position::Nowhere;
                 }
                 candidate
             });
@@ -2087,7 +2095,7 @@ mod tests {
             preprocess_ts,
             preprocess_configured,
         };
-        let (message, range) = script_parse_error(&doc, source, &scripts, &settings)?;
+        let (message, range, _) = script_parse_error(&doc, source, &scripts, &settings)?;
         let positions = svn_core::PositionMap::new(source);
         let at = positions.position_of(range.start);
         let hint = if message.contains("If you expect") {

@@ -64,6 +64,9 @@ pub(crate) enum Position {
     /// the modifier's token, passed where an offset belongs: the error
     /// lands at the file offset equal to that column.
     ColumnOf(u32),
+    /// The parser failed without an offset. The compiler's error has
+    /// no position, and one is shown at the start of the file.
+    Nowhere,
 }
 
 /// One parse error the compiler would raise.
@@ -2034,6 +2037,7 @@ mod tests {
         first_early_error(&parsed.program, text, mode).map(|c| {
             let at = match c.at {
                 Position::At(at) | Position::ColumnOf(at) => at,
+                Position::Nowhere => 0,
             };
             (at, c.message)
         })

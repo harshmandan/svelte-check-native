@@ -143,6 +143,17 @@ pub fn lint_file_with_options(
     options: LintOptions,
     compat: CompatFeatures,
 ) -> Vec<Warning> {
+    lint_file_or_exception(source, path, options, compat).0
+}
+
+/// [`lint_file_with_options`], and the message of the JavaScript
+/// exception the compiler breaks with on this component, if it does.
+pub fn lint_file_or_exception(
+    source: &str,
+    path: &Path,
+    options: LintOptions,
+    compat: CompatFeatures,
+) -> (Vec<Warning>, Option<String>) {
     let mut ctx = LintContext::new(source);
     ctx.compat = compat;
     ctx.experimental_async = options.experimental_async;
@@ -153,7 +164,8 @@ pub fn lint_file_with_options(
     // that parse) — pass the caller's hint through rather than running
     // a separate `infer_runes_mode` parse here.
     crate::walk::walk(source, path, options.runes, &mut ctx);
-    ctx.take_warnings()
+    let exception = ctx.take_exception();
+    (ctx.take_warnings(), exception)
 }
 
 /// Run the warning pass on an ALREADY-PARSED document.

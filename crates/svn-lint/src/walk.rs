@@ -262,13 +262,19 @@ pub fn walk_parsed(
     ctx.scope_tree = Some(tree);
 
     // A template the compiler's `parse()` rejects fails before any
-    // analysis.
-    if let Some(finding) = crate::parse_errors::first_template_parse_error(fragment, source) {
-        ctx.emit_error(finding.code, finding.message, finding.range);
-    }
-
-    // The compiler parses each script while it reads the component, so
-    // a syntax error in one precedes everything the analysis reports.
+    // analysis. The compiler parses each script where it stands while
+    // it reads the component, so of a template error and a script's
+    // syntax error, the one the parser reaches first is thrown.
+    let template_error = crate::parse_errors::first_template_parse_error_at(fragment, source);
+    let report_template_error = |ctx: &mut LintContext<'_>| {
+        if let Some((_, finding)) = &template_error {
+            if finding.exception {
+                ctx.abort(&finding.message);
+            } else {
+                ctx.emit_error(finding.code, finding.message.clone(), finding.range);
+            }
+        }
+    };
     {
         use crate::rules::js_parse_error::{Script, Settings, script_parse_error};
         let scripts: Vec<Script<'_, '_, '_>> = [
@@ -301,9 +307,18 @@ pub fn walk_parsed(
                 .collect(),
             None => scripts,
         };
-        if let Some((message, range)) = script_parse_error(doc, source, &scripts, &settings)
-            .or_else(|| merged.and_then(|(_, error)| error))
+        let script_error = script_parse_error(doc, source, &scripts, &settings).or_else(|| {
+            merged.and_then(|(first, error)| {
+                error.map(|(message, range)| (message, range, first.start))
+            })
+        });
+        if template_error
+            .as_ref()
+            .is_some_and(|(at, _)| script_error.as_ref().is_none_or(|(_, _, opens)| at < opens))
         {
+            report_template_error(ctx);
+        }
+        if let Some((message, range, _)) = script_error {
             ctx.emit_error(Code::js_parse_error, message, range);
             // Where a syntax error lands depends on the transpiled
             // layout, or on the source map around it.
@@ -316,6 +331,7 @@ pub fn walk_parsed(
                 ctx.needs_real_transpile = true;
             }
         }
+        report_template_error(ctx);
     }
 
     // Stripping TypeScript happens before analysis, so its failure

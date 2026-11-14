@@ -36,6 +36,10 @@ pub(crate) struct ParseFinding {
     pub code: Code,
     pub message: String,
     pub range: Range,
+    /// The compiler did not raise this as a compile error: it broke
+    /// with a JavaScript exception whose text `message` is. There is
+    /// then no code.
+    pub exception: bool,
 }
 
 /// The first error the compiler's `parse()` throws on this template,
@@ -45,6 +49,16 @@ pub(crate) fn first_template_parse_error(
     fragment: &Fragment,
     source: &str,
 ) -> Option<ParseFinding> {
+    first_template_parse_error_at(fragment, source).map(|(_, finding)| finding)
+}
+
+/// [`first_template_parse_error`], with how far into the component the
+/// parser is when it throws. A `<script>` is read where it stands, so a
+/// syntax error in a script that opens before that point comes first.
+pub(crate) fn first_template_parse_error_at(
+    fragment: &Fragment,
+    source: &str,
+) -> Option<(u32, ParseFinding)> {
     let mut finder = Finder {
         source,
         // The compiler decides once, from the component's first `<script
@@ -55,9 +69,16 @@ pub(crate) fn first_template_parse_error(
     };
     finder.fragment(fragment, true);
     if finder.found.is_some() {
-        return finder.found.map(|(_, f)| f);
+        return finder.found;
     }
-    read_options(fragment, source)
+    // `<svelte:options>` is checked once the whole component is read.
+    read_options(fragment, source).map(|finding| (source.len() as u32, finding))
+}
+
+/// The offset that equals the column of `pos`, in UTF-16 units.
+fn column_as_offset(source: &str, pos: u32) -> u32 {
+    let line_start = source[..pos as usize].rfind('\n').map_or(0, |i| i + 1);
+    source[line_start..pos as usize].encode_utf16().count() as u32
 }
 
 struct Finder<'s> {
@@ -78,9 +99,66 @@ impl Finder<'_> {
                     code,
                     message,
                     range,
+                    exception: false,
                 },
             ));
         }
+    }
+
+    /// The `{#each}` block whose iterable starts at `start` breaks the
+    /// compiler itself.
+    ///
+    /// The compiler reads the iterable, and on an error cuts the
+    /// template at the last `as` before the error's position and reads
+    /// again. An error without a position has none to cut at: asking
+    /// for it throws a JavaScript exception, which is all a check run
+    /// then shows.
+    fn each_iterable_breaks(&mut self, start: u32) -> bool {
+        let language = if self.ts {
+            svn_acorn::Language::TypeScript
+        } else {
+            svn_acorn::Language::JavaScript
+        };
+        let mut end = self.source.len();
+        loop {
+            let Some(template) = self.source.get(..end) else {
+                return false;
+            };
+            let error = match svn_acorn::parse_expression_at(template, start, language) {
+                Ok(_) => return false,
+                Err(error) => error,
+            };
+            if error.no_position {
+                break;
+            }
+            let at = if error.column_of {
+                column_as_offset(self.source, error.pos)
+            } else {
+                error.pos
+            };
+            let Some(mut cut) = (at as usize).checked_sub(2) else {
+                return false;
+            };
+            while cut > start as usize && self.source.get(cut..cut + 2) != Some("as") {
+                cut -= 1;
+            }
+            if cut <= start as usize {
+                return false;
+            }
+            end = cut;
+        }
+        if self.found.as_ref().is_none_or(|(key, _)| start < *key) {
+            self.found = Some((
+                start,
+                ParseFinding {
+                    code: Code::js_parse_error,
+                    message: "Cannot read properties of undefined (reading '0')".to_string(),
+                    range: Self::point(0),
+                    exception: true,
+                },
+            ));
+        }
+        true
     }
 
     fn point(at: u32) -> Range {
@@ -189,6 +267,17 @@ impl Finder<'_> {
         let Err(error) = result else {
             return false;
         };
+        // The parser failed without an offset. The compiler's error then
+        // has no position, and one is shown at the start of the file.
+        if error.no_position {
+            self.report(
+                read.range.start,
+                Code::js_parse_error,
+                format!("{}\nhttps://svelte.dev/e/js_parse_error", error.message),
+                Self::point(0),
+            );
+            return true;
+        }
         // In the text the wrapping adds after the read, the wrapping
         // itself is at fault.
         if error.pos > read.range.end && read.shape != AcornReadShape::Expression {
@@ -197,12 +286,7 @@ impl Finder<'_> {
         // acorn-typescript places a few errors at the column number of
         // a position, taken for an offset.
         let at = if error.column_of {
-            let line_start = self.source[..error.pos as usize]
-                .rfind('\n')
-                .map_or(0, |i| i + 1);
-            self.source[line_start..error.pos as usize]
-                .encode_utf16()
-                .count() as u32
+            column_as_offset(self.source, error.pos)
         } else {
             error.pos
         };
@@ -384,8 +468,10 @@ impl Finder<'_> {
                 }
             }
             Node::EachBlock(b) => {
-                self.read_error(b.open_error.as_ref());
-                self.each_expression(b.expression_range, b.open_error.as_ref());
+                if !self.each_iterable_breaks(b.expression_range.start) {
+                    self.read_error(b.open_error.as_ref());
+                    self.each_expression(b.expression_range, b.open_error.as_ref());
+                }
                 if b.open_error.is_none() {
                     let context = b.as_clause.as_ref().and_then(|c| c.context_range);
                     self.pattern(context.map(|r| r.start));
@@ -1023,6 +1109,7 @@ fn read_options(fragment: &Fragment, source: &str) -> Option<ParseFinding> {
             code,
             message,
             range,
+            exception: false,
         })
     };
     for attr in &options.attributes {
@@ -1114,6 +1201,7 @@ fn custom_element(attr: &Attribute, source: &str) -> Option<ParseFinding> {
             code,
             message,
             range,
+            exception: false,
         })
     };
     let invalid_ce = || {
@@ -1280,6 +1368,7 @@ fn validate_tag(tag: Option<&str>, range: Range) -> Option<ParseFinding> {
             code,
             message,
             range,
+            exception: false,
         })
     };
     let Some(tag) = tag else {

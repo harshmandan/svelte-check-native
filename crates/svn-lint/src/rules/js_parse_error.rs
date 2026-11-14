@@ -39,6 +39,7 @@ use svn_parser::{Document, ScriptSection};
 use crate::rules::acorn_early_errors::{
     Candidate, Mode, Position, first_early_error, next_token_start,
 };
+use crate::rules::acorn_typescript_attempts::settled_error;
 
 /// The hint svelte-check appends to a parse error inside the script
 /// tag whose message contains "expected".
@@ -188,18 +189,18 @@ pub(crate) fn first_error_in(
             && crate::rules::acorn_early_errors::signature_scope_start(program, mode)
                 .is_some_and(|start| start <= c.detect))
     });
+    // Where oxc gave up: nothing it reports lies past that.
+    let gave_up_at = errors
+        .iter()
+        .filter_map(|d| d.labels.first())
+        .map(|l| l.span().start)
+        .max()
+        .unwrap_or(0);
     let early = if panicked {
         let stop = errors
             .first()
             .and_then(|d| d.labels.first())
             .map_or(0, |l| l.span().start);
-        // Where oxc gave up: nothing it reports lies past that.
-        let gave_up_at = errors
-            .iter()
-            .filter_map(|d| d.labels.first())
-            .map(|l| l.span().start)
-            .max()
-            .unwrap_or(0);
         let before = early_error_before(text, stop, mode);
         let same_line = early_error_in_typescript_reading(text, stop, mode);
         [
@@ -213,10 +214,40 @@ pub(crate) fn first_error_in(
     } else {
         first_early_error(program, text, mode)
     };
-    match (from_oxc, early) {
-        (Some(a), Some(b)) => Some(if b.detect < a.detect { b } else { a }),
-        (a, b) => a.or(b),
+    let found = match (from_oxc, early) {
+        (Some(a), Some(b)) => {
+            if b.detect < a.detect {
+                b
+            } else {
+                a
+            }
+        }
+        (a, b) => a.or(b)?,
+    };
+    // acorn-typescript reads an expression that starts with `<` twice,
+    // and the error it ends up with is not always this one.
+    if !mode.ts || mode.transpiled || !text.contains('<') {
+        return Some(found);
     }
+    if !panicked {
+        return Some(settled_error(text, program, text.len() as u32, mode, found));
+    }
+    let prefix = text.get(..gave_up_at as usize)?;
+    for seed in ["", " 0"] {
+        if let Some(completed) = completed_prefix(prefix, seed, mode) {
+            let allocator = oxc_allocator::Allocator::default();
+            let parsed =
+                oxc_parser::Parser::new(&allocator, &completed, source_type_of(mode)).parse();
+            return Some(settled_error(
+                text,
+                &parsed.program,
+                gave_up_at,
+                mode,
+                found,
+            ));
+        }
+    }
+    Some(found)
 }
 
 /// Errors TypeScript's transpile repairs by printing the construct anew.

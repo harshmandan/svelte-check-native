@@ -134,7 +134,28 @@ pub(crate) fn first_early_error(
         ..Scope::default()
     });
     checker.visit_statements(&program.body);
+    if checker.ts_as_written() {
+        for (name, at) in type_parameter_names(program) {
+            checker.type_parameter_name(name, at);
+        }
+    }
     checker.best
+}
+
+/// The name of every type parameter in the program, with its position:
+/// of a function, class, method, interface, type alias or function
+/// type alike.
+fn type_parameter_names<'a>(program: &Program<'a>) -> Vec<(&'a str, u32)> {
+    struct Collector<'a>(Vec<(&'a str, u32)>);
+    impl<'a> Visit<'a> for Collector<'a> {
+        fn visit_ts_type_parameter(&mut self, it: &oxc_ast::ast::TSTypeParameter<'a>) {
+            self.0.push((it.name.name.as_str(), it.name.span.start));
+            walk::walk_ts_type_parameter(self, it);
+        }
+    }
+    let mut collector = Collector(Vec::new());
+    collector.visit_program(program);
+    collector.0
 }
 
 /// Where the statements start that may be an `import` or `export`: the
@@ -496,6 +517,16 @@ impl<'s, 't> Checker<'s, 't> {
             Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_)
         ) {
             self.error(body.span().start, "Unexpected token");
+        }
+    }
+
+    /// acorn-typescript reads a type parameter's name as it reads any
+    /// name being declared, wherever the type parameter stands.
+    fn type_parameter_name(&mut self, name: &str, at: u32) {
+        if name == "await" {
+            self.error(at, "Cannot use keyword 'await' outside an async function");
+        } else if name == "enum" || STRICT_RESERVED.contains(&name) {
+            self.error(at, format!("The keyword '{name}' is reserved"));
         }
     }
 
@@ -1706,6 +1737,16 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
         // acorn-typescript declares nothing for an enum.
         if self.mode.transpiled && !it.declare {
             self.transpiled_var(it.id.name.as_str(), it.id.span.start);
+        }
+        // It reads the enum's name as a binding and each initializer as
+        // an expression; a member's name is any word.
+        if self.ts_as_written() {
+            self.check_unreserved(it.id.name.as_str(), it.id.span.start);
+        }
+        for member in &it.body.members {
+            if let Some(initializer) = &member.initializer {
+                self.visit_expression(initializer);
+            }
         }
     }
 

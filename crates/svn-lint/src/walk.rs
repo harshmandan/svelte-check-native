@@ -113,6 +113,21 @@ fn references_legacy_props(tree: &crate::scope::ScopeTree) -> bool {
 pub fn walk(source: &str, path: &Path, runes: Option<bool>, ctx: &mut LintContext<'_>) {
     let (doc, errors) = parse_sections(source);
     let (fragment, _parse_errors) = parse_all_template_runs(source, &doc.template.text_runs);
+    // The compiler throws reading a `<script>` / `<style>` tag's
+    // attributes, unless the template before the tag already threw.
+    if let Some((code, message, range)) = crate::parse_rejection::section_tag_error(&errors) {
+        match crate::parse_errors::first_template_parse_error_at(&fragment, source) {
+            Some((_, finding)) if finding.range.start < range.start => {
+                if finding.exception {
+                    ctx.abort(&finding.message);
+                } else {
+                    ctx.emit_error(finding.code, finding.message, finding.range);
+                }
+            }
+            _ => ctx.emit_error(code, message, range),
+        }
+        return;
+    }
     // Reading the `<script>` tags precedes everything else the
     // compiler does.
     if let Some((code, message, range)) = crate::parse_rejection::script_tag_error(&doc, &errors) {

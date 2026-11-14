@@ -62,6 +62,28 @@ fn script_attribute_error(
     })
 }
 
+/// The error the compiler throws reading the attributes of a top-level
+/// `<script>` / `<style>` opening tag (`read_static_attribute`, stricter
+/// than an element's reading), as the parser reports it: its code,
+/// message and position.
+pub(crate) fn section_tag_error(
+    section_errors: &[svn_parser::ParseError],
+) -> Option<(crate::Code, String, Range)> {
+    section_errors.iter().find_map(|e| match e {
+        svn_parser::ParseError::Compiler {
+            code,
+            message,
+            range,
+        } => Some((crate::Code::try_from_str(code)?, message.clone(), *range)),
+        svn_parser::ParseError::UnexpectedEof { range } => Some((
+            crate::Code::unexpected_eof,
+            crate::messages::unexpected_eof(),
+            *range,
+        )),
+        _ => None,
+    })
+}
+
 /// The first error the compiler raises while reading the component's
 /// top-level `<script>` tags: an attribute `read_script` rejects, an
 /// invalid `context`, or a second instance / module script. The

@@ -298,6 +298,37 @@ fn rejected_component_outside_the_tsconfig_counts_when_imported() {
     assert_eq!(check(dir.path(), &[]), (diagnostics, completed));
 }
 
+/// A rejected component is in the default engine's program as its
+/// instance script alone (its module script only when it has no instance
+/// script): what its module script or template imports is not followed.
+#[test]
+fn only_a_rejected_components_fallback_script_imports_are_followed() {
+    let dir = workspace(&[
+        (
+            "src/App.svelte",
+            "<script lang=\"ts\">\n  import A from '../lib/A.svelte';\n</script>\n<A />\n",
+        ),
+        (
+            "src/ambient.d.ts",
+            "declare module '*.svelte' {\n  const component: any;\n  export default component;\n}\n",
+        ),
+        (
+            "lib/A.svelte",
+            "<script module>\n  import B from './B.svelte';\n</script>\n<script>\n  import C from './C.svelte';\n</script>\n<B /><C />{#await import('./D.svelte') then D}{/await}\n<div>\n",
+        ),
+        ("lib/B.svelte", UNCLOSED),
+        ("lib/C.svelte", UNCLOSED),
+        ("lib/D.svelte", UNCLOSED),
+    ]);
+    let (diagnostics, _) = check(dir.path(), &[]);
+    let mut files: Vec<String> = diagnostics
+        .iter()
+        .map(|d| d["filename"].as_str().unwrap().to_string())
+        .collect();
+    files.dedup();
+    assert_eq!(files, ["lib/A.svelte", "lib/C.svelte", "src/App.svelte"]);
+}
+
 /// The default engine gives a rejected component's importers its script
 /// alone (the instance script, else the module script). Without
 /// `import` / `export` that is no module, which TypeScript reports at the

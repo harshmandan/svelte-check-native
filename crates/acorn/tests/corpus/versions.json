@@ -1,0 +1,4 @@
+{
+	"acorn": "8.19.0",
+	"@sveltejs/acorn-typescript": "1.0.13"
+}

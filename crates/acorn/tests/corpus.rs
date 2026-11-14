@@ -34,39 +34,26 @@ fn want(value: &serde_json::Value) -> Option<String> {
     })
 }
 
-/// The offset acorn's error carries, given the port's.
+/// What the port did with `text`, in the oracle's terms. `shift` is
+/// how far into `text` the input starts: the oracle reads three of the
+/// four ways one space into the text, and takes that space off again.
 ///
 /// acorn-typescript raises a few errors at a column number that it
-/// takes for an offset. The corpus holds that number as acorn computed
-/// it: in the text it was given, which for three of the readings is the
-/// input after one space, and then moved back by that space.
-fn reported_offset(code: &str, error: &SyntaxError, padded: bool) -> i64 {
-    if !error.column_of {
-        return i64::from(error.pos);
-    }
-    let before = &code[..error.pos as usize];
-    let line_start = before
-        .rfind(['\n', '\r', '\u{2028}', '\u{2029}'])
-        .map(|i| i + before[i..].chars().next().map_or(1, char::len_utf8));
-    let column = |from: usize| before[from..].encode_utf16().count() as i64;
-    match (line_start, padded) {
-        (Some(start), false) => column(start),
-        (Some(start), true) => column(start) - 1,
-        // On the first line the space counts, and is taken off again.
-        (None, _) => column(0),
-    }
-}
-
-fn got(code: &str, result: Result<Option<u32>, SyntaxError>, padded: bool) -> String {
+/// takes for an offset. The offset that names is worked out by the same
+/// function the rest of the workspace reports those errors with.
+fn got(text: &str, result: Result<Option<u32>, SyntaxError>, shift: u32) -> String {
     match result {
-        Ok(Some(end)) => format!("end {end}"),
+        Ok(Some(end)) => format!("end {}", end - shift),
         Ok(None) => "ok".to_string(),
         Err(error) if error.no_position => format!("crash {}", error.message),
-        Err(error) => format!(
-            "{} @{}",
-            error.message,
-            reported_offset(code, &error, padded)
-        ),
+        Err(error) => {
+            let pos = if error.column_of {
+                svn_acorn::column_as_offset(text, error.pos)
+            } else {
+                error.pos
+            };
+            format!("{} @{}", error.message, i64::from(pos) - i64::from(shift))
+        }
     }
 }
 
@@ -81,13 +68,17 @@ fn compare_cases(cases: &[serde_json::Value], language: Language) {
     let mut total = 0;
     for case in cases {
         let code = case["code"].as_str().unwrap_or_default();
+        // As the oracle reads: a component's script, a tag's expression
+        // or statement is never at offset zero of what the parser is
+        // given, so one space stands for the rest.
+        let padded = format!(" {code}");
         let readings = [
             (
                 "script",
                 got(
-                    code,
-                    svn_acorn::parse(code, Reading::Script, language).map(|()| None),
-                    true,
+                    &padded,
+                    svn_acorn::parse(&padded, Reading::Script, language).map(|()| None),
+                    1,
                 ),
             ),
             (
@@ -95,23 +86,23 @@ fn compare_cases(cases: &[serde_json::Value], language: Language) {
                 got(
                     code,
                     svn_acorn::parse(code, Reading::Module, language).map(|()| None),
-                    false,
+                    0,
                 ),
             ),
             (
                 "exprAt1",
                 got(
-                    code,
-                    svn_acorn::parse_expression_at(code, 0, language).map(Some),
-                    true,
+                    &padded,
+                    svn_acorn::parse_expression_at(&padded, 1, language).map(Some),
+                    1,
                 ),
             ),
             (
                 "stmtAt1",
                 got(
-                    code,
-                    svn_acorn::parse_statement_at(code, 0, language).map(Some),
-                    true,
+                    &padded,
+                    svn_acorn::parse_statement_at(&padded, 1, language).map(Some),
+                    1,
                 ),
             ),
         ];
@@ -185,4 +176,14 @@ fn port_agrees_on_a_corpus_given_by_the_environment() {
         _ => Language::TypeScript,
     };
     compare_cases(&cases, language);
+}
+
+/// The corpus says which parsers answered it. The port is written
+/// against these versions; a corpus from others is a different claim.
+#[test]
+fn corpus_comes_from_the_parsers_the_port_follows() {
+    let versions: serde_json::Value =
+        serde_json::from_str(include_str!("corpus/versions.json")).unwrap_or_default();
+    assert_eq!(versions["acorn"], "8.19.0");
+    assert_eq!(versions["@sveltejs/acorn-typescript"], "1.0.13");
 }

@@ -161,9 +161,12 @@ const token = /\s+|[A-Za-z_$][\w$]*|\d[\w.]*|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\
  * @param {Iterable<string>} codes
  */
 function mutants(codes, per_input, seed) {
+	// Multiplied as 32-bit integers: as doubles the product loses its
+	// low bits, and the sequence falls into a short cycle. The high bits
+	// are the ones that vary.
 	const random = (n) => {
-		seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-		return seed % n;
+		seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+		return (seed >>> 8) % n;
 	};
 	const seen = new Set(codes);
 	const made = [];
@@ -198,8 +201,14 @@ const seed = Number(process.env.MUTANTS_SEED) || 1;
 
 const corpus_dir = join(fileURLToPath(new URL('..', import.meta.url)), 'crates/acorn/tests/corpus');
 
+// Which parsers answered: a corpus is only as current as they are.
+const versions = { acorn: acorn.version };
+const write_versions = () =>
+	writeFileSync(join(corpus_dir, 'versions.json'), JSON.stringify(versions, null, '\t') + '\n');
+
 const javascript = answers(acorn.Parser, inputs);
 writeFileSync(join(corpus_dir, 'javascript.json'), JSON.stringify(javascript));
+write_versions();
 console.log(`${javascript.length} inputs, acorn ${acorn.version} -> javascript.json`);
 if (mutants_dir) {
 	const made = answers(acorn.Parser, mutants(inputs, per_input, seed));
@@ -226,6 +235,8 @@ if (ts_checkout) {
 	for (const code of breaking) ts_inputs.add(code);
 	const typescript = answers(acorn.Parser.extend(tsPlugin()), ts_inputs);
 	writeFileSync(join(corpus_dir, 'typescript.json'), JSON.stringify(typescript));
+	versions['@sveltejs/acorn-typescript'] = version;
+	write_versions();
 	console.log(`${typescript.length} inputs, acorn-typescript ${version} -> typescript.json`);
 	if (mutants_dir) {
 		const made = answers(acorn.Parser.extend(tsPlugin()), mutants(ts_inputs, per_input, seed));

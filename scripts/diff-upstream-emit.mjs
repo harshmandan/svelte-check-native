@@ -1,49 +1,64 @@
 #!/usr/bin/env node
-// diff-upstream-emit.mjs — compare our emit snapshots for upstream's
-// svelte2tsx / htmlx2jsx samples against upstream's own expected output.
+// diff-upstream-emit.mjs — compare our emit snapshots with svelte2tsx's
+// emit for the same inputs.
 //
 // `crates/cli/tests/emit_snapshots` locks our `--emit-ts` output against
-// itself, so a wrong shape accepted once stays green. Upstream ships the
-// expected output for the same inputs; this tool reads both and reports
-// where the TYPED pieces differ. The two files are laid out differently
-// (render-function wrapper, helper names, indentation), so whole files
-// are not compared. Instead each side is reduced to a list of constructs
-// that decide what TypeScript checks, paired in source order:
+// itself, so a wrong shape accepted once stays green. The reference is
+// generated, not upstream's checked-in expected output:
+// scripts/gen-upstream-emit.mjs runs svelte2tsx (pinned to the
+// language-tools submodule's version) on every sample's input with the
+// options `svelte-check --tsgo` passes, and writes `upstream.emit.ts`
+// next to our `expected.emit.ts`; a file svelte2tsx rejects is listed in
+// `upstream.error.txt` instead (svelte-check reports its parse error and
+// leaves it out of type checking; the emit_snapshots test checks that we
+// leave it out too). Upstream's own `expectedv2` files are not used: for
+// samples without an `expected-svelte5` file they are Svelte 4 output.
 //
-//   element   `svelteHTML.createElement("tag", {…})` — tag + attribute object
-//   component `new C({ target, props: {…} })` — the props object
-//   iso       the generic `$$IsomorphicComponent` interface body
-//   each      the `for (… of …)` header of `{#each}`
-//   if        the condition of `{#if}` / `{:else if}`
-//   await     the awaited expression of `{#await}`
-//   snippet   a snippet's name and parameters (compared as a set)
-//   render    the argument of `{@render}`
-//   on        the event name and handler of a component's `$on(…)`
+// The two emits are laid out differently (render-function wrapper,
+// helper names, indentation), so whole files are not compared. Each
+// file of a sample is reduced on both sides to the constructs that
+// decide what TypeScript checks, and the constructs of one kind are
+// paired in source order:
 //
-// Not compared: the render function's result and the non-generic default
-// export. We fold svelte2tsx's factory wrappers (`with_any_event`,
-// `partial`) into the render result instead of applying them around it,
-// so the two only agree at the level of the resulting types, which a
-// text comparison cannot see.
+//   element    `svelteHTML.createElement("tag", {…})` — tag + attributes
+//   component  `new C({ target, props: {…} })` — the props object
+//   iso        the generic `$$IsomorphicComponent` interface body
+//   each       the `for (… of …)` header of `{#each}`
+//   if         the condition of `{#if}` / `{:else if}`
+//   await      the awaited expression of `{#await}`
+//   snippet    a snippet's type parameters, parameters and return
+//              annotation (paired by name, order ignored)
+//   render     the argument of `{@render}`
+//   on         the event name and handler of a component's `$on(…)`
+//   action / transition / animation   the directive helper's arguments
+//   style      a style directive's `ensureType(…)` arguments
+//   bind       a `bind:` write-back target (`target = any(null)`)
+//   getset     a get/set binding's pair
+//   bindings   `instance.$$bindings = '…'` for `bind:` on a component
+//   slot       a slot definition's name and props
+//   slotlet    a `let:` consumer's pattern and the slot it reads
+//   const      a template `const` (`{@const}`, an `{#await}` binding)
+//   result     the render result's `props`, `slots`, `exports` and
+//              `bindings`, read as the types they give (paired by key)
 //
-// Also not compared, because the two sides write them in shapes a text
-// comparison cannot pair: `bind:` assignments and `$$bindings`, actions,
-// transitions and animations, `{@const}`, `{@html}` and `{#key}`, bare
-// `{expression}` statements, slot definitions, and which stretches are
-// wrapped in ignore comments (all comments are dropped). A difference
-// there shows only in the diagnostics, which the fixtures check.
+// Not compared: the render result's `events` and the non-generic default
+// export. svelte2tsx applies its factory wrappers (`with_any_event`,
+// `partial`) around the render result, we fold them into the result and
+// a JSDoc type, so the two agree only at the level of the resulting
+// types, which a text comparison cannot see. Props and exports types are
+// compared by their member names and optionality, not member types: one
+// side writes `typeof a` where the other writes what it resolves to.
+// Also not compared: `{@html}`, `{#key}`, bare `{expression}` statements,
+// and which stretches are wrapped in ignore comments (comments are
+// dropped). A difference there shows only in the diagnostics, which the
+// fixtures check.
 //
 // Each construct is normalised before comparing: comments and whitespace
 // outside strings removed, trailing commas dropped, helper names mapped
 // to one spelling (`__sveltets_2_ensureComponent` and
-// `__svn_ensure_component` both become `H.ensurecomponent`), and
-// synthesised locals renamed (`$$_tnenopmoC0C` / `__svn_C_0` → `$C`).
-//
-// The upstream side is `upstream.emit.ts`, written next to each snapshot
-// by scripts/gen-upstream-emit.mjs: svelte2tsx at the submodule's version,
-// called as `svelte-check --tsgo` calls it. Samples svelte2tsx rejects
-// (`upstream.error.txt`) are skipped: svelte-check reports the parse
-// error and type-checks nothing.
+// `__svn_ensure_component` both become `H.ensurecomponent`), synthesised
+// locals renamed (`$$_tnenopmoC0C` / `__svn_C_0` → `$C`), and redundant
+// parentheses around a value dropped.
 //
 // Usage:
 //   node scripts/diff-upstream-emit.mjs              report, exit 1 on any
@@ -52,13 +67,17 @@
 //   node scripts/diff-upstream-emit.mjs --sample <corpus/name>
 //                                                   one sample, verbose
 //   node scripts/diff-upstream-emit.mjs --kinds      count divergences per kind
+//   node scripts/diff-upstream-emit.mjs --stats      constructs per kind, and
+//                                                   samples with none
+//                                                   (--verbose lists them)
 //   node scripts/diff-upstream-emit.mjs --json       machine-readable list
 //
 // Allowlist: scripts/diff-upstream-emit-allow.json — hand-written entries
-// with reasons. Each entry matches by `sample` (exact, or `*`), `kind`,
-// and optional `ours` / `upstream` substrings of the normalised text.
-// Entries that match nothing are reported as stale (exit 1), so the list
-// only ever shrinks toward real decisions.
+// with reasons. An entry names the sample(s), kind, optional file and
+// label, and the differing parts (`ours` → `upstream`); it allows a
+// divergence only when substituting those parts turns our text into
+// upstream's exactly. Entries that match nothing are reported as stale
+// (exit 1), so the list only ever shrinks toward real decisions.
 
 import fs from 'node:fs';
 import path from 'node:path';

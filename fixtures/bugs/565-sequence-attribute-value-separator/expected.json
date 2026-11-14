@@ -1,0 +1,18 @@
+{
+    "ranges": true,
+    "errors": [
+        { "file": "DataAttributeParenthesized.svelte", "line": 3, "column": 18, "code": 1005, "endLine": 3, "endColumn": 19 },
+        { "file": "DataAttributeQuoted.svelte", "line": 3, "column": 19, "code": 1005, "endLine": 3, "endColumn": 20 },
+        { "file": "ElementBare.svelte", "line": 3, "column": 16, "code": 1005, "endLine": 3, "endColumn": 17 },
+        { "file": "ElementParenthesized.svelte", "line": 3, "column": 17, "code": 1005, "endLine": 3, "endColumn": 18 },
+        { "file": "ElementQuoted.svelte", "line": 3, "column": 18, "code": 1005, "endLine": 3, "endColumn": 19 },
+        { "file": "PropAfterProp.svelte", "line": 4, "column": 20, "code": 1005, "endLine": 4, "endColumn": 21 },
+        { "file": "PropBare.svelte", "line": 4, "column": 14, "code": 1005, "endLine": 4, "endColumn": 15 },
+        { "file": "PropBeforeProp.svelte", "line": 4, "column": 15, "code": 1005, "endLine": 4, "endColumn": 18 },
+        { "file": "PropQuoted.svelte", "line": 4, "column": 16, "code": 1005, "endLine": 4, "endColumn": 17 },
+        { "file": "PropSpaced.svelte", "line": 4, "column": 16, "code": 1005, "endLine": 4, "endColumn": 17 },
+        { "file": "PropWithSnippet.svelte", "line": 4, "column": 15, "code": 1005, "endLine": 4, "endColumn": 28 },
+        { "file": "input.svelte", "line": 4, "column": 15, "code": 1005, "endLine": 4, "endColumn": 16 }
+    ],
+    "_note": "svelte2tsx writes a comma sequence attribute value bare, so the comma inside it ends the member and TypeScript reports `':' expected` where the next separator is. It writes that separator (`,` or `})` for a data- attribute) over the first character after the sequence's own range: the `)` when the sequence is parenthesized, the `}` or the space before it otherwise. The diagnostic must land there, and nowhere else: a separator written over no source text left the error unmapped, one column early, or reported as a failure to parse the generated TypeScript."
+}

@@ -40,6 +40,25 @@ const CASES: &[(&str, &str, u32)] = &[
     ),
 ];
 
+/// The compiler never records `this` among an element's attribute
+/// names, so a repeated `this` on a top-level tag is accepted.
+#[test]
+fn a_repeated_this_is_no_duplicate() {
+    for src in [
+        "<script this this>let a = 1;</script>",
+        "<style this this>p{}</style>",
+    ] {
+        let warnings =
+            svn_lint::lint_file(src, Path::new("T.svelte"), None, CompatFeatures::MODERN);
+        assert!(
+            warnings
+                .iter()
+                .all(|w| w.code.as_str() != "attribute_duplicate"),
+            "{src}"
+        );
+    }
+}
+
 #[test]
 fn a_script_tag_the_compiler_rejects_is_its_only_error() {
     let mut failures = Vec::new();

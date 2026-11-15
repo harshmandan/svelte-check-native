@@ -484,7 +484,12 @@ fn strict_tag_attributes(scanner: &mut Scanner<'_>) -> Result<(), ParseError> {
                 attr.range.start,
             ));
         }
-        names.push(attr.name);
+        // The compiler never records `this` (it allows
+        // `<svelte:element bind:this this=…>`), so a repeated `this`
+        // is no duplicate.
+        if attr.name != "this" {
+            names.push(attr.name);
+        }
         scanner.skip_svelte_whitespace();
     }
     if scanner.peek_byte() != Some(b'>') {

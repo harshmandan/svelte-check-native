@@ -53,7 +53,7 @@ pub(crate) enum BlockTerminator {
 pub(crate) fn peek_and_consume_terminator(
     scanner: &mut Scanner<'_>,
     errors: &mut Vec<ParseError>,
-    ts: bool,
+    reader: &TagReader<'_>,
 ) -> Option<BlockTerminator> {
     let start = scanner.pos();
     if scanner.peek_byte() != Some(b'{') {
@@ -111,7 +111,7 @@ pub(crate) fn peek_and_consume_terminator(
                 // it.
                 scanner.advance(2);
                 let limit = scanner.source().len() as u32;
-                let header = read_expression_header(scanner, ts, limit);
+                let header = read_expression_header(scanner, reader, limit);
                 Some(BlockTerminator::ElseIf {
                     condition_range: header.range,
                     error: header.error,
@@ -130,7 +130,6 @@ pub(crate) fn peek_and_consume_terminator(
             let keyword_end = word_end;
             let counted_close = find_mustache_end(scanner.source(), keyword_end);
             let limit = counted_close.unwrap_or(scanner.source().len() as u32);
-            let reader = TagReader::new(scanner.source(), ts);
             let (context_range, error) = match reader.read_branch(keyword_end, limit) {
                 Ok(branch) => {
                     scanner.set_pos(branch.end);
@@ -201,7 +200,7 @@ pub(crate) struct ExpressionHeader {
 /// `}` closes the tag.
 pub(crate) fn read_expression_header(
     scanner: &mut Scanner<'_>,
-    ts: bool,
+    reader: &TagReader<'_>,
     fragment_end: u32,
 ) -> ExpressionHeader {
     let keyword_end = scanner.pos();
@@ -210,7 +209,6 @@ pub(crate) fn read_expression_header(
     // brace count finds.
     let counted_close = find_mustache_end(source, keyword_end);
     let limit = counted_close.unwrap_or(fragment_end);
-    let reader = TagReader::new(source, ts);
     let start = reader.skip_whitespace(keyword_end);
     match reader.read_keyword_expression(keyword_end, limit) {
         Ok(read) => {
@@ -259,7 +257,8 @@ mod tests {
         let src = "{:else iffy}";
         let mut scanner = Scanner::new(src);
         let mut errors = Vec::new();
-        let term = peek_and_consume_terminator(&mut scanner, &mut errors, false);
+        let term =
+            peek_and_consume_terminator(&mut scanner, &mut errors, &TagReader::new(src, false));
         let Some(BlockTerminator::ElseIf {
             error: Some(error), ..
         }) = term
@@ -281,7 +280,8 @@ mod tests {
         ] {
             let mut scanner = Scanner::new(src);
             let mut errors = Vec::new();
-            let term = peek_and_consume_terminator(&mut scanner, &mut errors, false);
+            let term =
+                peek_and_consume_terminator(&mut scanner, &mut errors, &TagReader::new(src, false));
             match (expect_close, term) {
                 (true, Some(BlockTerminator::Close { .. }))
                 | (false, Some(BlockTerminator::Else)) => {}
@@ -301,7 +301,8 @@ mod tests {
         for src in ["{//x}", "{/* x */ y}", "{ /* x */ y}"] {
             let mut scanner = Scanner::new(src);
             let mut errors = Vec::new();
-            let term = peek_and_consume_terminator(&mut scanner, &mut errors, false);
+            let term =
+                peek_and_consume_terminator(&mut scanner, &mut errors, &TagReader::new(src, false));
             assert!(
                 term.is_none(),
                 "expected no terminator for {src:?}, got {term:?}"
@@ -323,7 +324,8 @@ mod tests {
         let src = "{:else if ready}";
         let mut scanner = Scanner::new(src);
         let mut errors = Vec::new();
-        let term = peek_and_consume_terminator(&mut scanner, &mut errors, false);
+        let term =
+            peek_and_consume_terminator(&mut scanner, &mut errors, &TagReader::new(src, false));
         let Some(BlockTerminator::ElseIf {
             condition_range, ..
         }) = term
@@ -340,7 +342,8 @@ mod tests {
         let src = "{:else if}";
         let mut scanner = Scanner::new(src);
         let mut errors = Vec::new();
-        let term = peek_and_consume_terminator(&mut scanner, &mut errors, false);
+        let term =
+            peek_and_consume_terminator(&mut scanner, &mut errors, &TagReader::new(src, false));
         let Some(BlockTerminator::ElseIf {
             error: Some(error), ..
         }) = term

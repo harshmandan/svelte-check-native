@@ -28,6 +28,12 @@ pub struct Fragment {
     pub nodes: Vec<Node>,
     /// Range covering the entire fragment in the source.
     pub range: Range,
+    /// On the template's root fragment: every JavaScript comment the
+    /// compiler's reads of the template's tags lex (expressions, start
+    /// tags, block heads), in source order. The compiler adds these to
+    /// its list of the component's comments as it reads the template.
+    /// Empty on nested fragments.
+    pub comments: Vec<Range>,
 }
 
 /// A single template node.
@@ -627,9 +633,6 @@ pub struct EachBlock {
     /// The error the compiler throws reading the opening tag. The block
     /// is kept so the error has a place; the component is rejected.
     pub open_error: Option<crate::tag_read::TagReadError>,
-    /// The JavaScript comments the compiler's reads of the opening tag
-    /// collected, in source order.
-    pub open_comments: Vec<Range>,
     pub range: Range,
 }
 

@@ -10,9 +10,7 @@ use oxc_ast_visit::{Visit, walk};
 use oxc_span::{GetSpan, Span};
 use smol_str::SmolStr;
 use svn_core::Range;
-use svn_parser::ast::{
-    AttrValue, AttrValuePart, Attribute, Comment, DirectiveValue, Fragment, Node,
-};
+use svn_parser::ast::{Comment, Fragment, Node};
 
 use crate::codes::{COMPILER_ERROR_CODES, Code};
 use crate::context::LintContext;
@@ -652,9 +650,13 @@ pub(crate) fn prior_script_ignores(
         }
     }
     if let Some(fragment) = fragment {
-        let mut template = Vec::new();
-        collect_fragment_comments(fragment, source, before, &mut template);
-        comments.extend(template.into_iter().map(|range| (range, 0)));
+        comments.extend(
+            fragment
+                .comments
+                .iter()
+                .filter(|c| c.start < before)
+                .map(|&range| (range, 0)),
+        );
     }
     comments.sort_by_key(|(range, _)| range.start);
     let mut prior = PriorIgnores::default();
@@ -675,206 +677,6 @@ pub(crate) fn prior_script_ignores(
         ));
     }
     prior
-}
-
-/// The JavaScript comments in the template expressions and start tags
-/// of the nodes in `fragment` that start before `before`.
-fn collect_fragment_comments(fragment: &Fragment, source: &str, before: u32, out: &mut Vec<Range>) {
-    for node in &fragment.nodes {
-        if node.range().start >= before {
-            break;
-        }
-        let mut expr = |range: Range| out.extend(expression_comments(source, range));
-        match node {
-            Node::Text(_) | Node::Comment(_) => {}
-            Node::Interpolation(i) => expr(i.expression_range),
-            Node::Element(e) => {
-                attribute_comments(&e.attributes, source, out);
-                collect_fragment_comments(&e.children, source, before, out);
-            }
-            Node::Component(c) => {
-                attribute_comments(&c.attributes, source, out);
-                collect_fragment_comments(&c.children, source, before, out);
-            }
-            Node::SvelteElement(e) => {
-                attribute_comments(&e.attributes, source, out);
-                collect_fragment_comments(&e.children, source, before, out);
-            }
-            Node::IfBlock(b) => {
-                expr(b.condition_range);
-                collect_fragment_comments(&b.consequent, source, before, out);
-                for arm in &b.elseif_arms {
-                    out.extend(expression_comments(source, arm.condition_range));
-                    collect_fragment_comments(&arm.body, source, before, out);
-                }
-                if let Some(alt) = &b.alternate {
-                    collect_fragment_comments(alt, source, before, out);
-                }
-            }
-            Node::EachBlock(b) => {
-                // Every comment the compiler's reads of the tag lexed.
-                out.extend(b.open_comments.iter().copied());
-                collect_fragment_comments(&b.body, source, before, out);
-                if let Some(alt) = &b.alternate {
-                    collect_fragment_comments(alt, source, before, out);
-                }
-            }
-            Node::AwaitBlock(b) => {
-                // `{#await promise then value}`: the tag goes on past
-                // the promise with a keyword that is no JavaScript, so
-                // the promise's comments are read up to that keyword.
-                let close = svn_parser::find_mustache_end(source, b.expression_range.start);
-                let keyword = [
-                    b.then_branch.as_ref().and_then(|t| t.context_range),
-                    b.catch_branch.as_ref().and_then(|c| c.context_range),
-                ]
-                .into_iter()
-                .flatten()
-                .map(|context| context.start)
-                .filter(|&at| close.is_some_and(|close| at < close))
-                .min()
-                .and_then(|context_start| {
-                    let between =
-                        source.get(b.expression_range.end as usize..context_start as usize)?;
-                    let at = between.rfind("then").max(between.rfind("catch"))?;
-                    Some(b.expression_range.end + at as u32)
-                });
-                match keyword {
-                    Some(end) => out.extend(js_comments_in(
-                        source,
-                        Range::new(b.expression_range.start, end),
-                    )),
-                    None => expr(b.expression_range),
-                }
-                if let Some(pending) = &b.pending {
-                    collect_fragment_comments(pending, source, before, out);
-                }
-                if let Some(then) = &b.then_branch {
-                    if let Some(range) = then.context_range {
-                        out.extend(js_comments_in(source, range));
-                    }
-                    collect_fragment_comments(&then.body, source, before, out);
-                }
-                if let Some(catch) = &b.catch_branch {
-                    if let Some(range) = catch.context_range {
-                        out.extend(js_comments_in(source, range));
-                    }
-                    collect_fragment_comments(&catch.body, source, before, out);
-                }
-            }
-            Node::KeyBlock(b) => {
-                expr(b.expression_range);
-                collect_fragment_comments(&b.body, source, before, out);
-            }
-            Node::SnippetBlock(b) => {
-                // Read whole: no expression ends early here.
-                if let Some(generics) = b.generics_range {
-                    out.extend(js_comments_in(source, generics));
-                }
-                out.extend(js_comments_in(source, b.parameters_range));
-                collect_fragment_comments(&b.body, source, before, out);
-            }
-        }
-    }
-}
-
-fn attribute_comments(attributes: &[Attribute], source: &str, out: &mut Vec<Range>) {
-    let parts = |value: &AttrValue, out: &mut Vec<Range>| {
-        for part in &value.parts {
-            if let AttrValuePart::Expression {
-                expression_range, ..
-            } = part
-            {
-                out.extend(expression_comments(source, *expression_range));
-            }
-        }
-    };
-    for attr in attributes {
-        match attr {
-            Attribute::Plain(p) => {
-                if let Some(value) = &p.value {
-                    parts(value, out);
-                }
-            }
-            Attribute::Expression(e) => {
-                out.extend(expression_comments(source, e.expression_range));
-            }
-            Attribute::Shorthand(_) => {}
-            Attribute::Spread(s) => out.extend(expression_comments(source, s.expression_range)),
-            Attribute::Attach(a) => out.extend(expression_comments(source, a.expression_range)),
-            Attribute::Directive(d) => match &d.value {
-                Some(DirectiveValue::Expression {
-                    expression_range, ..
-                }) => out.extend(expression_comments(source, *expression_range)),
-                Some(DirectiveValue::BindPair {
-                    getter_range,
-                    setter_range,
-                    ..
-                }) => out.extend(expression_comments(
-                    source,
-                    Range::new(getter_range.start, setter_range.end),
-                )),
-                Some(DirectiveValue::Quoted(value)) => parts(value, out),
-                None => {}
-            },
-            Attribute::Comment(c) => out.push(c.range),
-        }
-    }
-}
-
-/// The comments in the JavaScript at `range` — an expression, a
-/// declaration's body, a binding pattern or a parameter list — as oxc
-/// reads them. Each shape is tried in a wrapper that makes it a
-/// program; the first that parses cleanly has lexed the whole text.
-/// The comments acorn lexes reading the expression of a tag or an
-/// attribute value that starts at `range`: those inside it, and those
-/// between its end and the `}` that closes the tag (the node's range
-/// stops at the expression, but acorn looks at the next token).
-fn expression_comments(source: &str, range: Range) -> Vec<Range> {
-    let close = svn_parser::find_mustache_end(source, range.start)
-        .unwrap_or(range.end)
-        .max(range.end);
-    js_comments_in(source, Range::new(range.start, close))
-}
-
-fn js_comments_in(source: &str, range: Range) -> Vec<Range> {
-    let Some(text) = source.get(range.start as usize..range.end as usize) else {
-        return Vec::new();
-    };
-    if !text.contains("/*") && !text.contains("//") {
-        return Vec::new();
-    }
-    const WRAPPERS: &[(&str, &str)] = &[
-        ("(", "\n)"),
-        ("let ", "\n;"),
-        ("let ", "\n= 0;"),
-        ("(", "\n) => 0"),
-        ("<", "\n>() => 0"),
-    ];
-    let source_type = oxc_span::SourceType::default()
-        .with_module(true)
-        .with_typescript(true);
-    for (prefix, suffix) in WRAPPERS {
-        let wrapped = format!("{prefix}{text}{suffix}");
-        let alloc = oxc_allocator::Allocator::default();
-        let parsed = oxc_parser::Parser::new(&alloc, &wrapped, source_type).parse();
-        if parsed.diagnostics.is_empty() && !parsed.fatal_error {
-            let shift = prefix.len() as u32;
-            return parsed
-                .program
-                .comments
-                .iter()
-                .filter(|c| c.span.start >= shift)
-                .map(|c| {
-                    Range::new(
-                        range.start + c.span.start - shift,
-                        range.start + c.span.end - shift,
-                    )
-                })
-                .collect();
-        }
-    }
-    Vec::new()
 }
 
 /// Replays acorn.js's `add_comments` over an oxc tree. The estree acorn

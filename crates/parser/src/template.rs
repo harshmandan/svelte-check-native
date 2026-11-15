@@ -59,6 +59,7 @@ pub fn parse_template(source: &str, range: Range) -> (Fragment, Vec<ParseError>)
     }
     (
         Fragment {
+            comments: parser.reader.take_comments(),
             nodes,
             range: parser.fragment_range,
         },
@@ -73,6 +74,7 @@ pub fn parse_template(source: &str, range: Range) -> (Fragment, Vec<ParseError>)
 pub fn parse_all_template_runs(source: &str, runs: &[Range]) -> (Fragment, Vec<ParseError>) {
     let mut all_nodes = Vec::new();
     let mut all_errors = Vec::new();
+    let mut all_comments = Vec::new();
     let mut combined_start = u32::MAX;
     let mut combined_end = 0;
     for run in runs {
@@ -82,6 +84,7 @@ pub fn parse_all_template_runs(source: &str, runs: &[Range]) -> (Fragment, Vec<P
             combined_end = combined_end.max(run.end);
         }
         all_nodes.extend(frag.nodes);
+        all_comments.extend(frag.comments);
         all_errors.extend(errs);
     }
     let range = if combined_start <= combined_end && combined_start != u32::MAX {
@@ -91,6 +94,7 @@ pub fn parse_all_template_runs(source: &str, runs: &[Range]) -> (Fragment, Vec<P
     };
     (
         Fragment {
+            comments: all_comments,
             nodes: all_nodes,
             range,
         },
@@ -191,12 +195,16 @@ struct TemplateParser<'src, 'col> {
     /// ([`compiler_reads_typescript`]), which decides where it ends an
     /// `{#each}` tag.
     ts: bool,
+    /// Replays the compiler's reads of the tags, and records the
+    /// JavaScript comments they lex.
+    reader: TagReader<'src>,
 }
 
 impl<'src, 'col> TemplateParser<'src, 'col> {
     fn new(source: &'src str, range: Range) -> Self {
         let mut scanner = Scanner::new(source);
         scanner.set_pos(range.start);
+        let ts = compiler_reads_typescript(source);
         Self {
             scanner,
             fragment_range: range,
@@ -209,7 +217,8 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             last_auto_closed_by: SmolStr::default(),
             auto_close_trigger: None,
             sections: None,
-            ts: compiler_reads_typescript(source),
+            ts,
+            reader: TagReader::new(source, ts),
         }
     }
 
@@ -313,7 +322,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             ) {
                 let term_start = self.scanner.pos();
                 if let Some(term) =
-                    peek_and_consume_terminator(&mut self.scanner, &mut self.errors, self.ts)
+                    peek_and_consume_terminator(&mut self.scanner, &mut self.errors, &self.reader)
                 {
                     self.last_terminator_range = Range::new(term_start, self.scanner.pos());
                     return (nodes, Some(term));
@@ -376,10 +385,9 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                 // (`{let}` reads as the expression `let`) is an
                 // expression tag.
                 let start = self.scanner.pos();
-                let source = self.scanner.source();
                 let counted_close = self.find_mustache_end_in_fragment(start + 1);
                 let limit = counted_close.unwrap_or(self.fragment_end);
-                let reader = TagReader::new(source, self.ts);
+                let reader = &self.reader;
                 let keyword_start = kw_end
                     - if kind == InterpolationKind::DeclConst {
                         5
@@ -578,11 +586,12 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
     }
 
     fn parse_if_block(&mut self, block_start: u32) -> Option<Node> {
-        let header = read_expression_header(&mut self.scanner, self.ts, self.fragment_end);
+        let header = read_expression_header(&mut self.scanner, &self.reader, self.fragment_end);
         let condition_range = header.range;
         let body_start = self.scanner.pos();
         let (consequent_nodes, term) = self.parse_fragment_until(None);
         let consequent = Fragment {
+            comments: Vec::new(),
             nodes: consequent_nodes,
             range: Range::new(body_start, self.scanner.pos()),
         };
@@ -604,6 +613,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                     elseif_arms.push(ElseIfArm {
                         condition_range,
                         body: Fragment {
+                            comments: Vec::new(),
                             nodes: body_nodes,
                             range: Range::new(body_start, self.scanner.pos()),
                         },
@@ -616,6 +626,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                     let body_start = self.scanner.pos();
                     let (body_nodes, t) = self.parse_fragment_until(None);
                     alternate = Some(Fragment {
+                        comments: Vec::new(),
                         nodes: body_nodes,
                         range: Range::new(body_start, self.scanner.pos()),
                     });
@@ -668,38 +679,38 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         let source = self.scanner.source();
         let counted_close = find_mustache_end(source, keyword_end);
         let limit = counted_close.unwrap_or(self.fragment_end);
-        let reader = TagReader::new(source, self.ts);
-        let (expr_range, as_clause, open_error, open_comments) =
-            match reader.read_each_open(keyword_end, limit) {
-                Ok(open) => {
-                    self.scanner.set_pos(open.end);
-                    let as_clause =
-                        (open.context.is_some() || open.index.is_some() || open.key.is_some())
-                            .then_some(EachAsClause {
-                                context_range: open.context,
-                                index_range: open.index,
-                                key_range: open.key,
-                            });
-                    (open.expression, as_clause, None, open.comments)
-                }
-                Err(error) => {
-                    // The compiler throws, and the component is rejected. The
-                    // block stays, carrying the error: its tag ends at the
-                    // counted `}`, or where the error is.
-                    let end = counted_close.unwrap_or(error.at.max(keyword_end));
-                    let header = trimmed_range(source, keyword_end, end)
-                        .unwrap_or(Range::new(keyword_end, keyword_end));
-                    self.scanner.set_pos(if counted_close.is_some() {
-                        end + 1
-                    } else {
-                        end
-                    });
-                    (header, None, Some(error), Vec::new())
-                }
-            };
+        let reader = &self.reader;
+        let (expr_range, as_clause, open_error) = match reader.read_each_open(keyword_end, limit) {
+            Ok(open) => {
+                self.scanner.set_pos(open.end);
+                let as_clause =
+                    (open.context.is_some() || open.index.is_some() || open.key.is_some())
+                        .then_some(EachAsClause {
+                            context_range: open.context,
+                            index_range: open.index,
+                            key_range: open.key,
+                        });
+                (open.expression, as_clause, None)
+            }
+            Err(error) => {
+                // The compiler throws, and the component is rejected. The
+                // block stays, carrying the error: its tag ends at the
+                // counted `}`, or where the error is.
+                let end = counted_close.unwrap_or(error.at.max(keyword_end));
+                let header = trimmed_range(source, keyword_end, end)
+                    .unwrap_or(Range::new(keyword_end, keyword_end));
+                self.scanner.set_pos(if counted_close.is_some() {
+                    end + 1
+                } else {
+                    end
+                });
+                (header, None, Some(error))
+            }
+        };
         let opening_tag_end = self.scanner.pos();
         let (body_nodes, term) = self.parse_fragment_until(None);
         let body = Fragment {
+            comments: Vec::new(),
             nodes: body_nodes,
             // A tag the file ends in has no body: the range is empty,
             // never inverted.
@@ -716,6 +727,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                 let alt_start = self.scanner.pos();
                 let (alt_nodes, t2) = self.parse_fragment_until(None);
                 alternate = Some(Fragment {
+                    comments: Vec::new(),
                     nodes: alt_nodes,
                     range: Range::new(alt_start, self.scanner.pos()),
                 });
@@ -744,7 +756,6 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             alternate,
             opening_tag_end,
             open_error,
-            open_comments,
             range: Range::new(block_start, self.scanner.pos()),
         })))
     }
@@ -755,7 +766,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         let keyword_end = self.scanner.pos();
         let source = self.scanner.source();
         let counted_close = find_mustache_end(source, keyword_end);
-        let reader = TagReader::new(source, self.ts);
+        let reader = &self.reader;
         let read = reader.read_await_open(keyword_end, counted_close.unwrap_or(self.fragment_end));
         let (expr_range, branch, open_error) = match read {
             Ok(open) => {
@@ -782,6 +793,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         let start = self.scanner.pos();
         let (nodes, mut term) = self.parse_fragment_until(None);
         let body = Fragment {
+            comments: Vec::new(),
             nodes,
             range: Range::new(start, self.scanner.pos()),
         };
@@ -816,6 +828,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                     then_branch = Some(ThenBranch {
                         context_range,
                         body: Fragment {
+                            comments: Vec::new(),
                             nodes,
                             range: Range::new(start, self.scanner.pos()),
                         },
@@ -833,6 +846,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                     catch_branch = Some(CatchBranch {
                         context_range,
                         body: Fragment {
+                            comments: Vec::new(),
                             nodes,
                             range: Range::new(start, self.scanner.pos()),
                         },
@@ -868,10 +882,11 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
     }
 
     fn parse_key_block(&mut self, block_start: u32) -> Option<Node> {
-        let header = read_expression_header(&mut self.scanner, self.ts, self.fragment_end);
+        let header = read_expression_header(&mut self.scanner, &self.reader, self.fragment_end);
         let body_start = self.scanner.pos();
         let (body_nodes, term) = self.parse_fragment_until(None);
         let body = Fragment {
+            comments: Vec::new(),
             nodes: body_nodes,
             range: Range::new(body_start, self.scanner.pos()),
         };
@@ -895,7 +910,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
     fn parse_snippet_block(&mut self, block_start: u32) -> Option<Node> {
         let keyword_end = self.scanner.pos();
         let source = self.scanner.source();
-        let reader = TagReader::new(source, self.ts);
+        let reader = &self.reader;
         let (name, params_range, generics_range, open_error) =
             match reader.read_snippet_open(keyword_end) {
                 Ok(open) => {
@@ -925,6 +940,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         let body_start = self.scanner.pos();
         let (body_nodes, term) = self.parse_fragment_until(None);
         let body = Fragment {
+            comments: Vec::new(),
             nodes: body_nodes,
             range: Range::new(body_start, self.scanner.pos()),
         };
@@ -1032,7 +1048,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         let counted_close = self.find_mustache_end_in_fragment(keyword_start + keyword_len as u32);
         let limit = counted_close.unwrap_or(self.fragment_end);
         let keyword_end = keyword_start + keyword_len as u32;
-        let reader = TagReader::new(source, self.ts);
+        let reader = &self.reader;
         let read = match kind {
             InterpolationKind::AtHtml | InterpolationKind::AtRender => {
                 reader.read_keyword_expression(keyword_end, limit)
@@ -1096,8 +1112,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         // brace count finds.
         let counted_close = self.find_mustache_end_in_fragment(expr_start);
         let limit = counted_close.unwrap_or(self.fragment_end);
-        let reader = TagReader::new(self.scanner.source(), self.ts);
-        let read = reader.read_expression_tag(expr_start, limit);
+        let read = self.reader.read_expression_tag(expr_start, limit);
         self.finish_tag(
             InterpolationKind::Expression,
             start,
@@ -1148,9 +1163,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         let open_error = if doctype_shaped {
             None
         } else {
-            TagReader::new(self.scanner.source(), self.ts)
-                .read_open_tag(name_end)
-                .err()
+            self.reader.read_open_tag(name_end).err()
         };
         let mut attributes =
             parse_attributes(&mut self.scanner, self.fragment_end, &mut self.errors);
@@ -1363,6 +1376,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         if let Some(closed) = self.pending_auto_close.take() {
             return Some((
                 Fragment {
+                    comments: Vec::new(),
                     nodes: children,
                     range: Range::new(children_start, children_end),
                 },
@@ -1410,6 +1424,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
 
         Some((
             Fragment {
+                comments: Vec::new(),
                 nodes: children,
                 range: Range::new(children_start, children_end),
             },
@@ -1449,6 +1464,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                 });
                 self.scanner.set_pos(self.fragment_end);
                 return Some(Fragment {
+                    comments: Vec::new(),
                     nodes,
                     range: Range::new(children_start, self.fragment_end),
                 });
@@ -1460,6 +1476,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
                         flush_text(&mut nodes, text_start, pos);
                         self.scanner.set_pos(after);
                         return Some(Fragment {
+                            comments: Vec::new(),
                             nodes,
                             range: Range::new(children_start, pos),
                         });
@@ -1579,6 +1596,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             });
             self.scanner.set_pos(self.fragment_end);
             return Some(Fragment {
+                comments: Vec::new(),
                 nodes: vec![Node::Text(Text {
                     range: Range::new(children_start, self.fragment_end),
                 })],
@@ -1587,6 +1605,7 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         };
         self.scanner.set_pos(close_start + close.len() as u32);
         Some(Fragment {
+            comments: Vec::new(),
             nodes: vec![Node::Text(Text {
                 range: Range::new(children_start, close_start),
             })],

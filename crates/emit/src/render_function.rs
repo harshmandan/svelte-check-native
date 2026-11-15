@@ -75,6 +75,7 @@ pub(crate) fn emit_template_check_fn(
     let without_root_snippets;
     let fragment = if root_snippets_hoisted {
         without_root_snippets = svn_parser::Fragment {
+            comments: Vec::new(),
             nodes: fragment
                 .nodes
                 .iter()
@@ -141,6 +142,7 @@ pub(crate) fn emit_template_check_fn(
                 .unwrap_or(rest.len());
             let (before, after) = rest.split_at(split);
             let part = svn_parser::Fragment {
+                comments: Vec::new(),
                 nodes: before.to_vec(),
                 ..fragment.clone()
             };
@@ -158,6 +160,7 @@ pub(crate) fn emit_template_check_fn(
             rest = after;
         }
         let part = svn_parser::Fragment {
+            comments: Vec::new(),
             nodes: rest.to_vec(),
             ..fragment.clone()
         };

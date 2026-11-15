@@ -26,6 +26,7 @@ pub fn snippet_globals(snippet: &SnippetBlock, source: &str) -> Vec<SmolStr> {
     // Walk the snippet as a one-node fragment so the scope walker
     // enters its parameter scope itself.
     let fragment = Fragment {
+        comments: Vec::new(),
         nodes: vec![Node::SnippetBlock(Box::new(snippet.clone()))],
         ..Fragment::default()
     };

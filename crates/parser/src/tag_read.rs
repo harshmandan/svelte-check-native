@@ -163,8 +163,6 @@ pub struct EachOpen {
     pub key: Option<Range>,
     /// Just past the `}` that closes the tag.
     pub end: u32,
-    /// The comments the compiler's reads collected, in source order.
-    pub comments: Vec<Range>,
 }
 
 /// Which branch an `{#await}` opening tag starts.
@@ -216,14 +214,12 @@ pub struct SnippetOpen {
     pub end: u32,
 }
 
-/// The comments acorn's reads in one tag collected.
+/// What acorn's reads in one tag have lexed: where the last comment
+/// they collected ends (the reader records the comments themselves).
 #[derive(Debug, Default)]
 pub struct Comments {
-    /// Where the last one pushed ends: reading an expression moves past
-    /// it.
+    /// Reading an expression moves past it.
     last_end: u32,
-    /// Each one once.
-    all: Vec<Range>,
 }
 
 /// Whether the compiler reads the component's JavaScript as TypeScript:
@@ -374,13 +370,34 @@ pub const RESERVED_WORDS: &[&str] = &[
 pub struct TagReader<'s> {
     source: &'s str,
     ts: bool,
+    /// Every JavaScript comment the reads have lexed: what the compiler
+    /// adds to its list of the component's comments as it reads the
+    /// template.
+    read_comments: std::cell::RefCell<Vec<Range>>,
 }
 
 impl<'s> TagReader<'s> {
     /// `ts`: the compiler reads the component's JavaScript as TypeScript
     /// ([`compiler_reads_typescript`]).
     pub fn new(source: &'s str, ts: bool) -> Self {
-        Self { source, ts }
+        Self {
+            source,
+            ts,
+            read_comments: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+
+    /// The comments the reads so far have lexed, in source order, each
+    /// once; the record starts again empty.
+    pub fn take_comments(&self) -> Vec<Range> {
+        let mut comments = std::mem::take(&mut *self.read_comments.borrow_mut());
+        comments.sort_by_key(|c| (c.start, c.end));
+        comments.dedup();
+        comments
+    }
+
+    fn record_comment(&self, range: Range) {
+        self.read_comments.borrow_mut().push(range);
     }
 
     pub fn byte(&self, at: u32) -> Option<u8> {
@@ -500,9 +517,7 @@ impl<'s> TagReader<'s> {
     fn collect_comments(&self, text: &str, origin: u32, to: u32, comments: &mut Comments) {
         for (start, end) in acorn::comments_before(text, to, self.ts) {
             let range = Range::new(origin + start, origin + end);
-            if !comments.all.contains(&range) {
-                comments.all.push(range);
-            }
+            self.record_comment(range);
             comments.last_end = range.end;
         }
     }
@@ -692,15 +707,12 @@ impl<'s> TagReader<'s> {
                 TagReadErrorKind::ExpectedToken("}"),
             ));
         }
-        let mut comments = comments.all;
-        comments.sort_by_key(|c| c.start);
         Ok(EachOpen {
             expression: Range::new(start, expression_end),
             context,
             index: index_range,
             key,
             end: index + 1,
-            comments,
         })
     }
 
@@ -998,13 +1010,15 @@ impl<'s> TagReader<'s> {
     fn skip_attribute_comments(&self, mut at: u32) -> u32 {
         loop {
             let rest = self.source.get(at as usize..).unwrap_or("");
-            if rest.starts_with("//") {
-                at += rest.find('\n').unwrap_or(rest.len()) as u32;
+            let len = if rest.starts_with("//") {
+                rest.find('\n').unwrap_or(rest.len())
             } else if rest.starts_with("/*") {
-                at += rest.find("*/").map_or(rest.len(), |i| i + 2) as u32;
+                rest.find("*/").map_or(rest.len(), |i| i + 2)
             } else {
                 break;
-            }
+            };
+            self.record_comment(Range::new(at, at + len as u32));
+            at += len as u32;
             at = self.skip_whitespace(at);
         }
         at
@@ -1252,6 +1266,11 @@ impl<'s> TagReader<'s> {
             return Err(
                 TagReadError::new(origin + at, TagReadErrorKind::JsParse(message)).reading(read),
             );
+        }
+        // The head is read whole: type parameters and parameters.
+        let head = &self.source[params_start as usize..=close as usize];
+        for (start, end) in acorn::comments_before(head, head.len() as u32, self.ts) {
+            self.record_comment(Range::new(params_start + start, params_start + end));
         }
         Ok(SnippetOpen {
             name: Range::new(start, name_end),

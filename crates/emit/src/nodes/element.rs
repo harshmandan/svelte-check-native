@@ -387,6 +387,7 @@ pub(crate) fn emit_svelte_element_node(
         // (any other content the user put inside `<svelte:boundary>`).
         // Filter out the matched snippets to avoid double-emit.
         let filtered = svn_parser::Fragment {
+            comments: Vec::new(),
             nodes: s
                 .children
                 .nodes

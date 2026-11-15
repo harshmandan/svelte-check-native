@@ -149,7 +149,9 @@ impl<'src> Scanner<'src> {
 /// Whitespace as the Svelte compiler defines it (`is_whitespace` in
 /// `phases/1-parse/index.js`): the ASCII run (space, `\t`, `\n`, `\v`,
 /// `\f`, `\r`) plus NBSP, U+1680, U+2000-200A, U+2028, U+2029, U+202F,
-/// U+205F, U+3000 and U+FEFF.
+/// U+205F, U+3000 and U+FEFF. It is also JavaScript's `\s` and the set
+/// `String.prototype.trim` removes; Rust's `char::is_whitespace` differs
+/// (it adds U+0085 and leaves out U+FEFF).
 #[inline]
 pub fn is_svelte_whitespace(c: char) -> bool {
     matches!(c,

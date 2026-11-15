@@ -21,6 +21,7 @@ use oxc_span::{GetSpan, SourceType};
 use svn_core::Range;
 
 use crate::acorn::{self, BracketError, Read};
+use crate::scanner::is_svelte_whitespace;
 
 /// An error the compiler throws while reading a tag, at `at`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,7 +259,7 @@ pub fn compiler_reads_typescript(source: &str) -> bool {
 /// that follows one directly.
 fn script_lang_attribute(tag: &str) -> Option<&str> {
     let after = tag.strip_prefix("<script")?;
-    let attributes = after.trim_start_matches(is_regex_space);
+    let attributes = after.trim_start_matches(is_svelte_whitespace);
     if attributes.len() == after.len() {
         return None;
     }
@@ -267,13 +268,6 @@ fn script_lang_attribute(tag: &str) -> Option<&str> {
         .rmatch_indices("lang=")
         .find_map(|(p, _)| lang_value(&attributes[p + 5..]))
         .or_else(|| lang_after_attributes(attributes))
-}
-
-/// What JavaScript's `\s` matches: the compiler's white space, U+FEFF
-/// included and U+0085 not (Rust's `char::is_whitespace` has it the
-/// other way round).
-fn is_regex_space(c: char) -> bool {
-    is_compiler_whitespace(c)
 }
 
 /// `(["'])?([^"' >]+)\1[^>]*>` at the start of `text`: the value.
@@ -298,7 +292,7 @@ fn lang_after_attributes(text: &str) -> Option<&str> {
     let name_len = text.find(['=', '>', '\'', '"', '/']).unwrap_or(text.len());
     let after_attribute = |value_len: usize| {
         let rest = &text[name_len + 1 + value_len..];
-        let next = rest.trim_start_matches(is_regex_space);
+        let next = rest.trim_start_matches(is_svelte_whitespace);
         (next.len() < rest.len()).then_some(next)
     };
     if name_len > 0 && text[name_len..].starts_with('=') {
@@ -310,7 +304,7 @@ fn lang_after_attributes(text: &str) -> Option<&str> {
             .and_then(|q| value[1..].find(q))
             .map(|close| close + 2);
         let bare = value
-            .find(|c: char| c == '>' || is_regex_space(c))
+            .find(|c: char| c == '>' || is_svelte_whitespace(c))
             .unwrap_or(value.len());
         let found = [quoted, Some(bare).filter(|&len| len > 0)]
             .into_iter()
@@ -401,7 +395,7 @@ impl<'s> TagReader<'s> {
     /// (`utils/whitespace.js`), or 0.
     fn whitespace_len(&self, at: u32) -> u32 {
         match self.char_at(at) {
-            Some(c) if is_compiler_whitespace(c) => c.len_utf8() as u32,
+            Some(c) if is_svelte_whitespace(c) => c.len_utf8() as u32,
             _ => 0,
         }
     }
@@ -422,7 +416,7 @@ impl<'s> TagReader<'s> {
         self.source
             .get(..at as usize)
             .and_then(|s| s.chars().next_back())
-            .is_some_and(is_compiler_whitespace)
+            .is_some_and(is_svelte_whitespace)
     }
 
     /// `require_whitespace()`: the position after the whitespace run, or
@@ -974,7 +968,7 @@ impl<'s> TagReader<'s> {
     /// Where the template ends for the compiler, which trims it
     /// (`trimEnd()`, which takes JavaScript's white space).
     fn template_end(&self) -> u32 {
-        self.source.trim_end_matches(is_compiler_whitespace).len() as u32
+        self.source.trim_end_matches(is_svelte_whitespace).len() as u32
     }
 
     /// `read_tag_name()`: the end of the name at `at`. An attribute's
@@ -988,7 +982,7 @@ impl<'s> TagReader<'s> {
         let len = rest
             .char_indices()
             .find(|&(_, c)| {
-                is_compiler_whitespace(c)
+                is_svelte_whitespace(c)
                     || matches!(c, '/' | '>')
                     || (attribute && matches!(c, '"' | '\'' | '='))
             })
@@ -1138,7 +1132,7 @@ impl<'s> TagReader<'s> {
             let stops = match quote {
                 Some(quote) => c == char::from(quote),
                 None => {
-                    is_compiler_whitespace(c)
+                    is_svelte_whitespace(c)
                         || matches!(c, '"' | '\'' | '=' | '<' | '>' | '`')
                         || self.source[index as usize..].starts_with("/>")
                 }
@@ -1350,21 +1344,4 @@ fn unparenthesized<'a, 'b>(mut expr: &'a Expression<'b>) -> &'a Expression<'b> {
         expr = &p.expression;
     }
     expr
-}
-
-/// The compiler's `is_whitespace`.
-fn is_compiler_whitespace(c: char) -> bool {
-    matches!(
-        c,
-        ' ' | '\t'..='\r'
-            | '\u{a0}'
-            | '\u{1680}'
-            | '\u{2000}'..='\u{200a}'
-            | '\u{2028}'
-            | '\u{2029}'
-            | '\u{202f}'
-            | '\u{205f}'
-            | '\u{3000}'
-            | '\u{feff}'
-    )
 }

@@ -130,12 +130,6 @@ pub(crate) fn preprocess_steps(source: &str) -> u8 {
         .unwrap_or(0)
 }
 
-fn is_js_space(c: char) -> bool {
-    // JavaScript's `\s`: Unicode white space plus the byte-order mark,
-    // without NEL.
-    (c.is_whitespace() && c != '\u{85}') || c == '\u{feff}'
-}
-
 fn is_js_word(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_'
 }
@@ -158,14 +152,16 @@ fn match_script_tag(
             .find(|&(_, c)| !pred(c))
             .map_or(source.len(), |(i, _)| at + i)
     };
-    let name_char = |c: char| !matches!(c, '=' | '>' | '\'' | '"' | '/') && !is_js_space(c);
+    let name_char = |c: char| {
+        !matches!(c, '=' | '>' | '\'' | '"' | '/') && !svn_parser::is_svelte_whitespace(c)
+    };
     let mut at = from;
     // Where the last attribute's unquoted value ends, when the tag
     // ends right after it: the value may give its last `/` back to
     // close the tag as `/>`.
     let mut unquoted_value_end = None;
     loop {
-        let ws_end = run(at, &is_js_space);
+        let ws_end = run(at, &svn_parser::is_svelte_whitespace);
         if ws_end == at {
             break;
         }
@@ -186,7 +182,7 @@ fn match_script_tag(
             if let Some(end) = quoted('"').or_else(|| quoted('\'')) {
                 at = end;
             } else {
-                let end = run(value, &|c| c != '>' && !is_js_space(c));
+                let end = run(value, &|c| c != '>' && !svn_parser::is_svelte_whitespace(c));
                 if end > value {
                     at = end;
                     unquoted_value_end = Some((value, end));
@@ -197,7 +193,7 @@ fn match_script_tag(
         }
     }
     let attrs = from..at;
-    let close = run(at, &is_js_space);
+    let close = run(at, &svn_parser::is_svelte_whitespace);
     if source[close..].starts_with("/>") {
         return Some((attrs, None, close + 2));
     }
@@ -270,7 +266,7 @@ fn lang_is_ts(attrs: &str) -> bool {
                 next = close + 1;
             } else {
                 let mut e = v;
-                while e < chars.len() && !is_js_space(chars[e].1) {
+                while e < chars.len() && !svn_parser::is_svelte_whitespace(chars[e].1) {
                     e += 1;
                 }
                 if e > v {
@@ -492,12 +488,14 @@ fn strip_source_mapping_url(code: &str) -> String {
         let start = from + rel;
         let mut rest = &code[start + 2..];
         if let Some(r) = rest.strip_prefix(['#', '@']) {
-            rest = r.trim_start_matches(is_js_space);
+            rest = r.trim_start_matches(svn_parser::is_svelte_whitespace);
             if let Some(r) = rest.strip_prefix("sourceMappingURL") {
-                rest = r.trim_start_matches(is_js_space);
+                rest = r.trim_start_matches(svn_parser::is_svelte_whitespace);
                 if let Some(r) = rest.strip_prefix('=') {
-                    rest = r.trim_start_matches(is_js_space);
-                    let url_len = rest.find(is_js_space).unwrap_or(rest.len());
+                    rest = r.trim_start_matches(svn_parser::is_svelte_whitespace);
+                    let url_len = rest
+                        .find(svn_parser::is_svelte_whitespace)
+                        .unwrap_or(rest.len());
                     let end = code.len() - rest.len() + url_len;
                     return format!("{}{}", &code[..start], &code[end..]);
                 }
@@ -597,8 +595,8 @@ impl MappedCode {
                 col += c.len_utf16() as u32;
                 let same_token: &dyn Fn(char) -> bool = if is_js_word(c) {
                     &is_js_word
-                } else if is_js_space(c) {
-                    &is_js_space
+                } else if svn_parser::is_svelte_whitespace(c) {
+                    &svn_parser::is_svelte_whitespace
                 } else {
                     &|_| false
                 };
@@ -813,7 +811,7 @@ pub(crate) fn is_transpile_false_positive(code: &str, message: &str, original: &
     let boundary = |before: Option<char>, after: Option<char>| {
         before.is_some_and(is_js_word) != after.is_some_and(is_js_word)
     };
-    let spaces = |s: &str| s.len() - s.trim_start_matches(is_js_space).len();
+    let spaces = |s: &str| s.len() - s.trim_start_matches(svn_parser::is_svelte_whitespace).len();
     original.match_indices("export").any(|(at, kw)| {
         if !boundary(original[..at].chars().next_back(), Some('e')) {
             return false;

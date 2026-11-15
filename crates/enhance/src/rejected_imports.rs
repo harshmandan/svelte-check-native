@@ -114,7 +114,10 @@ fn comment_directives(file: &Path, source: &str) -> HashMap<u32, bool> {
                 CommentKind::Line => {
                     let after = text.strip_prefix("//").unwrap_or(text);
                     let after = after.strip_prefix('/').unwrap_or(after);
-                    (start, after.trim_start_matches(is_js_space))
+                    (
+                        start,
+                        after.trim_start_matches(svn_parser::is_svelte_whitespace),
+                    )
                 }
                 CommentKind::SingleLineBlock | CommentKind::MultiLineBlock => {
                     // The scanner reads only the comment's last line.
@@ -125,9 +128,9 @@ fn comment_directives(file: &Path, source: &str) -> HashMap<u32, bool> {
                         });
                     let line = &text[last_line..];
                     let after = line
-                        .trim_start_matches(is_js_space)
+                        .trim_start_matches(svn_parser::is_svelte_whitespace)
                         .trim_start_matches(['/', '*'])
-                        .trim_start_matches(is_js_space);
+                        .trim_start_matches(svn_parser::is_svelte_whitespace);
                     (start + last_line as u32, after)
                 }
                 _ => continue,
@@ -158,11 +161,6 @@ fn comment_directives(file: &Path, source: &str) -> HashMap<u32, bool> {
         read(&parsed.program, 0);
     }
     out
-}
-
-/// JavaScript's `\s`: white space and line terminators.
-fn is_js_space(c: char) -> bool {
-    c == '\u{feff}' || (c.is_whitespace() && c != '\u{85}')
 }
 
 /// The comment directive that applies to the line `offset` is on, as

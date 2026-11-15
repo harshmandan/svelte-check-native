@@ -795,7 +795,7 @@ impl PathFrame {
                     .range
                     .slice(source)
                     .chars()
-                    .all(crate::rules::block_rules::is_js_trim_ws),
+                    .all(svn_parser::is_svelte_whitespace),
                 _ => true,
             })
             .count();
@@ -812,7 +812,7 @@ impl PathFrame {
                 .range
                 .slice(source)
                 .chars()
-                .all(crate::rules::block_rules::is_js_trim_ws),
+                .all(svn_parser::is_svelte_whitespace),
             _ => true,
         });
         // The first child that would be default-slot content next to an

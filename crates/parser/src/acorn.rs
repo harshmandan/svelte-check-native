@@ -308,7 +308,7 @@ fn drop_optional_marks(text: &str) -> String {
     while let Some(q) = rest.find('?') {
         out.push_str(&rest[..q]);
         let after = &rest[q + 1..];
-        let trimmed = after.trim_start_matches(char::is_whitespace);
+        let trimmed = after.trim_start_matches(crate::scanner::is_svelte_whitespace);
         if trimmed.starts_with(':') {
             rest = trimmed;
         } else {
@@ -323,6 +323,15 @@ fn drop_optional_marks(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optional_marks_drop_across_javascript_white_space_only() {
+        assert_eq!(drop_optional_marks("(b?\u{feff}: string)"), "(b: string)");
+        assert_eq!(
+            drop_optional_marks("(b?\u{85}: string)"),
+            "(b?\u{85}: string)"
+        );
+    }
 
     #[test]
     fn stops_where_the_expression_ends() {

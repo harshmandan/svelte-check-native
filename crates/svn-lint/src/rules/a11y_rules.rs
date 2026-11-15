@@ -1180,7 +1180,7 @@ fn is_word_byte(b: u8) -> bool {
 fn has_non_whitespace_text(s: &str) -> bool {
     crate::html_decode::decode_character_references(s, false)
         .chars()
-        .any(|c| !(c.is_whitespace() || c == '\u{feff}'))
+        .any(|c| !svn_parser::is_svelte_whitespace(c))
 }
 
 /// True if any attribute form (`Plain` / `Expression` / `Shorthand`)
@@ -1643,7 +1643,7 @@ fn is_parent(ancestors: &[Ancestor], names: &[&str]) -> bool {
 /// empty string is 0, decimal (with sign / exponent), `0x` / `0o` /
 /// `0b` integers and `Infinity`; anything else is NaN.
 fn js_number(s: &str) -> f64 {
-    let t = s.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+    let t = s.trim_matches(svn_parser::is_svelte_whitespace);
     if t.is_empty() {
         return 0.0;
     }

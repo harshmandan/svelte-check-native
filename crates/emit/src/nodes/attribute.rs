@@ -213,7 +213,7 @@ fn is_number_only_attr(name: &str) -> bool {
 /// whitespace ignored, empty text is 0, unsigned `0x`/`0o`/`0b`
 /// integers, and decimal literals or `Infinity` with an optional sign.
 fn js_number(text: &str) -> Option<f64> {
-    let t = text.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+    let t = text.trim_matches(svn_parser::is_svelte_whitespace);
     if t.is_empty() {
         return Some(0.0);
     }

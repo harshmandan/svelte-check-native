@@ -334,18 +334,13 @@ fn spaced_branch_brace(source: &str, value: u32, keyword: &str) -> Option<u32> {
         from -= 1;
     }
     let window = &source[from..value as usize];
-    let before_ws = window.trim_end_matches(is_js_whitespace);
+    let before_ws = window.trim_end_matches(svn_parser::is_svelte_whitespace);
     if before_ws.len() == window.len() {
         return None;
     }
     let before_keyword = before_ws.strip_suffix(keyword)?;
-    let before_gap = before_keyword.trim_end_matches(is_js_whitespace);
+    let before_gap = before_keyword.trim_end_matches(svn_parser::is_svelte_whitespace);
     (before_gap.ends_with('{') && before_gap.len() != before_keyword.len()).then_some(from as u32)
-}
-
-/// JS `\s`.
-fn is_js_whitespace(c: char) -> bool {
-    is_js_trim_ws(c)
 }
 
 fn trimmed(range: svn_core::Range, source: &str) -> svn_core::Range {
@@ -455,30 +450,6 @@ pub fn visit_snippet_after_body(b: &SnippetBlock, ctx: &mut LintContext<'_>) {
     }
 }
 
-/// JS `String.prototype.trim` WhiteSpace + LineTerminator set — differs from
-/// Rust `char::is_whitespace` (which adds U+0085 NEL and omits U+FEFF ZWNBSP).
-pub(crate) fn is_js_trim_ws(c: char) -> bool {
-    matches!(
-        c,
-        '\u{0009}'
-            | '\u{000A}'
-            | '\u{000B}'
-            | '\u{000C}'
-            | '\u{000D}'
-            | '\u{0020}'
-            | '\u{00A0}'
-            | '\u{1680}'
-            | '\u{2000}'
-            ..='\u{200A}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202F}'
-                | '\u{205F}'
-                | '\u{3000}'
-                | '\u{FEFF}'
-    )
-}
-
 /// `block_empty`: fires when a block body is exactly one
 /// whitespace-only Text node (upstream heuristic — matches "user
 /// hasn't started typing content yet").
@@ -486,7 +457,10 @@ fn visit_block_fragment_for_empty(frag: &Fragment, ctx: &mut LintContext<'_>) {
     let source = ctx.source;
     if frag.nodes.len() == 1
         && let Node::Text(t) = &frag.nodes[0]
-        && t.range.slice(source).chars().all(is_js_trim_ws)
+        && t.range
+            .slice(source)
+            .chars()
+            .all(svn_parser::is_svelte_whitespace)
     {
         let msg = messages::block_empty();
         ctx.emit(Code::block_empty, msg, t.range);

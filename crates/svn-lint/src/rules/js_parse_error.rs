@@ -40,10 +40,6 @@ use crate::rules::acorn_early_errors::{
     Candidate, Mode, Position, first_early_error, next_token_start,
 };
 
-/// The hint svelte-check appends to a parse error inside the script
-/// tag whose message contains "expected".
-const PREPROCESS_HINT: &str = "\n\nIf you expect this syntax to work, here are some suggestions: \nIf you use typescript with `svelte-preprocess`, did you add `lang=\"ts\"` to your `script` tag? \nDid you setup a `svelte.config.js` or `vite.config.js`? \nSee https://github.com/sveltejs/language-tools/tree/master/docs#using-with-preprocessors for more info.";
-
 /// One script as the lint pass holds it.
 pub(crate) struct Script<'d, 'p, 'a> {
     pub section: &'d ScriptSection<'d>,
@@ -86,6 +82,7 @@ pub(crate) enum ScriptParseError {
 /// any, as svelte-check treats it.
 pub(crate) fn script_parse_error(
     doc: &Document<'_>,
+    fragment: &svn_parser::ast::Fragment,
     source: &str,
     scripts: &[Script<'_, '_, '_>],
     settings: &Settings,
@@ -118,13 +115,13 @@ pub(crate) fn script_parse_error(
         }
         let mut message = format!("{}\nhttps://svelte.dev/e/js_parse_error", candidate.message);
         if message.contains("expected") {
-            if !settings.preprocess_configured && has_language_attribute(doc) {
+            if !settings.preprocess_configured && doc.has_language_attribute(fragment) {
                 return Some(ScriptParseError::Hidden {
                     script_opens: script.section.open_tag_range.start,
                 });
             }
             if in_script_tag(doc, at) {
-                message.push_str(PREPROCESS_HINT);
+                message.push_str(svn_core::diagnostic::SCRIPT_PREPROCESS_HINT);
             }
         }
         return Some(ScriptParseError::Shown {
@@ -2017,38 +2014,11 @@ fn mixed_operator(program: &Program<'_>, text: &str, at: u32) -> Option<(u32, u3
     operators.iter().find(|(_, c)| *c != first).map(|(p, _)| *p)
 }
 
-/// svelte-check's `hasLanguageAttribute`: a `lang` or `type` attribute
-/// on the script (the instance script's tag, or the module script's
-/// when there is no instance script), the style or a template tag.
-fn has_language_attribute(doc: &Document<'_>) -> bool {
-    let set = |attrs: &[svn_parser::ScriptAttr]| {
-        let value = |name: &str| {
-            attrs
-                .iter()
-                .rev()
-                .find(|a| a.name == name)
-                .and_then(|a| a.value.as_deref())
-                .filter(|v| !v.is_empty())
-        };
-        value("lang")
-            .or_else(|| value("type"))
-            .is_some_and(|v| !v.strip_prefix("text/").unwrap_or(v).is_empty())
-    };
-    let script = doc
-        .instance_script
-        .as_ref()
-        .or(doc.module_script.as_ref())
-        .is_some_and(|s| set(&s.attrs));
-    script || doc.style.as_ref().is_some_and(|s| set(&s.attrs))
-}
-
 /// svelte-check's `isInTag` check for the script: the instance script's
 /// content (or the module script's when there is no instance script),
 /// both ends included.
 fn in_script_tag(doc: &Document<'_>, at: u32) -> bool {
-    doc.instance_script
-        .as_ref()
-        .or(doc.module_script.as_ref())
+    doc.main_script()
         .is_some_and(|s| s.content_range.start <= at && at <= s.content_range.end)
 }
 
@@ -2062,6 +2032,7 @@ mod tests {
     /// first line, and whether the preprocessing hint was appended.
     fn report(source: &str, preprocess_ts: bool, preprocess_configured: bool) -> Option<String> {
         let (doc, _) = svn_parser::parse_sections(source);
+        let (fragment, _) = svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
         let ts = crate::rules::typescript_features::compiler_parses_as_ts(source);
         let lang = if ts { ScriptLang::Ts } else { ScriptLang::Js };
         let allocator = Allocator::default();
@@ -2090,7 +2061,7 @@ mod tests {
             preprocess_configured,
         };
         let ScriptParseError::Shown { message, range, .. } =
-            script_parse_error(&doc, source, &scripts, &settings)?
+            script_parse_error(&doc, &fragment, source, &scripts, &settings)?
         else {
             return None;
         };
@@ -2216,6 +2187,18 @@ mod tests {
             .as_deref(),
             Some("1:8 Unterminated regular expression")
         );
+    }
+
+    /// Without a preprocess config, svelte-check hides an "expected"
+    /// error when the script, the style or the template tag names a
+    /// language (another preprocessor is assumed to handle it).
+    #[test]
+    fn a_template_tag_language_hides_the_error() {
+        let script = "<script>\nlet a = 1 2;\n</script>";
+        assert!(report(script, false, false).is_some());
+        let with_template = format!("<template lang=\"pug\"></template>\n{script}");
+        assert_eq!(report(&with_template, false, false), None);
+        assert!(report(&with_template, false, true).is_some());
     }
 
     #[test]

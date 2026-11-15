@@ -35,6 +35,32 @@ pub struct Document<'src> {
 }
 
 impl<'src> Document<'src> {
+    /// The script the language server takes as the component's own: the
+    /// instance script, else the module script.
+    pub fn main_script(&self) -> Option<&ScriptSection<'src>> {
+        self.instance_script
+            .as_ref()
+            .or(self.module_script.as_ref())
+    }
+
+    /// svelte-check's `hasLanguageAttribute`: a non-empty `lang` or
+    /// `type` (`text/` prefix ignored) on the [main script](Self::main_script)'s
+    /// tag, on the style tag, or on the first `<template>` tag at the top
+    /// of `fragment`, this document's template.
+    pub fn has_language_attribute(&self, fragment: &crate::ast::Fragment) -> bool {
+        let set = |lang: Option<&str>| {
+            lang.is_some_and(|v| !v.strip_prefix("text/").unwrap_or(v).is_empty())
+        };
+        set(self
+            .main_script()
+            .and_then(|s| language_attribute(&s.attrs)))
+            || set(self
+                .style
+                .as_ref()
+                .and_then(|s| language_attribute(&s.attrs)))
+            || set(template_language(fragment, self.source).as_deref())
+    }
+
     /// Effective script language for emit/cache decisions.
     ///
     /// Picks the instance script's `lang=` when present (the dominant
@@ -147,6 +173,47 @@ pub struct Template {
     /// complement of script/style sections. Stored as a list because
     /// template content can be interleaved with script/style blocks.
     pub text_runs: Vec<Range>,
+}
+
+/// The last non-empty `lang` attribute of a tag, else its last non-empty
+/// `type`, as the language server's attribute map keeps them.
+pub fn language_attribute(attrs: &[ScriptAttr]) -> Option<&str> {
+    let value = |name: &str| {
+        attrs
+            .iter()
+            .rev()
+            .find(|a| a.name == name)
+            .and_then(|a| a.value.as_deref())
+            .filter(|v| !v.is_empty())
+    };
+    value("lang").or_else(|| value("type"))
+}
+
+/// [`language_attribute`] of the first `<template>` element at the top of
+/// `fragment`, from the attributes written with plain text values.
+fn template_language(fragment: &crate::ast::Fragment, source: &str) -> Option<String> {
+    use crate::ast::{AttrValuePart, Attribute, Node};
+    let template = fragment.nodes.iter().find_map(|node| match node {
+        Node::Element(e) if e.name == "template" => Some(e),
+        _ => None,
+    })?;
+    let attrs: Vec<ScriptAttr> = template
+        .attributes
+        .iter()
+        .filter_map(|attr| match attr {
+            Attribute::Plain(p) => Some(ScriptAttr {
+                name: p.name.to_string(),
+                value: p.value.as_ref().and_then(|v| match v.parts.as_slice() {
+                    [] => Some(String::new()),
+                    [AttrValuePart::Text { range }] => Some(range.slice(source).to_string()),
+                    _ => None,
+                }),
+                range: p.range,
+            }),
+            _ => None,
+        })
+        .collect();
+    language_attribute(&attrs).map(str::to_string)
 }
 
 /// svelte-check's `isTsSvelte`: the component is TypeScript when ANY

@@ -181,3 +181,19 @@ mod tests {
         assert!(d.code.is_none());
     }
 }
+
+/// What the language server appends to a parse error whose message
+/// contains "expected" when it lies in the script tag
+/// (`createParserErrorDiagnostic`): the syntax may need a preprocessor.
+pub const SCRIPT_PREPROCESS_HINT: &str = concat!(
+    "\n\nIf you expect this syntax to work, here are some suggestions: ",
+    "\nIf you use typescript with `svelte-preprocess`, did you add `lang=\"ts\"` to your `script` tag? ",
+    "\nDid you setup a `svelte.config.js` or `vite.config.js`? \nSee https://github.com/sveltejs/language-tools/tree/master/docs#using-with-preprocessors for more info.",
+);
+
+/// [`SCRIPT_PREPROCESS_HINT`] for an error in the style tag.
+pub const STYLE_PREPROCESS_HINT: &str = concat!(
+    "\n\nIf you expect this syntax to work, here are some suggestions: ",
+    "\nIf you use less/SCSS with `svelte-preprocess`, did you add `lang=\"scss\"`/`lang=\"less\"` to your `style` tag? If you use SCSS, it may be necessary to add the path to your NODE runtime to the setting `svelte.language-server.runtime`, or use `sass` instead of `node-sass`. ",
+    "\nDid you setup a `svelte.config.js` or `vite.config.js`? \nSee https://github.com/sveltejs/language-tools/tree/master/docs#using-with-preprocessors for more info.",
+);

@@ -22,13 +22,8 @@
 use std::path::{Path, PathBuf};
 
 use svn_core::{Position, PositionMap};
-use svn_parser::{Document, ScriptAttr};
+use svn_parser::Document;
 use svn_svelte_compiler::CompilerDiagnostic;
-
-const HINT_INTRO: &str = "\n\nIf you expect this syntax to work, here are some suggestions: ";
-const SCRIPT_HINT: &str = "\nIf you use typescript with `svelte-preprocess`, did you add `lang=\"ts\"` to your `script` tag? ";
-const STYLE_HINT: &str = "\nIf you use less/SCSS with `svelte-preprocess`, did you add `lang=\"scss\"`/`lang=\"less\"` to your `style` tag? If you use SCSS, it may be necessary to add the path to your NODE runtime to the setting `svelte.language-server.runtime`, or use `sass` instead of `node-sass`. ";
-const HINT_OUTRO: &str = "\nDid you setup a `svelte.config.js` or `vite.config.js`? \nSee https://github.com/sveltejs/language-tools/tree/master/docs#using-with-preprocessors for more info.";
 
 /// A component svelte2tsx can't convert, with what svelte-check's
 /// default engine reports for it (in its order: Svelte pass first).
@@ -145,7 +140,8 @@ fn svelte_pass_diagnostic(
 ) -> Option<RejectionDiagnostic> {
     let mut message = error.message;
     if message.contains("expected") {
-        if !preprocess_configured && has_language_attribute(doc) {
+        let (fragment, _) = svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
+        if !preprocess_configured && doc.has_language_attribute(&fragment) {
             return None;
         }
         // The compiler's lines are 1-based, its columns 0-based UTF-16.
@@ -159,16 +155,14 @@ fn svelte_pass_diagnostic(
             (from.line, from.character) <= (at.line, at.character)
                 && (at.line, at.character) <= (to.line, to.character)
         };
-        let in_script = doc
-            .instance_script
-            .as_ref()
-            .or(doc.module_script.as_ref())
-            .is_some_and(|s| within(s.content_range));
+        let in_script = doc.main_script().is_some_and(|s| within(s.content_range));
         let in_style = doc.style.as_ref().is_some_and(|s| within(s.content_range));
         if in_style || in_script {
-            message.push_str(HINT_INTRO);
-            message.push_str(if in_script { SCRIPT_HINT } else { STYLE_HINT });
-            message.push_str(HINT_OUTRO);
+            message.push_str(if in_script {
+                svn_core::diagnostic::SCRIPT_PREPROCESS_HINT
+            } else {
+                svn_core::diagnostic::STYLE_PREPROCESS_HINT
+            });
         }
     }
     Some(diagnostic(
@@ -199,34 +193,6 @@ fn diagnostic(
     }
 }
 
-/// The last value of a `lang` or `type` attribute, as the language
-/// server's attribute map keeps it.
-fn language(attrs: &[ScriptAttr]) -> Option<&str> {
-    let value = |name: &str| {
-        attrs
-            .iter()
-            .rev()
-            .find(|a| a.name == name)
-            .and_then(|a| a.value.as_deref())
-            .filter(|v| !v.is_empty())
-    };
-    value("lang").or_else(|| value("type"))
-}
-
-/// svelte-check's `hasLanguageAttribute`: a non-empty `lang` or `type`
-/// (`text/` prefix ignored) on the instance script's tag (the module
-/// script's when there is none) or on the style tag.
-fn has_language_attribute(doc: &Document<'_>) -> bool {
-    let set = |attrs: &[ScriptAttr]| {
-        language(attrs).is_some_and(|v| !v.strip_prefix("text/").unwrap_or(v).is_empty())
-    };
-    doc.instance_script
-        .as_ref()
-        .or(doc.module_script.as_ref())
-        .is_some_and(|s| set(&s.attrs))
-        || doc.style.as_ref().is_some_and(|s| set(&s.attrs))
-}
-
 /// The language server's script kind for the snapshot: TypeScript when
 /// either script's `lang`/`type` names TypeScript.
 fn script_is_ts(doc: &Document<'_>) -> bool {
@@ -235,7 +201,7 @@ fn script_is_ts(doc: &Document<'_>) -> bool {
         .flatten()
         .any(|s| {
             matches!(
-                language(&s.attrs),
+                svn_parser::document::language_attribute(&s.attrs),
                 Some("ts" | "typescript" | "text/ts" | "text/typescript")
             )
         })

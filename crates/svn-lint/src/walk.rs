@@ -349,15 +349,16 @@ pub fn walk_parsed(
             None => scripts,
         };
         use crate::rules::js_parse_error::ScriptParseError;
-        let script_error = script_parse_error(doc, source, &scripts, &settings).or_else(|| {
-            merged.and_then(|(first, error)| {
-                error.map(|(message, range)| ScriptParseError::Shown {
-                    message,
-                    range,
-                    script_opens: first.start,
+        let script_error =
+            script_parse_error(doc, fragment, source, &scripts, &settings).or_else(|| {
+                merged.and_then(|(first, error)| {
+                    error.map(|(message, range)| ScriptParseError::Shown {
+                        message,
+                        range,
+                        script_opens: first.start,
+                    })
                 })
-            })
-        });
+            });
         let script_opens = script_error.as_ref().map(|error| match error {
             ScriptParseError::Shown { script_opens, .. }
             | ScriptParseError::Hidden { script_opens } => *script_opens,

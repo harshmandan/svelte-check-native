@@ -460,17 +460,20 @@ impl<'s> TagReader<'s> {
                 self.collect_comments(text, start, lookahead, comments);
                 Ok(start + end)
             }
-            Read::Error { at, message } => {
+            Read::Error {
+                at,
+                message,
+                column_of,
+            } => {
                 self.collect_comments(text, start, at, comments);
                 // acorn-typescript places a few errors at a column number
                 // taken for an offset, which the compiler cuts an each
                 // block's iterable at; the column counts from the line the
                 // read started on in the template.
-                let at = match acorn_rs::read_expression(text, self.language()) {
-                    Err(error) if error.column_of => {
-                        acorn_rs::column_as_offset_from(self.source, start, start + error.pos)
-                    }
-                    _ => start + at,
+                let at = if column_of {
+                    acorn_rs::column_as_offset_from(self.source, start, start + at)
+                } else {
+                    start + at
                 };
                 Err(
                     TagReadError::new(at, TagReadErrorKind::JsParse(message)).reading(AcornRead {
@@ -530,7 +533,7 @@ impl<'s> TagReader<'s> {
             };
             let (wrapped, origin) = read.wrapped(self.source);
             match acorn::read_expression(&wrapped, self.ts) {
-                Read::Error { at, message } => {
+                Read::Error { at, message, .. } => {
                     return Err(
                         TagReadError::new(origin + at, TagReadErrorKind::JsParse(message))
                             .reading(read),
@@ -577,7 +580,7 @@ impl<'s> TagReader<'s> {
             .unwrap_or("");
         let annotation = acorn::read_type_annotation(rest);
         match annotation.read {
-            Read::Error { at, message } => Err(TagReadError::new(
+            Read::Error { at, message, .. } => Err(TagReadError::new(
                 match acorn::ANNOTATION_PREFIX_LEN.checked_sub(at) {
                     // Inside the text written over the template.
                     Some(back) if back > 0 => self.units_before(after, back),
@@ -877,13 +880,20 @@ impl<'s> TagReader<'s> {
             range: Range::new(start, limit),
             shape: AcornReadShape::Statement,
         };
-        let language = if self.ts {
-            acorn_rs::Language::TypeScript
-        } else {
-            acorn_rs::Language::JavaScript
-        };
+        let language = self.language();
         let template = self.template();
-        let end = match acorn_rs::parse_statement_at(template, start, language) {
+        // acorn prepares all the text it is handed, so reading from the
+        // whole template costs its length on every tag. The tag's own
+        // text, up to the `}` that closes it, holds every token the
+        // statement is read from: a statement read there is read the
+        // same way in the template. Anything else, an error included,
+        // is read again from the template.
+        let in_tag = crate::mustache::find_mustache_end(template, start)
+            .and_then(|brace| template.get(start as usize..=brace as usize))
+            .and_then(|tag| acorn_rs::parse_statement_at(tag, 0, language).ok())
+            .map(|end| start + end);
+        let read_whole = || acorn_rs::parse_statement_at(template, start, language);
+        let end = match in_tag.map_or_else(read_whole, Ok) {
             Ok(end) => end,
             // A statement the template ends inside is the compiler's
             // `unexpected_eof`, not acorn's error.
@@ -1237,7 +1247,7 @@ impl<'s> TagReader<'s> {
             shape: AcornReadShape::Parameters,
         };
         let (wrapped, origin) = read.wrapped(self.source);
-        if let Read::Error { at, message } = acorn::read_expression(&wrapped, self.ts) {
+        if let Read::Error { at, message, .. } = acorn::read_expression(&wrapped, self.ts) {
             return Err(
                 TagReadError::new(origin + at, TagReadErrorKind::JsParse(message)).reading(read),
             );

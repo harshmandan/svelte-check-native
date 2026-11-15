@@ -26,8 +26,13 @@ pub enum Read {
     /// those it collected.
     Expression { end: u32, lookahead: u32 },
     /// It threw `message` at `at`, having collected the comments before
-    /// it.
-    Error { at: u32, message: String },
+    /// it. `column_of` marks an error acorn-typescript places at a column
+    /// number taken for an offset.
+    Error {
+        at: u32,
+        message: String,
+        column_of: bool,
+    },
 }
 
 fn source_type(ts: bool) -> SourceType {
@@ -46,6 +51,7 @@ pub fn read_expression(text: &str, ts: bool) -> Read {
         Err(error) => Read::Error {
             at: error.pos,
             message: error.message,
+            column_of: error.column_of,
         },
     }
 }
@@ -77,7 +83,7 @@ pub fn unterminated_template(text: &str, tick: u32, ts: bool) -> (u32, String) {
                 Err(_) => {
                     let inner = i + 2;
                     return match read_expression(&text[inner..], ts) {
-                        Read::Error { at, message } => (inner as u32 + at, message),
+                        Read::Error { at, message, .. } => (inner as u32 + at, message),
                         // acorn then expects the `}` and meets the end.
                         Read::Expression { .. } => (len as u32, "Unexpected token".to_string()),
                     };
@@ -349,21 +355,24 @@ mod tests {
             read_expression("[] as {a b}", true),
             Read::Error {
                 at: 9,
-                message: "Unexpected token".to_string()
+                message: "Unexpected token".to_string(),
+                column_of: false
             }
         );
         assert_eq!(
             read_expression("f(x as any) as q", false),
             Read::Error {
                 at: 4,
-                message: "Unexpected token".to_string()
+                message: "Unexpected token".to_string(),
+                column_of: false
             }
         );
         assert_eq!(
             read_expression("[] as q = 1", true),
             Read::Error {
                 at: 0,
-                message: "Assigning to rvalue".to_string()
+                message: "Assigning to rvalue".to_string(),
+                column_of: false
             }
         );
     }
@@ -374,21 +383,24 @@ mod tests {
             read_expression("(/* ) => {}", false),
             Read::Error {
                 at: 1,
-                message: "Unterminated comment".to_string()
+                message: "Unterminated comment".to_string(),
+                column_of: false
             }
         );
         assert_eq!(
             read_expression("(a = \") => {}", false),
             Read::Error {
                 at: 5,
-                message: "Unterminated string constant".to_string()
+                message: "Unterminated string constant".to_string(),
+                column_of: false
             }
         );
         assert_eq!(
             read_expression("(a = `) => {}", false),
             Read::Error {
                 at: 6,
-                message: "Unterminated template".to_string()
+                message: "Unterminated template".to_string(),
+                column_of: false
             }
         );
     }

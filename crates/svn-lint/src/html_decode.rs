@@ -69,17 +69,38 @@ fn reference(text: &str, is_attribute_value: bool) -> Option<(usize, u32)> {
         let code = u32::from_str_radix(&digits[..count], radix).unwrap_or(u32::MAX);
         return (code != 0).then_some((len, code));
     }
-    ENTITIES.iter().find_map(|&(name, code)| {
-        let after = text.strip_prefix(name)?;
-        if is_attribute_value && !name.ends_with(';') {
-            let next = after.chars().next();
-            if next.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '=') {
-                return None;
+    let first = usize::from(*text.as_bytes().first()?);
+    ENTITIES_BY_FIRST_BYTE
+        .get(first)?
+        .iter()
+        .find_map(|&index| {
+            let (name, code) = ENTITIES[usize::from(index)];
+            let after = text.strip_prefix(name)?;
+            if is_attribute_value && !name.ends_with(';') {
+                let next = after.chars().next();
+                if next.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '=') {
+                    return None;
+                }
+            }
+            Some((name.len(), code))
+        })
+}
+
+/// The indices of [`ENTITIES`] by the first byte of the name (every
+/// name is ASCII), each list in the table's order: the compiler takes
+/// the first name in that order that matches, so the longest wins.
+static ENTITIES_BY_FIRST_BYTE: std::sync::LazyLock<Vec<Vec<u16>>> =
+    std::sync::LazyLock::new(|| {
+        let mut by_first = vec![Vec::new(); 128];
+        for (index, (name, _)) in ENTITIES.iter().enumerate() {
+            if let (Some(&first), Ok(index)) = (name.as_bytes().first(), u16::try_from(index)) {
+                if let Some(list) = by_first.get_mut(usize::from(first)) {
+                    list.push(index);
+                }
             }
         }
-        Some((name.len(), code))
-    })
-}
+        by_first
+    });
 
 /// The code point the compiler writes for `code`: 0 for one HTML
 /// forbids.

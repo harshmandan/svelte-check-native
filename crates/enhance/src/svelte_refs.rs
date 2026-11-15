@@ -88,6 +88,8 @@ pub(crate) fn collect_component(
     for section in [doc.instance_script.as_ref(), doc.module_script.as_ref()]
         .into_iter()
         .flatten()
+        // Every reference names a `.svelte` file.
+        .filter(|section| section.content.contains(".svelte"))
     {
         let allocator = Allocator::default();
         let parsed = svn_parser::parse_script_body(&allocator, section.content, section.lang);

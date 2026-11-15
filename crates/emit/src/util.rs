@@ -97,6 +97,10 @@ pub(crate) fn svelte5_plus() -> bool {
 pub(crate) fn sequence_expression_text(expr: &str) -> Option<std::ops::Range<usize>> {
     use oxc_ast::ast::{Expression, Statement};
     use oxc_span::GetSpan;
+    // A comma sequence has a comma; most values have none to parse for.
+    if !expr.contains(',') {
+        return None;
+    }
     const PREFIX: &str = "(\n";
     let wrapped = format!("{PREFIX}{expr}\n);");
     let alloc = oxc_allocator::Allocator::default();

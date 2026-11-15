@@ -1245,8 +1245,10 @@ fn carry_bidi_regex(
         .enumerate()
         .map(|(i, p)| (p.as_path(), i))
         .collect();
+    // The preprocess steps read each source a character at a time; the
+    // files are independent.
     let mut order: Vec<(u8, usize, usize)> = results
-        .iter()
+        .par_iter()
         .enumerate()
         .filter(|(_, r)| r.is_some())
         .map(|(idx, _)| {
@@ -1417,7 +1419,7 @@ fn merge_native_diagnostics(
     for (path, warnings) in warning_files {
         let mut occurrences = std::collections::HashMap::new();
         for w in warnings {
-            let code = w.code.as_str().to_string();
+            let code = w.code.as_str();
             // Apply user `--compiler-warnings` reclassification. Default
             // severity from our lint pass is Warning.
             let base = if w.is_error {
@@ -1425,14 +1427,17 @@ fn merge_native_diagnostics(
             } else {
                 svn_svelte_compiler::Severity::Warning
             };
-            let severity = apply_compiler_override(&code, base, compiler_overrides);
+            let severity = apply_compiler_override(code, base, compiler_overrides);
             let Some(severity) = severity else { continue };
-            let site = (code.clone(), w.start_line, w.start_column);
-            let key = warning_key(&mut occurrences, &path, site);
+            let key = warning_key(
+                &mut occurrences,
+                &path,
+                (code, w.start_line, w.start_column),
+            );
             if !seen.insert(key) {
                 continue;
             }
-            let href = compiler_code_docs_url(&code, severity);
+            let href = compiler_code_docs_url(code, severity);
             diagnostics.push(svn_typecheck::CheckDiagnostic {
                 source_path: path.clone(),
                 line: w.start_line,
@@ -1442,7 +1447,7 @@ fn merge_native_diagnostics(
                 end_line: w.end_line,
                 end_column: w.end_column.saturating_add(1),
                 severity,
-                code: svn_typecheck::DiagnosticCode::Slug(code),
+                code: svn_typecheck::DiagnosticCode::Slug(code.to_string()),
                 message: w.message,
                 source: svn_typecheck::DiagnosticSource::Svelte,
                 code_description_url: href,
@@ -1458,14 +1463,20 @@ fn merge_native_diagnostics(
 /// (a `$:` body is walked twice), and both repeats are real.
 type WarningKey = (String, PathBuf, u32, u32, u32);
 
-fn warning_key(
-    occurrences: &mut std::collections::HashMap<(String, u32, u32), u32>,
+fn warning_key<C: Clone + Eq + std::hash::Hash + AsRef<str>>(
+    occurrences: &mut std::collections::HashMap<(C, u32, u32), u32>,
     path: &Path,
-    site: (String, u32, u32),
+    (code, line, column): (C, u32, u32),
 ) -> WarningKey {
-    let n = occurrences.entry(site.clone()).or_insert(0);
+    let n = occurrences.entry((code.clone(), line, column)).or_insert(0);
     *n += 1;
-    (site.0, path.to_path_buf(), site.1, site.2, *n)
+    (
+        code.as_ref().to_string(),
+        path.to_path_buf(),
+        line,
+        column,
+        *n,
+    )
 }
 
 fn apply_compiler_override(

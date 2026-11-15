@@ -248,8 +248,10 @@ pub fn run(
 /// absolute path of an existing file, so whether the line names one is
 /// the whole test (a directory may well be called `proj - Copy`).
 fn listed_files(stdout: &str) -> Vec<PathBuf> {
+    use rayon::prelude::*;
+    // One `stat` per line: thousands of them on a large program.
     stdout
-        .lines()
+        .par_lines()
         .map(str::trim_end)
         .filter(|l| Path::new(l).is_absolute() && Path::new(l).is_file())
         .map(PathBuf::from)

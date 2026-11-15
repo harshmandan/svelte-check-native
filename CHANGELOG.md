@@ -4,7 +4,7 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.12.0]
 
 Targets Svelte 5.57.3 (the pinned compiler checkout moves from 5.55.4).
 JavaScript and TypeScript in components are now read by a Rust port of

@@ -97,11 +97,8 @@ pub(crate) fn script_parse_error(
             script.section,
             settings.preprocess_ts,
         );
-        let mode = Mode {
-            ts: settings.ts,
-            transpiled,
-        };
-        let Some(candidate) = first_error(script, mode) else {
+        let mode = Mode { ts: settings.ts };
+        let Some(candidate) = first_error(script, mode, transpiled) else {
             continue;
         };
         let base = script.section.content_range.start;
@@ -182,12 +179,13 @@ pub(crate) fn merged_script_error(
     Some((first.open_tag_range, error))
 }
 
-/// The first error acorn raises in one script.
-fn first_error(script: &Script<'_, '_, '_>, mode: Mode) -> Option<Candidate> {
+/// The first error acorn raises in one script, which a preprocessor
+/// turned into JavaScript first when `transpiled`.
+fn first_error(script: &Script<'_, '_, '_>, mode: Mode, transpiled: bool) -> Option<Candidate> {
     // A script the compiler reads as written is read by acorn itself
     // (with acorn-typescript for TypeScript): the port says what it
     // says.
-    if !mode.transpiled {
+    if !transpiled {
         let language = if mode.ts {
             acorn_rs::Language::TypeScript
         } else {
@@ -215,8 +213,9 @@ fn first_error(script: &Script<'_, '_, '_>, mode: Mode) -> Option<Candidate> {
     )
 }
 
-/// The first error acorn raises reading `text`, given oxc's parse of
-/// it: the program, the parser's errors, and whether it gave up.
+/// The first error acorn raises reading `text`, the output of
+/// TypeScript's transpile, given oxc's parse of it: the program, the
+/// parser's errors, and whether it gave up.
 pub(crate) fn first_error_in(
     text: &str,
     program: &Program<'_>,
@@ -227,16 +226,7 @@ pub(crate) fn first_error_in(
     let from_oxc = errors
         .first()
         .and_then(|first| translate(first, errors, program, text, mode))
-        .filter(|c| !(mode.transpiled && TRANSPILE_REWRITES.contains(&c.message.as_str())));
-    // acorn-typescript reads everything after a bodiless function
-    // declaration as inside a function (see `acorn_early_errors`).
-    let from_oxc = from_oxc.filter(|c| {
-        let allowed_in_function = c.message == "'return' outside of function"
-            || c.message.starts_with("'new.target' can only be used");
-        !(allowed_in_function
-            && crate::rules::acorn_early_errors::signature_scope_start(program, mode)
-                .is_some_and(|start| start <= c.detect))
-    });
+        .filter(|c| !TRANSPILE_REWRITES.contains(&c.message.as_str()));
     // Where oxc gave up: nothing it reports lies past that.
     let gave_up_at = errors
         .iter()

@@ -22,17 +22,14 @@
 //!   reads `as` / `satisfies`, parameter and member modifiers,
 //!   decorators and `accessor` fields there, and acorn stops at them;
 //! - neither parser version supports `using` declarations or import
-//!   phases (`import defer`);
-//! - acorn-typescript reads parameter modifiers only in class methods
-//!   (elsewhere `private` is a reserved word and `readonly` an
-//!   identifier), checks the order and compatibility of class member
-//!   modifiers itself, and declares type aliases, interfaces and
-//!   namespaces in scopes of its own.
+//!   phases (`import defer`).
+//!
+//! It runs only on a script a preprocessor transpiled: one the compiler
+//! reads as written is read by the acorn port itself
+//! (`js_parse_error`). So a TypeScript script here is checked as what
+//! TypeScript's transpile keeps of it: type-only declarations and
+//! imports are gone, and an enum or namespace is a `var`.
 
-use oxc_ast::ast::{
-    AccessorPropertyType, ConditionalExpression, ImportExpression, MethodDefinitionType,
-    PropertyDefinitionType,
-};
 use oxc_ast::ast::{
     ArrowFunctionBody, ArrowFunctionExpression, AssignmentTargetPropertyIdentifier,
     AwaitExpression, BindingIdentifier, BindingPattern, BlockStatement, BreakStatement,
@@ -51,6 +48,7 @@ use oxc_ast::ast::{
     UnaryExpression, UnaryOperator, VariableDeclaration, VariableDeclarationKind,
     VariableDeclarator, WhileStatement, WithStatement, YieldExpression,
 };
+use oxc_ast::ast::{ConditionalExpression, ImportExpression};
 use oxc_ast_visit::{Visit, walk};
 use oxc_span::{GetSpan, Span};
 use oxc_syntax::scope::ScopeFlags;
@@ -104,9 +102,6 @@ impl Candidate {
 pub(crate) struct Mode {
     /// The component is TypeScript: acorn-typescript parses the script.
     pub ts: bool,
-    /// A preprocessor turned the script into JavaScript first: only
-    /// what TypeScript's transpile keeps reaches the parser.
-    pub transpiled: bool,
 }
 
 /// The earliest early error in a script. `text` is the script body the
@@ -137,28 +132,7 @@ pub(crate) fn first_early_error(
         ..Scope::default()
     });
     checker.visit_statements(&program.body);
-    if checker.ts_as_written() {
-        for (name, at) in type_parameter_names(program) {
-            checker.type_parameter_name(name, at);
-        }
-    }
     checker.best
-}
-
-/// The name of every type parameter in the program, with its position:
-/// of a function, class, method, interface, type alias or function
-/// type alike.
-fn type_parameter_names<'a>(program: &Program<'a>) -> Vec<(&'a str, u32)> {
-    struct Collector<'a>(Vec<(&'a str, u32)>);
-    impl<'a> Visit<'a> for Collector<'a> {
-        fn visit_ts_type_parameter(&mut self, it: &oxc_ast::ast::TSTypeParameter<'a>) {
-            self.0.push((it.name.name.as_str(), it.name.span.start));
-            walk::walk_ts_type_parameter(self, it);
-        }
-    }
-    let mut collector = Collector(Vec::new());
-    collector.visit_program(program);
-    collector.0
 }
 
 /// Where the statements start that may be an `import` or `export`: the
@@ -177,33 +151,6 @@ fn module_level_statements(program: &Program<'_>) -> Vec<u32> {
     collector.0
 }
 
-/// Where the first bodiless function declaration (overload signature,
-/// `declare function`) or method ends, when acorn-typescript reads the
-/// script as written: from there on it believes it is inside a
-/// function.
-pub(crate) fn signature_scope_start(program: &Program<'_>, mode: Mode) -> Option<u32> {
-    struct Finder {
-        found: Option<u32>,
-    }
-    impl<'a> Visit<'a> for Finder {
-        fn visit_function(&mut self, it: &Function<'a>, flags: ScopeFlags) {
-            if it.body.is_none() {
-                let end = it.span.end;
-                if self.found.is_none_or(|f| end < f) {
-                    self.found = Some(end);
-                }
-            }
-            walk::walk_function(self, it, flags);
-        }
-    }
-    if !mode.ts || mode.transpiled {
-        return None;
-    }
-    let mut finder = Finder { found: None };
-    finder.visit_program(program);
-    finder.found
-}
-
 /// Scope flags, as acorn keeps them.
 const TOP: u8 = 1;
 const FUNCTION: u8 = 2;
@@ -218,7 +165,6 @@ struct Scope<'t> {
     var: Vec<&'t str>,
     lexical: Vec<&'t str>,
     functions: Vec<&'t str>,
-    types: Vec<&'t str>,
     /// Set on the scope of a function, static block or field
     /// initializer: what code directly inside it may do.
     context: Option<Context<'t>>,
@@ -229,8 +175,6 @@ enum Bind {
     Var,
     Lexical,
     SimpleCatch,
-    TsType,
-    TsInterface,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -303,8 +247,6 @@ const STRICT_RESERVED: &[&str] = &[
     "yield",
 ];
 
-const ACCESS_MODIFIERS: &[&str] = &["public", "private", "protected"];
-
 /// Words acorn-typescript reads as class member modifiers.
 const MEMBER_MODIFIERS: &[&str] = &[
     "declare",
@@ -317,9 +259,6 @@ const MEMBER_MODIFIERS: &[&str] = &[
     "readonly",
     "static",
 ];
-
-/// Words acorn-typescript reads as parameter modifiers.
-const PARAMETER_MODIFIERS: &[&str] = &["public", "private", "protected", "override", "readonly"];
 
 /// TypeScript member modifiers plain acorn cannot read.
 const TS_ONLY_MEMBER_MODIFIERS: &[&str] = &[
@@ -395,11 +334,6 @@ impl<'s, 't> Checker<'s, 't> {
         !self.mode.ts
     }
 
-    /// acorn-typescript reads the script as written (not transpiled).
-    fn ts_as_written(&self) -> bool {
-        self.mode.ts && !self.mode.transpiled
-    }
-
     fn push_scope(&mut self, flags: u8) {
         self.scopes.push(Scope {
             flags,
@@ -441,21 +375,13 @@ impl<'s, 't> Checker<'s, 't> {
         next_token_start(self.text, at)
     }
 
-    /// acorn's `declareName`, with acorn-typescript's type bindings.
+    /// acorn's `declareName`.
     fn declare(&mut self, name: &'t str, bind: Bind, at: u32) {
         let depth = self.scopes.len();
         let Some(scope) = self.scopes.last_mut() else {
             return;
         };
         let redeclared = match bind {
-            Bind::TsType | Bind::TsInterface => {
-                if bind == Bind::TsType && scope.types.contains(&name) {
-                    self.error(at, format!("type '{name}' has already been declared."));
-                    return;
-                }
-                scope.types.push(name);
-                false
-            }
             Bind::Lexical => {
                 let redeclared = scope.lexical.contains(&name)
                     || scope.functions.contains(&name)
@@ -523,16 +449,6 @@ impl<'s, 't> Checker<'s, 't> {
         }
     }
 
-    /// acorn-typescript reads a type parameter's name as it reads any
-    /// name being declared, wherever the type parameter stands.
-    fn type_parameter_name(&mut self, name: &str, at: u32) {
-        if name == "await" {
-            self.error(at, "Cannot use keyword 'await' outside an async function");
-        } else if name == "enum" || STRICT_RESERVED.contains(&name) {
-            self.error(at, format!("The keyword '{name}' is reserved"));
-        }
-    }
-
     /// acorn's `checkUnreserved`, for every identifier it reads.
     fn check_unreserved(&mut self, name: &str, at: u32) {
         let ctx = self.context();
@@ -581,82 +497,6 @@ impl<'s, 't> Checker<'s, 't> {
         words
     }
 
-    /// acorn-typescript's `tsParseModifiers` over the modifiers in
-    /// front of a class member (`key` is where the member name starts).
-    fn check_modifier_list(&mut self, words: &[(&str, u32)], allowed: &[&str], key: u32) {
-        let mut modified: Vec<&str> = Vec::new();
-        let mut accessibility = false;
-        for (i, &(word, at)) in words.iter().enumerate() {
-            if !allowed.contains(&word) {
-                return;
-            }
-            // Where the parser stands once the modifier is read.
-            let after = words.get(i + 1).map_or(key, |&(_, next)| next);
-            let order = |before: &str, after: &str| {
-                format!("'{before}' modifier must precede '{after}' modifier.")
-            };
-            let incompatible =
-                |a: &str, b: &str| format!("'{a}' modifier cannot be used with '{b}' modifier.");
-            let column_error = |message: String| Candidate {
-                detect: at,
-                at: Position::ColumnOf(at),
-                message,
-                token_start: None,
-            };
-            if ACCESS_MODIFIERS.contains(&word) {
-                if accessibility {
-                    self.error(after, "Accessibility modifier already seen.");
-                    return;
-                }
-                for later in ["override", "static", "readonly", "accessor"] {
-                    if modified.contains(&later) {
-                        self.record(column_error(order(word, later)));
-                        return;
-                    }
-                }
-                accessibility = true;
-            } else if word == "accessor" {
-                if modified.contains(&word) {
-                    self.error(after, format!("Duplicate modifier: '{word}'."));
-                    return;
-                }
-                // acorn-typescript 1.0.13 no longer refuses `static` with
-                // `accessor`.
-                for other in ["readonly", "override"] {
-                    if modified.contains(&other) {
-                        self.record(column_error(incompatible("accessor", other)));
-                        return;
-                    }
-                }
-                modified.push(word);
-            } else {
-                if modified.contains(&word) {
-                    self.error(after, format!("Duplicate modifier: '{word}'."));
-                    return;
-                }
-                for (before, later) in [
-                    ("static", "readonly"),
-                    ("static", "override"),
-                    ("override", "readonly"),
-                    ("abstract", "override"),
-                ] {
-                    if word == before && modified.contains(&later) {
-                        self.record(column_error(order(before, later)));
-                        return;
-                    }
-                }
-                for (a, b) in [("declare", "override"), ("static", "abstract")] {
-                    if (modified.contains(&a) && word == b) || (modified.contains(&b) && word == a)
-                    {
-                        self.record(column_error(incompatible(a, b)));
-                        return;
-                    }
-                }
-                modified.push(word);
-            }
-        }
-    }
-
     /// Modifiers in front of a class member.
     fn check_member_modifiers(&mut self, element: Span, decorators: &[Decorator<'_>], key: u32) {
         let start = decorators.last().map_or(element.start, |d| d.span.end);
@@ -676,40 +516,6 @@ impl<'s, 't> Checker<'s, 't> {
                 let after = words.get(i + 1).map_or(key, |&(_, at)| at);
                 self.error(after, "Unexpected token");
             }
-        } else if self.ts_as_written() {
-            self.check_modifier_list(&modifiers, MEMBER_MODIFIERS, key);
-        }
-    }
-
-    /// A parameter written with modifiers. `modifiers_allowed`: the
-    /// parser reads them here (class methods under acorn-typescript).
-    fn check_parameter_modifiers(&mut self, param: &FormalParameter<'t>, modifiers_allowed: bool) {
-        if !(param.accessibility.is_some() || param.readonly || param.r#override) {
-            return;
-        }
-        if self.mode.transpiled {
-            return;
-        }
-        let start = param
-            .decorators
-            .last()
-            .map_or(param.span.start, |d| d.span.end);
-        let pattern = param.pattern.span().start;
-        let words = self.words(start, pattern);
-        if modifiers_allowed {
-            self.check_modifier_list(&words, PARAMETER_MODIFIERS, pattern);
-            return;
-        }
-        // Read as a binding: an access modifier is a reserved word, any
-        // other modifier is the parameter's name and the real name
-        // after it is unexpected.
-        if let Some(&(word, at)) = words.first() {
-            if ACCESS_MODIFIERS.contains(&word) {
-                self.error(at, format!("The keyword '{word}' is reserved"));
-            } else {
-                let after = words.get(1).map_or(pattern, |&(_, next)| next);
-                self.error(after, "Unexpected token");
-            }
         }
     }
 
@@ -719,23 +525,7 @@ impl<'s, 't> Checker<'s, 't> {
         params: &FormalParameters<'t>,
         body: Option<&FunctionBody<'t>>,
         start: u32,
-        modifiers_allowed: bool,
     ) {
-        for param in &params.items {
-            self.check_parameter_modifiers(param, modifiers_allowed);
-            // acorn-typescript: a destructured parameter of a function
-            // with a body cannot be optional.
-            if self.ts_as_written()
-                && body.is_some()
-                && param.optional
-                && param.pattern.is_destructuring_pattern()
-            {
-                self.error(
-                    param.span.start,
-                    "A binding pattern parameter cannot be optional in an implementation signature.",
-                );
-            }
-        }
         self.visit_formal_parameters(params);
         // Parameter names: function-scoped, never repeated.
         let mut ids = Vec::new();
@@ -891,37 +681,6 @@ impl<'s, 't> Checker<'s, 't> {
     }
 }
 
-/// acorn-typescript's `isValidAmbientConstInitializer`: a literal, a
-/// template without expressions, a signed number, or a reference to an
-/// enum member.
-fn ambient_const_initializer(init: &Expression<'_>) -> bool {
-    fn name_chain(expression: &Expression<'_>) -> bool {
-        match expression {
-            Expression::Identifier(_) => true,
-            Expression::StaticMemberExpression(member) => name_chain(&member.object),
-            _ => false,
-        }
-    }
-    match init {
-        Expression::TemplateLiteral(template) => template.expressions.is_empty(),
-        Expression::UnaryExpression(unary) => {
-            matches!(
-                unary.operator,
-                UnaryOperator::UnaryNegation | UnaryOperator::UnaryPlus
-            ) && matches!(
-                unary.argument,
-                Expression::NumericLiteral(_) | Expression::BigIntLiteral(_)
-            )
-        }
-        Expression::StaticMemberExpression(member) => name_chain(&member.object),
-        Expression::ComputedMemberExpression(member) => {
-            matches!(&member.expression, Expression::TemplateLiteral(t) if t.expressions.is_empty())
-                && name_chain(&member.object)
-        }
-        other => other.is_literal(),
-    }
-}
-
 /// acorn's message for the regular expression literal `raw` (from its
 /// opening `/` through its flags) when the pattern is invalid.
 pub(crate) fn regexp_pattern_error(raw: &str) -> Option<String> {
@@ -1011,23 +770,8 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
     }
 
     fn visit_variable_declaration(&mut self, it: &VariableDeclaration<'a>) {
-        if it.declare && self.mode.transpiled {
+        if it.declare {
             return;
-        }
-        // acorn-typescript: what a declared `const` without a type may
-        // be initialized with.
-        if self.ts_as_written() && it.declare && it.kind == VariableDeclarationKind::Const {
-            for declarator in &it.declarations {
-                if declarator.type_annotation.is_none()
-                    && let Some(init) = &declarator.init
-                    && !ambient_const_initializer(init)
-                {
-                    self.error(
-                        init.span().start,
-                        "A 'const' initializer in an ambient context must be a string or numeric literal or literal enum reference.",
-                    );
-                }
-            }
         }
         if matches!(
             it.kind,
@@ -1062,7 +806,7 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
             it.r#type,
             FunctionType::FunctionDeclaration | FunctionType::TSDeclareFunction
         );
-        if it.declare && self.mode.transpiled {
+        if it.declare {
             return;
         }
         if let Some(id) = &it.id {
@@ -1094,15 +838,13 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
         self.in_parameter_default = false;
         self.parameter_await_is_expression = it.r#async;
         self.with_context(ctx, FUNCTION, |this| {
-            this.function_parts(&it.params, it.body.as_deref(), it.span.start, false);
+            this.function_parts(&it.params, it.body.as_deref(), it.span.start);
         });
         (
             self.in_parameter_default,
             self.parameter_await_is_expression,
         ) = outer;
-        if it.body.is_none() {
-            self.leak_signature_scope(it);
-        }
+        if it.body.is_none() {}
         if is_declaration
             && self.mode.ts
             && it.body.is_some()
@@ -1146,10 +888,10 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
         self.parameter_await_is_expression = await_is_expression;
         self.with_context(ctx, FUNCTION, |this| match &it.body {
             ArrowFunctionBody::FunctionBody(body) => {
-                this.function_parts(&it.params, Some(body), it.span.start, false);
+                this.function_parts(&it.params, Some(body), it.span.start);
             }
             body => {
-                this.function_parts(&it.params, None, it.span.start, false);
+                this.function_parts(&it.params, None, it.span.start);
                 if let Some(expression) = body.as_expression() {
                     this.visit_expression(expression);
                 }
@@ -1162,36 +904,10 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
     }
 
     fn visit_conditional_expression(&mut self, it: &ConditionalExpression<'a>) {
-        // `a ? (b) : c => d`: acorn-typescript reads `(b): c => d` as an
-        // arrow function with a return type and never goes back, so the
-        // conditional is left without its `:`.
-        if self.ts_as_written()
-            && let Expression::ParenthesizedExpression(group) = &it.consequent
-            && matches!(group.expression, Expression::Identifier(_))
-            && let Expression::ArrowFunctionExpression(arrow) = &it.alternate
-            && !arrow.r#async
-            && arrow.type_parameters.is_none()
-            && !self.span_text(arrow.span).starts_with('(')
-        {
-            let at = self.next_token(it.span.end);
-            self.error(at, "Unexpected token");
-        }
         walk::walk_conditional_expression(self, it);
     }
 
     fn visit_import_expression(&mut self, it: &ImportExpression<'a>) {
-        // acorn-typescript has no trailing comma in `import()`.
-        if self.ts_as_written() {
-            let last = it
-                .options
-                .as_ref()
-                .map_or(it.source.span().end, |o| o.span().end);
-            let after = self.next_token(last);
-            if self.text.as_bytes().get(after as usize) == Some(&b',') {
-                let close = self.next_token(after + 1);
-                self.error(close, "Unexpected token");
-            }
-        }
         walk::walk_import_expression(self, it);
     }
 
@@ -1227,7 +943,7 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
     }
 
     fn visit_class(&mut self, it: &Class<'a>) {
-        if it.declare && self.mode.transpiled {
+        if it.declare {
             return;
         }
         for decorator in &it.decorators {
@@ -1247,52 +963,6 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
             self.error(at, "Unexpected token");
         }
         let derived = it.heritage.is_some();
-        if self.ts_as_written() {
-            // An abstract class needs its name.
-            if it.r#abstract && it.id.is_none() {
-                self.error(it.body.span.start, "Unexpected token");
-            }
-            for element in &it.body.body {
-                let (is_abstract, is_override) = match element {
-                    ClassElement::MethodDefinition(m) => (
-                        m.r#type == MethodDefinitionType::TSAbstractMethodDefinition,
-                        m.r#override,
-                    ),
-                    ClassElement::PropertyDefinition(p) => (
-                        p.r#type == PropertyDefinitionType::TSAbstractPropertyDefinition,
-                        p.r#override,
-                    ),
-                    ClassElement::AccessorProperty(p) => (
-                        p.r#type == AccessorPropertyType::TSAbstractAccessorProperty,
-                        p.r#override,
-                    ),
-                    _ => (false, false),
-                };
-                // Raised once the member has been read, after any error
-                // in its modifiers.
-                let (start, end) = (element.span().start, element.span().end);
-                let after_member = |this: &mut Self, message: &str| {
-                    this.record(Candidate {
-                        detect: end,
-                        at: Position::At(start),
-                        message: message.to_string(),
-                        token_start: None,
-                    });
-                };
-                if is_abstract && !it.r#abstract {
-                    after_member(
-                        self,
-                        "Abstract methods can only appear within an abstract class.",
-                    );
-                }
-                if is_override && !derived {
-                    after_member(
-                        self,
-                        "This member cannot have an 'override' modifier because its containing class does not extend another class.",
-                    );
-                }
-            }
-        }
         self.classes.push(PrivateNames::default());
         let mut had_constructor = false;
         let mut previous = None;
@@ -1387,19 +1057,6 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
     }
 
     fn visit_for_of_statement(&mut self, it: &ForOfStatement<'a>) {
-        if self.ts_as_written()
-            && matches!(
-                it.left,
-                ForStatementLeft::TSAsExpression(_)
-                    | ForStatementLeft::TSSatisfiesExpression(_)
-                    | ForStatementLeft::TSTypeAssertion(_)
-            )
-        {
-            self.error(
-                it.left.span().start,
-                "Unexpected type cast in parameter position.",
-            );
-        }
         self.for_each(&it.left, &it.right, &it.body, "for-of");
     }
 
@@ -1477,7 +1134,7 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
     }
 
     fn visit_import_declaration(&mut self, it: &ImportDeclaration<'a>) {
-        if it.import_kind == ImportOrExportKind::Type && self.mode.transpiled {
+        if it.import_kind == ImportOrExportKind::Type {
             return;
         }
         if it.phase.is_some() {
@@ -1493,7 +1150,7 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
         for specifier in it.specifiers.iter().flatten() {
             let local = match specifier {
                 ImportDeclarationSpecifier::ImportSpecifier(s) => {
-                    if s.import_kind == ImportOrExportKind::Type && self.mode.transpiled {
+                    if s.import_kind == ImportOrExportKind::Type {
                         continue;
                     }
                     &s.local
@@ -1575,16 +1232,8 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
         walk::walk_unary_expression(self, it);
     }
 
-    fn visit_numeric_literal(&mut self, it: &NumericLiteral<'a>) {
-        // TypeScript's transpile prints legacy octal literals anew.
-        if self.mode.transpiled {
-            return;
-        }
-        let raw = self.span_text(it.span).as_bytes();
-        if raw.len() >= 2 && raw[0] == b'0' && raw[1].is_ascii_digit() {
-            self.error(it.span.start, "Invalid number");
-        }
-    }
+    // TypeScript's transpile prints legacy octal literals anew.
+    fn visit_numeric_literal(&mut self, _it: &NumericLiteral<'a>) {}
 
     fn visit_string_literal(&mut self, it: &StringLiteral<'a>) {
         self.check_string_escapes(it.span);
@@ -1725,27 +1374,14 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
         }
     }
 
-    fn visit_ts_interface_declaration(&mut self, it: &TSInterfaceDeclaration<'a>) {
-        if self.ts_as_written() {
-            self.declare(it.id.name.as_str(), Bind::TsInterface, it.id.span.start);
-        }
-    }
-
-    fn visit_ts_type_alias_declaration(&mut self, it: &TSTypeAliasDeclaration<'a>) {
-        if self.ts_as_written() {
-            self.declare(it.id.name.as_str(), Bind::TsType, it.id.span.start);
-        }
-    }
+    // TypeScript's transpile drops type declarations.
+    fn visit_ts_interface_declaration(&mut self, _it: &TSInterfaceDeclaration<'a>) {}
+    fn visit_ts_type_alias_declaration(&mut self, _it: &TSTypeAliasDeclaration<'a>) {}
 
     fn visit_ts_enum_declaration(&mut self, it: &TSEnumDeclaration<'a>) {
         // acorn-typescript declares nothing for an enum.
-        if self.mode.transpiled && !it.declare {
+        if !it.declare {
             self.transpiled_var(it.id.name.as_str(), it.id.span.start);
-        }
-        // It reads the enum's name as a binding and each initializer as
-        // an expression; a member's name is any word.
-        if self.ts_as_written() {
-            self.check_unreserved(it.id.name.as_str(), it.id.span.start);
         }
         for member in &it.body.members {
             if let Some(initializer) = &member.initializer {
@@ -1755,40 +1391,19 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
     }
 
     fn visit_ts_namespace_declaration(&mut self, it: &TSNamespaceDeclaration<'a>) {
-        if self.mode.transpiled {
-            if !crate::rules::transpile_positions::namespace_removed(it) {
-                self.transpiled_var(it.id.name.as_str(), it.id.span.start);
-                self.namespace_body(&it.body);
-            }
-            return;
-        }
-        // acorn-typescript declares a namespace like a `var`.
-        self.declare(it.id.name.as_str(), Bind::Var, it.id.span.start);
-        self.namespace_body(&it.body);
-    }
-
-    fn visit_ts_external_module_declaration(&mut self, it: &TSExternalModuleDeclaration<'a>) {
-        if self.mode.transpiled {
-            return;
-        }
-        if let Some(body) = &it.body {
-            self.push_scope(0);
-            self.visit_statements(&body.body);
-            self.pop_scope();
+        if !crate::rules::transpile_positions::namespace_removed(it) {
+            self.transpiled_var(it.id.name.as_str(), it.id.span.start);
+            self.namespace_body(&it.body);
         }
     }
 
-    fn visit_ts_global_declaration(&mut self, it: &TSGlobalDeclaration<'a>) {
-        if self.mode.transpiled {
-            return;
-        }
-        self.push_scope(0);
-        self.visit_statements(&it.body.body);
-        self.pop_scope();
-    }
+    // TypeScript's transpile drops `declare module` and `declare global`.
+    fn visit_ts_external_module_declaration(&mut self, _it: &TSExternalModuleDeclaration<'a>) {}
+
+    fn visit_ts_global_declaration(&mut self, _it: &TSGlobalDeclaration<'a>) {}
 
     fn visit_ts_import_equals_declaration(&mut self, it: &TSImportEqualsDeclaration<'a>) {
-        if it.import_kind == ImportOrExportKind::Type && self.mode.transpiled {
+        if it.import_kind == ImportOrExportKind::Type {
             return;
         }
         self.declare(it.id.name.as_str(), Bind::Lexical, it.id.span.start);
@@ -1868,49 +1483,8 @@ impl<'a> Checker<'_, 'a> {
             allow_direct_super: direct_super,
             ..Context::default()
         };
-        let modifiers_allowed = self.mode.ts;
         self.with_context(ctx, FUNCTION, |this| {
-            this.function_parts(
-                &f.params,
-                f.body.as_deref(),
-                f.span.start,
-                modifiers_allowed,
-            );
-        });
-        if f.body.is_none() {
-            self.leak_signature_scope(f);
-        }
-    }
-
-    /// acorn-typescript (as bundled with the compiler) enters a
-    /// function's scope before it knows the function has no body, and
-    /// never leaves it for an overload signature, a `declare function`
-    /// or an abstract method. Everything after it is read one scope
-    /// deeper: declared there, as if inside a plain function, until the
-    /// enclosing block's end closes this scope instead of its own.
-    fn leak_signature_scope(&mut self, f: &Function<'a>) {
-        if !self.ts_as_written() {
-            return;
-        }
-        let labels = self
-            .context()
-            .labels
-            .iter()
-            .map(|l| Label {
-                name: l.name,
-                kind: l.kind,
-            })
-            .collect();
-        self.scopes.push(Scope {
-            flags: FUNCTION,
-            context: Some(Context {
-                function: true,
-                is_async: f.r#async,
-                generator: f.generator,
-                labels,
-                ..Context::default()
-            }),
-            ..Scope::default()
+            this.function_parts(&f.params, f.body.as_deref(), f.span.start);
         });
     }
 
@@ -1946,22 +1520,6 @@ impl<'a> Checker<'_, 'a> {
                     self.declare_private(p.name.as_str(), state, p.span.start);
                 } else {
                     self.visit_property_key(&m.key);
-                }
-                // acorn-typescript counts a `this` parameter as one of
-                // an accessor's parameters.
-                if self.ts_as_written() && m.value.this_param.is_some() {
-                    match m.kind {
-                        MethodDefinitionKind::Get => {
-                            self.error(m.value.params.span.start, "getter should have no params");
-                        }
-                        MethodDefinitionKind::Set => {
-                            self.error(
-                                m.value.params.span.start,
-                                "setter should have exactly one param",
-                            );
-                        }
-                        _ => {}
-                    }
                 }
                 let ctor = m.kind == MethodDefinitionKind::Constructor;
                 self.method(&m.value, ctor && derived);
@@ -2031,10 +1589,7 @@ mod tests {
         let allocator = Allocator::default();
         let source_type = SourceType::default().with_module(true).with_typescript(ts);
         let parsed = Parser::new(&allocator, text, source_type).parse();
-        let mode = Mode {
-            ts,
-            transpiled: false,
-        };
+        let mode = Mode { ts };
         first_early_error(&parsed.program, text, mode).map(|c| {
             let at = match c.at {
                 Position::At(at) | Position::ColumnOf(at) => at,
@@ -2082,7 +1637,22 @@ mod tests {
     }
 
     #[test]
-    fn typescript_declarations() {
+    fn enums_and_namespaces_become_vars_when_transpiled() {
+        let ts = |t| first(t, true);
+        assert_eq!(
+            ts("enum E { A }\nlet E = 1;"),
+            Some((17, "Identifier 'E' has already been declared".into()))
+        );
+        assert_eq!(
+            ts("namespace N { export const a = 1; }\nlet N = 1;"),
+            Some((40, "Identifier 'N' has already been declared".into()))
+        );
+        // A namespace of types only prints nothing.
+        assert_eq!(ts("namespace T { export type X = 1; }\nlet T = 1;"), None);
+    }
+
+    #[test]
+    fn typescript_declarations_are_read_as_transpiled() {
         let ts = |t| first(t, true);
         assert_eq!(
             ts("function f(a: string): void;\nfunction f(a: any) {}"),
@@ -2090,18 +1660,10 @@ mod tests {
         );
         assert_eq!(ts("interface A {}\nclass A {}"), None);
         assert_eq!(ts("type A = 1;\nconst A = 1;"), None);
-        assert_eq!(
-            ts("type A = 1;\ntype A = 2;"),
-            Some((17, "type 'A' has already been declared.".into()))
-        );
-        assert_eq!(
-            ts("function N() {}\nnamespace N { export type X = 1; }"),
-            Some((26, "Identifier 'N' has already been declared".into()))
-        );
-        assert_eq!(
-            ts("declare let x: number;\nlet x = 1;"),
-            Some((27, "Identifier 'x' has already been declared".into()))
-        );
+        // Type declarations and `declare`d names are gone after the
+        // transpile.
+        assert_eq!(ts("type A = 1;\ntype A = 2;"), None);
+        assert_eq!(ts("declare let x: number;\nlet x = 1;"), None);
     }
 
     #[test]
@@ -2125,7 +1687,6 @@ mod tests {
             js("let x; delete x;"),
             Some((7, "Deleting local variable in strict mode".into()))
         );
-        assert_eq!(js("let o = 017;"), Some((8, "Invalid number".into())));
         assert_eq!(
             js("let s = '\\017';"),
             Some((9, "Octal literal in strict mode".into()))
@@ -2171,35 +1732,6 @@ mod tests {
                 "Cannot use 'arguments' in class field initializer".into()
             ))
         );
-    }
-
-    #[test]
-    fn modifiers_acorn_typescript_rejects() {
-        let ts = |t| first(t, true);
-        assert_eq!(
-            ts("function f(private a) {}"),
-            Some((11, "The keyword 'private' is reserved".into()))
-        );
-        assert_eq!(
-            ts("function f(readonly a) {}"),
-            Some((20, "Unexpected token".into()))
-        );
-        assert_eq!(ts("class K { constructor(private a) {} }"), None);
-        // `static accessor` is fine for acorn-typescript 1.0.13;
-        // `readonly accessor` is not.
-        assert_eq!(ts("class K { static accessor x = 1 }"), None);
-        assert_eq!(
-            ts("class K { readonly accessor x = 1 }"),
-            Some((
-                19,
-                "'accessor' modifier cannot be used with 'readonly' modifier.".into()
-            ))
-        );
-        assert_eq!(
-            ts("class K { public public x = 1 }"),
-            Some((24, "Accessibility modifier already seen.".into()))
-        );
-        assert_eq!(ts("using x = null;"), Some((6, "Unexpected token".into())));
     }
 
     #[test]

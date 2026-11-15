@@ -4,6 +4,54 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.1]
+
+Fixes found reviewing 1.12.0: bridge mode could fall out of step with
+its worker and exit 0, a few tag readings and `svelte-ignore` comment
+reads differed from the compiler, and some per-file work was repeated
+or ran serially.
+
+### Fixed
+
+- **`--svelte-warnings=bridge` no longer falls out of step with its
+  worker.** A component holding U+2028 or U+2029 reached the worker as
+  two broken requests, and every later reply answered the wrong file:
+  rejected components after it were dropped and the run could exit 0.
+  A reply the bridge cannot read now starts a fresh worker.
+- **`svelte-ignore` comments in template expressions are read only
+  where the compiler still has them**: not before parentheses, not
+  before an `{#each}` iterable the compiler unwraps from a cast or a
+  sequence, and not in a `bind:` getter/setter pair outside the two
+  bodies. A retried `{#each}` read reports its comment once per read,
+  as the compiler does.
+- **`svelte-ignore` before `<script>` / `<style>`** follows the
+  compiler's rule for which comment is kept, counts positions in UTF-16
+  units, and reports the compiler crash a runes-mode unknown code
+  causes there. Comments in snippet type parameters lead the node
+  acorn-typescript attaches them to.
+- **`<script>` / `<style>` tags are found as svelte2tsx and
+  svelte-check find them**, with the regex engine's backtracking: a
+  quoted value read again as an unquoted one (`<script x="a lang=ts"c>`)
+  no longer turns the script into template markup, and a failing
+  `<style>` tag with many attributes no longer takes exponential time.
+  `<script this this>` is accepted as the compiler accepts it.
+- The not-checked notice names only components our parser rejects, not
+  those svelte2tsx refuses (upstream leaves those out too).
+- The compiler's white-space set is used everywhere (U+FEFF counts,
+  U+0085 does not).
+- Unknown ARIA names and roles get the compiler's suggestions.
+- The language server's preprocessing hint also reads a top-level
+  `<template lang>`.
+
+### Changed
+
+- Each component script is parsed once per run and shared by lint,
+  emit and the import checks; the rejected-import checks share one
+  resolver and run in parallel; more per-file work runs on the thread
+  pool.
+- acorn-rs 0.2 (the published acorn / acorn-typescript port), oxc
+  0.158, TypeScript 7.1.0-dev.20261114.1 in the test setup.
+
 ## [1.12.0]
 
 Targets Svelte 5.57.3 (the pinned compiler checkout moves from 5.55.4).

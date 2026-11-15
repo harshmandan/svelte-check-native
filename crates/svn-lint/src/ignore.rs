@@ -5,8 +5,8 @@
 //! parsing + lax non-runes-mode parsing.
 
 use oxc_ast::AstKind;
-use oxc_ast::ast::{ArrayExpressionElement, Program, TemplateLiteral};
-use oxc_ast_visit::Visit;
+use oxc_ast::ast::{ArrayExpressionElement, ArrowFunctionExpression, Program, TemplateLiteral};
+use oxc_ast_visit::{Visit, walk};
 use oxc_span::{GetSpan, Span};
 use smol_str::SmolStr;
 use svn_core::Range;
@@ -111,95 +111,90 @@ pub fn comment_ignores_code(c: &Comment, code: Code, ctx: &mut LintContext<'_>) 
 fn extract_from_comment(c: &Comment, ctx: &mut LintContext<'_>) -> Vec<SmolStr> {
     let source = ctx.source;
     let data = c.data_range.slice(source);
-    let trimmed = data.trim_start();
-    let Some(rest) = trimmed.strip_prefix("svelte-ignore") else {
+    let Some(rest) = ignore_list(data) else {
         return Vec::new();
     };
-    let ws = match rest.chars().next() {
-        Some(ch) if ch.is_whitespace() => ch,
-        _ => return Vec::new(),
-    };
-    let rest_after_ws = &rest[ws.len_utf8()..];
-
-    // Byte offset of `rest_after_ws` inside the source — the Comment
-    // body starts after the `<!--` delimiter.
-    let comment_body_start = c.data_range.start;
-    // Offset within comment body where the trimmed "svelte-ignore "
-    // prefix ends and the code list begins.
-    let prefix_len = (data.len() - rest_after_ws.len()) as u32;
-    let tokens_start = comment_body_start + prefix_len;
-
-    parse_ignore_codes_emit(rest_after_ws, ctx, tokens_start)
+    // Where the code list begins in the source: the comment body starts
+    // after the `<!--` delimiter.
+    let tokens_start = c.data_range.start + (data.len() - rest.len()) as u32;
+    let runes = ctx.runes;
+    ignore_codes(rest, runes, |start, token| {
+        let range = Range::new(
+            tokens_start + start as u32,
+            tokens_start + (start + token.len()) as u32,
+        );
+        let (code, message) = bad_code_warning(token);
+        ctx.emit(code, message, range);
+    })
 }
 
-fn parse_ignore_codes_emit(
-    rest: &str,
-    ctx: &mut LintContext<'_>,
-    rest_base_offset: u32,
-) -> Vec<SmolStr> {
-    let mut out = Vec::new();
-    if ctx.runes {
-        // Mirrors upstream's `/([\w$-]+)(,)?/gm` loop: each token is
-        // processed (known → suppression list, unknown → warning),
-        // then parsing STOPS at the first token not immediately
-        // followed by a comma — everything after it is prose.
+/// The code list of a comment whose text is `data`: what follows the
+/// compiler's `/^\s*svelte-ignore\s/`, or `None` when it doesn't match.
+pub(crate) fn ignore_list(data: &str) -> Option<&str> {
+    let rest = data
+        .trim_start_matches(svn_parser::is_svelte_whitespace)
+        .strip_prefix("svelte-ignore")?;
+    let ws = rest
+        .chars()
+        .next()
+        .filter(|c| svn_parser::is_svelte_whitespace(*c))?;
+    Some(&rest[ws.len_utf8()..])
+}
+
+/// The warning the compiler raises for a `svelte-ignore` token that
+/// names no warning: `legacy_code` when its rename does, else
+/// `unknown_code` with the closest code as a suggestion.
+fn bad_code_warning(token: &str) -> (Code, String) {
+    let replacement = legacy_rename(token)
+        .map(str::to_string)
+        .unwrap_or_else(|| token.replace('-', "_"));
+    if is_known_code(&replacement) {
+        (
+            Code::legacy_code,
+            messages::legacy_code(token, &replacement),
+        )
+    } else {
+        (
+            Code::unknown_code,
+            messages::unknown_code(token, fuzzymatch_known_code(token)),
+        )
+    }
+}
+
+/// The suppression codes of a `svelte-ignore` code list (what follows
+/// `svelte-ignore `), as `extract_svelte_ignore` reads them. In runes
+/// mode the list is comma-separated and ends at the first token not
+/// immediately followed by a comma; a token that names no warning is
+/// passed to `bad` (with its offset in `rest`) and suppresses nothing.
+/// In legacy mode every word-ish token is a code, and a renamed code
+/// suppresses under both names.
+fn ignore_codes(rest: &str, runes: bool, mut bad: impl FnMut(usize, &str)) -> Vec<SmolStr> {
+    let mut out: Vec<SmolStr> = Vec::new();
+    let mut push = |code: &str| {
+        if !out.iter().any(|c| c == code) {
+            out.push(SmolStr::new(code));
+        }
+    };
+    if runes {
         for (start, token, followed_by_comma) in runes_ignore_tokens(rest) {
             if is_known_code(token) {
-                out.push(SmolStr::new(token));
+                push(token);
             } else {
-                // Upstream fires legacy_code / unknown_code but does
-                // NOT push the rewritten form into the ignore list —
-                // the user has to update their code to the new name
-                // for the suppression to take effect.
-                let token_abs_start = rest_base_offset + start as u32;
-                let token_abs_end = token_abs_start + token.len() as u32;
-                let replacement = legacy_rename(token)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| token.replace('-', "_"));
-                let range = Range::new(token_abs_start, token_abs_end);
-                if is_known_code(&replacement) {
-                    let msg = messages::legacy_code(token, &replacement);
-                    ctx.emit(Code::legacy_code, msg, range);
-                } else {
-                    let suggestion = fuzzymatch_known_code(token);
-                    let msg = messages::unknown_code(token, suggestion);
-                    ctx.emit(Code::unknown_code, msg, range);
-                }
+                bad(start, token);
             }
             if !followed_by_comma {
                 break;
             }
         }
     } else {
-        // Non-runes lax parsing — no warnings, same legacy-rename
-        // pushthrough.
-        let bytes = rest.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            while i < bytes.len() && !is_ident_char(bytes[i]) {
-                i += 1;
-            }
-            let start = i;
-            while i < bytes.len() && is_ident_char(bytes[i]) {
-                i += 1;
-            }
-            if start == i {
-                break;
-            }
-            let token = &rest[start..i];
-            let raw = SmolStr::new(token);
-            if !out.contains(&raw) {
-                out.push(raw);
-            }
+        for (_, token, _) in runes_ignore_tokens(rest) {
+            push(token);
             if !is_known_code(token) {
                 let mapped = legacy_rename(token)
                     .map(str::to_string)
                     .unwrap_or_else(|| token.replace('-', "_"));
                 if is_known_code(&mapped) {
-                    let sm = SmolStr::new(&mapped);
-                    if !out.contains(&sm) {
-                        out.push(sm);
-                    }
+                    push(&mapped);
                 }
             }
         }
@@ -208,80 +203,17 @@ fn parse_ignore_codes_emit(
 }
 
 /// Parse the tail of `svelte-ignore ` into the list of suppression
-/// codes. Builds the code list only — it does NOT emit any diagnostics.
-/// The `legacy_code` / `unknown_code` warnings for unknown or renamed
-/// codes are emitted separately by `parse_ignore_codes_emit`.
-/// - **runes mode**: strict, comma-separated.
-/// - **legacy mode**: lax; any word-ish token is a code.
+/// codes, reporting nothing (see [`ignore_codes`]).
 pub fn parse_ignore_codes_public(rest: &str, runes: bool) -> Vec<SmolStr> {
-    parse_ignore_codes(rest, runes)
+    ignore_codes(rest, runes, |_, _| {})
 }
 
-fn parse_ignore_codes(rest: &str, runes: bool) -> Vec<SmolStr> {
-    let mut out = Vec::new();
-    if runes {
-        // Must produce the SAME list as `parse_ignore_codes_emit`'s
-        // runes path (the authoritative one run during linting): each
-        // token is considered in turn, only KNOWN codes enter the
-        // suppression list (legacy/unknown codes are reported by the
-        // emit variant but do not suppress until renamed), and parsing
-        // stops at the first token not immediately followed by a comma.
-        for (_, token, followed_by_comma) in runes_ignore_tokens(rest) {
-            if is_known_code(token) {
-                let sm = SmolStr::new(token);
-                if !out.contains(&sm) {
-                    out.push(sm);
-                }
-            }
-            if !followed_by_comma {
-                break;
-            }
-        }
-    } else {
-        // Lax: any word-ish run.
-        let bytes = rest.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            // Skip non-word.
-            while i < bytes.len() && !is_ident_char(bytes[i]) {
-                i += 1;
-            }
-            let start = i;
-            while i < bytes.len() && is_ident_char(bytes[i]) {
-                i += 1;
-            }
-            if start == i {
-                break;
-            }
-            let token = &rest[start..i];
-            // Push the raw form so a user's legacy
-            // `<!-- svelte-ignore a11y-structure -->` ignores the legacy
-            // form (for upstream parity), then push the rewritten form too
-            // when it is a known code.
-            let raw = SmolStr::new(token);
-            if !out.contains(&raw) {
-                out.push(raw);
-            }
-            if !is_known_code(token) {
-                let mapped = legacy_rename(token)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| token.replace('-', "_"));
-                if is_known_code(&mapped) {
-                    let sm = SmolStr::new(&mapped);
-                    if !out.contains(&sm) {
-                        out.push(sm);
-                    }
-                }
-            }
-        }
-    }
-    out
-}
-
-/// The compiler's `/[\w$-]/` — ASCII only, so a multi-byte character
-/// ends a code rather than joining it.
-fn is_ident_char(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'$')
+/// Whether reading this code list reports a token that names no
+/// warning (runes mode only).
+pub(crate) fn ignore_list_has_bad_code(rest: &str, runes: bool) -> bool {
+    let mut found = false;
+    ignore_codes(rest, runes, |_, _| found = true);
+    found
 }
 
 /// The `svelte-ignore` comments of one script body or template
@@ -362,9 +294,13 @@ impl ScriptComments {
             .map(|c| {
                 let range = Range::new(from.base + c.span.start, from.base + c.span.end);
                 let text = range.slice(file);
+                if !text.contains("svelte-ignore") {
+                    return (Vec::new(), Vec::new());
+                }
                 (
                     comment_ignore_codes(text, runes),
                     comment_bad_codes(
+                        file,
                         text,
                         range.start,
                         runes,
@@ -491,7 +427,13 @@ pub(crate) struct PriorIgnores {
 /// and tabs opening the line the comment starts on — from the start of
 /// every line (the first included), and the positions it reports are
 /// offsets into that shortened value, counted from just past the `/*`.
-fn comment_bad_codes(text: &str, start: u32, runes: bool, indentation: &str) -> Vec<BadIgnoreCode> {
+fn comment_bad_codes(
+    file: &str,
+    text: &str,
+    start: u32,
+    runes: bool,
+    indentation: &str,
+) -> Vec<BadIgnoreCode> {
     if !runes {
         return Vec::new();
     }
@@ -500,52 +442,52 @@ fn comment_bad_codes(text: &str, start: u32, runes: bool, indentation: &str) -> 
     };
     if text.starts_with("/*") && value.contains('\n') {
         let value = strip_indentation(value, indentation);
-        bad_codes_in(&value, start + 2)
+        bad_codes_in(file, &value, start + 2)
     } else {
-        bad_codes_in(value, start + 2)
+        bad_codes_in(file, value, start + 2)
     }
 }
 
 /// The codes that name no warning in the `svelte-ignore` list of
-/// `value`, a comment's text, reporting each at `value_start` plus its
-/// offset in `value` — the compiler's `extract_svelte_ignore` in runes
-/// mode, which is told where the value starts.
-fn bad_codes_in(value: &str, value_start: u32) -> Vec<BadIgnoreCode> {
-    let Some(rest) = value.trim_start().strip_prefix("svelte-ignore") else {
+/// `value`, a comment's text, as the compiler's `extract_svelte_ignore`
+/// reports them in runes mode: at the position it is told the value
+/// starts at, `value_start` in `file`, plus the token's offset in
+/// `value`. That offset counts UTF-16 units of `value` — which may be
+/// shorter than the text in the file — so the position is found by
+/// counting the same number of units on through `file`.
+fn bad_codes_in(file: &str, value: &str, value_start: u32) -> Vec<BadIgnoreCode> {
+    let Some(rest) = ignore_list(value) else {
         return Vec::new();
     };
-    let Some(space) = rest.chars().next().filter(|c| c.is_whitespace()) else {
-        return Vec::new();
-    };
-    let rest = &rest[space.len_utf8()..];
-    let base = value_start + (value.len() - rest.len()) as u32;
+    let rest_at = value.len() - rest.len();
     let mut out = Vec::new();
-    for (at, token, followed_by_comma) in runes_ignore_tokens(rest) {
-        if !is_known_code(token) {
-            let token_start = base + at as u32;
-            let range = Range::new(token_start, token_start + token.len() as u32);
-            let replacement = legacy_rename(token)
-                .map(str::to_string)
-                .unwrap_or_else(|| token.replace('-', "_"));
-            out.push(if is_known_code(&replacement) {
-                BadIgnoreCode {
-                    code: Code::legacy_code,
-                    message: messages::legacy_code(token, &replacement),
-                    range,
-                }
-            } else {
-                BadIgnoreCode {
-                    code: Code::unknown_code,
-                    message: messages::unknown_code(token, fuzzymatch_known_code(token)),
-                    range,
-                }
-            });
-        }
-        if !followed_by_comma {
+    ignore_codes(rest, true, |at, token| {
+        let offset = value[..rest_at + at].encode_utf16().count();
+        let start = advance_utf16(file, value_start, offset);
+        let range = Range::new(start, advance_utf16(file, start, token.len()));
+        let (code, message) = bad_code_warning(token);
+        out.push(BadIgnoreCode {
+            code,
+            message,
+            range,
+        });
+    });
+    out
+}
+
+/// The byte offset `units` UTF-16 code units on from byte offset `from`
+/// in `file`, stopping at the end of the file.
+fn advance_utf16(file: &str, from: u32, units: usize) -> u32 {
+    let mut left = units;
+    let mut at = from as usize;
+    for c in file.get(at..).unwrap_or_default().chars() {
+        if left == 0 {
             break;
         }
+        left = left.saturating_sub(c.len_utf16());
+        at += c.len_utf8();
     }
-    out
+    at as u32
 }
 
 /// The spaces and tabs opening the line of `file` that a comment
@@ -612,38 +554,45 @@ pub(crate) fn style_comment_bad_codes(
     if !ctx.runes {
         return;
     }
-    let Some(comment) = comment_before_style(fragment, style_start, ctx.source) else {
+    let Some(comment) = comment_before_tag(fragment, style_start, ctx.source) else {
         return;
     };
-    for bad in bad_codes_in(comment.data_range.slice(ctx.source), comment.range.start) {
+    let data = comment.data_range.slice(ctx.source);
+    for bad in bad_codes_in(ctx.source, data, comment.range.start) {
         ctx.emit(bad.code, bad.message, bad.range);
     }
 }
 
-/// The comment the parser keeps for a top-level `<style>` opening at
-/// `style_start`: walking back from the tag over whitespace-only text,
-/// the first comment met. `<svelte:options>` is not in the template.
-fn comment_before_style<'f>(
+/// The comment the compiler's parser keeps for a top-level `<script>`
+/// or `<style>` whose tag opens at `tag_start` (`element.js`): the node
+/// right before the tag must end where it opens, and walking back over
+/// text that is white space once decoded, the first comment met. Any
+/// other node — `<svelte:options>` included, which is still in the
+/// template while the parser reads the tag — ends the walk.
+pub(crate) fn comment_before_tag<'f>(
     fragment: &'f Fragment,
-    style_start: u32,
+    tag_start: u32,
     source: &str,
 ) -> Option<&'f Comment> {
-    let mut cursor = style_start;
-    for node in fragment.nodes.iter().rev() {
-        let range = node.range();
-        if range.end > cursor {
-            continue;
-        }
-        // Our fragment leaves out the script and style sections, so the
-        // text around them may stop short of the tag.
-        let gap = source.get(range.end as usize..cursor as usize)?;
-        if !gap.trim().is_empty() {
-            return None;
-        }
+    let mut before = fragment
+        .nodes
+        .iter()
+        .rev()
+        .skip_while(|node| node.range().end > tag_start)
+        .peekable();
+    if before.peek()?.range().end != tag_start {
+        return None;
+    }
+    for node in before {
         match node {
             Node::Comment(c) => return Some(c),
-            Node::Text(t) if t.range.slice(source).trim().is_empty() => cursor = range.start,
-            _ if is_lifted_options(node) => cursor = range.start,
+            Node::Text(t)
+                if crate::html_decode::decode_character_references(
+                    t.range.slice(source),
+                    false,
+                )
+                .trim_matches(svn_parser::is_svelte_whitespace)
+                .is_empty() => {}
             _ => return None,
         }
     }
@@ -660,15 +609,8 @@ pub(crate) fn is_lifted_options(node: &Node) -> bool {
 /// included) carries; empty for any other comment.
 fn comment_ignore_codes(text: &str, runes: bool) -> Vec<SmolStr> {
     crate::scope_util::strip_comment_delimiters(text)
-        .and_then(|body| {
-            let rest = body.trim_start().strip_prefix("svelte-ignore")?;
-            match rest.chars().next() {
-                Some(ch) if ch.is_whitespace() => {
-                    Some(parse_ignore_codes(&rest[ch.len_utf8()..], runes))
-                }
-                _ => None,
-            }
-        })
+        .and_then(ignore_list)
+        .map(|rest| parse_ignore_codes_public(rest, runes))
         .unwrap_or_default()
 }
 
@@ -725,6 +667,7 @@ pub(crate) fn prior_script_ignores(
         // Read again as a leading comment of this script's first node,
         // a code that names no warning is warned about again.
         prior.bad_codes.extend(comment_bad_codes(
+            source,
             range.slice(source),
             range.start,
             runes,
@@ -1003,6 +946,29 @@ impl<'a> Visit<'a> for CommentAttacher<'_> {
         self.enter_node(kind);
         self.visit_expressions(&it.expressions);
         self.visit_template_elements(&it.quasis);
+        self.leave_node(kind);
+    }
+
+    /// acorn-typescript gives a non-async arrow function its
+    /// `returnType` first and its `typeParameters` last, so the walk
+    /// reaches the parameters before a comment among the type
+    /// parameters can lead anything there. An async arrow keeps oxc's
+    /// order.
+    fn visit_arrow_function_expression(&mut self, it: &ArrowFunctionExpression<'a>) {
+        if it.r#async {
+            walk::walk_arrow_function_expression(self, it);
+            return;
+        }
+        let kind = AstKind::ArrowFunctionExpression(self.alloc(it));
+        self.enter_node(kind);
+        if let Some(return_type) = &it.return_type {
+            self.visit_ts_type_annotation(return_type);
+        }
+        self.visit_formal_parameters(&it.params);
+        self.visit_arrow_function_body(&it.body);
+        if let Some(type_parameters) = &it.type_parameters {
+            self.visit_ts_type_parameter_declaration(type_parameters);
+        }
         self.leave_node(kind);
     }
 

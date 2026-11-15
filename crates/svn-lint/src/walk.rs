@@ -106,6 +106,10 @@ fn references_legacy_props(tree: &crate::scope::ScopeTree) -> bool {
     })
 }
 
+/// The error the compiler's locator throws when asked to place a
+/// position it does not have.
+const IMPOSSIBLE_SITUATION: &str = "An impossible situation occurred";
+
 /// Walk a full `.svelte` source and run every phase-enabled rule.
 ///
 /// Template parsing happens inline via `svn-parser`. Script parsing
@@ -117,7 +121,10 @@ pub fn walk(source: &str, path: &Path, runes: Option<bool>, ctx: &mut LintContex
     // attributes, unless the template before the tag already threw.
     if let Some((code, message, range)) = crate::parse_rejection::section_tag_error(&errors) {
         match crate::parse_errors::first_template_parse_error_at(&fragment, source) {
-            Some((_, finding)) if finding.range.start < range.start => {
+            // Where the parser throws, not where the error is shown:
+            // an exception, or an error shown at the file start, is
+            // still thrown only when the parser gets that far.
+            Some((at, finding)) if at < range.start => {
                 if finding.exception {
                     ctx.abort(&finding.message);
                 } else {
@@ -456,11 +463,40 @@ pub fn walk_parsed(
     // upstream's analyze pipeline surfaces them: after the options
     // warnings. The walk-time binding warnings (state_referenced_locally,
     // …) go among them, where the same walks raise them.
-    crate::rules::script_ast_rules::flush(
-        script_rule_events,
-        crate::rules::binding_rules::walk_time_warnings(ctx),
-        ctx,
-    );
+    // The module script is analysed before the instance script; the
+    // crash on a script's template ignore comment happens as the walk
+    // enters that script.
+    let comment_crashes = |script: Option<&svn_parser::ScriptSection<'_>>| {
+        script.is_some_and(|s| {
+            crate::scope::script_comment_crashes(
+                fragment,
+                source,
+                s.open_tag_range.start,
+                ctx.runes,
+            )
+        })
+    };
+    let module_crashes = comment_crashes(doc.module_script.as_ref());
+    let instance_crashes = !module_crashes && comment_crashes(doc.instance_script.as_ref());
+    if module_crashes {
+        ctx.abort(IMPOSSIBLE_SITUATION);
+    } else if instance_crashes {
+        let module = doc.module_script.as_ref().map(|s| s.content_range);
+        let module_events = script_rule_events
+            .into_iter()
+            .filter(|e| {
+                module.is_some_and(|m| m.start <= e.range().start && e.range().start < m.end)
+            })
+            .collect();
+        crate::rules::script_ast_rules::flush(module_events, Vec::new(), ctx);
+        ctx.abort(IMPOSSIBLE_SITUATION);
+    } else {
+        crate::rules::script_ast_rules::flush(
+            script_rule_events,
+            crate::rules::binding_rules::walk_time_warnings(ctx),
+            ctx,
+        );
+    }
 
     // Writes the script walks reject.
     crate::rules::binding_rules::visit(ctx);

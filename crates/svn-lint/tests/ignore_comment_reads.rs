@@ -292,3 +292,86 @@ fn snippet_parameter_and_const_tag_comments_are_read_once() {
         ]
     );
 }
+
+fn exception(source: &str) -> Option<String> {
+    svn_lint::lint_file_or_exception(
+        source,
+        Path::new("t.svelte"),
+        svn_lint::LintOptions::default(),
+        CompatFeatures::MODERN,
+    )
+    .1
+}
+
+/// The comment the parser keeps for a top-level `<script>` is handed to
+/// the script's program without a position. In runes mode a code in it
+/// that names no warning is warned about at that missing position, and
+/// the compiler throws placing it.
+#[test]
+fn a_bad_code_before_a_script_crashes_the_compiler_in_runes_mode() {
+    let crash = Some("An impossible situation occurred".to_string());
+    for source in [
+        "<svelte:options runes />\n<!-- svelte-ignore a11y-autofocus -->\n<script>let x = 1;</script>\n{x}\n",
+        "<svelte:options runes />\n<p>x</p>\n<!-- svelte-ignore bogus -->\n<script>let x = 1;</script>{x}\n",
+        // `<style>` is no node of the template: the script still gets
+        // the comment.
+        "<svelte:options runes /><!-- svelte-ignore bogus --><style>p{}</style>\n<script>let x=1</script>{x}\n",
+    ] {
+        assert_eq!(exception(source), crash, "{source}");
+    }
+    // `<svelte:options>` is still in the template while the parser reads
+    // the script, so it ends the walk back to the comment.
+    let options_between =
+        "<!-- svelte-ignore bogus --><svelte:options runes /><script>let x=1</script>{x}\n";
+    assert_eq!(exception(options_between), None);
+    assert_eq!(positions(options_between), ["unknown_code 1:20"]);
+}
+
+/// Positions inside a comment's text count UTF-16 units of the text the
+/// compiler was given, which may be shorter than the file's.
+#[test]
+fn bad_code_columns_count_utf16_units_of_the_text_read() {
+    assert_eq!(
+        positions(
+            "<svelte:options runes />\n<script>\n        /* svelte-ignore a11y_autofocus,\n        \u{e9}\u{e9} bogus_code */\n        let x = 1;\n</script>{x}\n"
+        ),
+        ["unknown_code 4:4"]
+    );
+    assert_eq!(
+        positions(
+            "<svelte:options runes />\n<p>x</p>\n<!-- svelte-ignore css_unused_selector,\u{e9} bogus -->\n<style>p{color:red}</style>\n"
+        ),
+        ["unknown_code 3:38"]
+    );
+}
+
+/// Text between the comment and the tag counts as white space once its
+/// character references are decoded.
+#[test]
+fn decoded_white_space_keeps_the_comment_before_a_tag() {
+    assert_eq!(
+        positions(
+            "<!-- svelte-ignore state_referenced_locally -->&#32;\n<script>let c = $state(0); const d = c;</script>{d}\n"
+        ),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        positions(
+            "<svelte:options runes />\n<p>x</p>\n<!-- svelte-ignore bogus -->&nbsp;\n<style>p{color:red}</style>\n"
+        ),
+        ["unknown_code 3:16"]
+    );
+}
+
+/// A snippet's head is read as an arrow function from its type
+/// parameters on. acorn-typescript gives the arrow its type parameters
+/// after its body, so a comment among them leads the first parameter.
+#[test]
+fn comments_in_snippet_type_parameters_lead_the_first_parameter() {
+    assert_eq!(
+        positions(
+            "<svelte:options runes /><script lang=\"ts\">let x=1;</script>\n{#snippet foo<T /* svelte-ignore bogus */>(a: T)}{a}{/snippet}\n{x}\n"
+        ),
+        ["unknown_code 2:34"]
+    );
+}

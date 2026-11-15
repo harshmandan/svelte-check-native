@@ -443,62 +443,39 @@ fn promote_to_bindable_prop(tree: &mut ScopeTree, root: ScopeId, name: &str) {
     }
 }
 
-/// Find the ONE template comment immediately preceding a `<script>`
-/// (whitespace-only text siblings allowed between) and return its
-/// `svelte-ignore` codes. Mirrors upstream's parser
-/// (`element.js:327-350`): it scans the fragment's nodes backward,
-/// takes the FIRST comment it meets, and stops — of two stacked
-/// comments only the nearest one bridges (verified against the
-/// compiler), and the bridge applies to module and instance scripts
-/// alike. Working off the parsed `Comment` nodes also keeps a body
-/// containing a literal `<!--` intact, which a textual backward
-/// scan for the opener would mis-pair.
+/// The `svelte-ignore` codes of the template comment the compiler's
+/// parser keeps for a `<script>` opening at `script_start` (see
+/// [`crate::ignore::comment_before_tag`]). The parser hands it to the
+/// script's program as a leading comment, so its codes apply to the
+/// whole script body.
 pub(crate) fn collect_preceding_template_ignores(
     fragment: Option<&svn_parser::ast::Fragment>,
     source: &str,
     script_start: u32,
     runes: bool,
 ) -> Vec<SmolStr> {
-    use svn_parser::ast::Node;
-    let Some(fragment) = fragment else {
-        return Vec::new();
-    };
-    let mut end = script_start;
-    for node in fragment.nodes.iter().rev() {
-        let r = node.range();
-        if r.end > end {
-            // Node at/after the script tag.
-            continue;
-        }
-        // The gap between this node and the cursor must be
-        // whitespace-only (the runs around the extracted script
-        // section aren't contiguous in our fragment).
-        let Some(gap) = source.get(r.end as usize..end as usize) else {
-            break;
-        };
-        if !gap.chars().all(char::is_whitespace) {
-            break;
-        }
-        match node {
-            Node::Comment(c) => {
-                let body = c.data_range.slice(source);
-                let trimmed = body.trim_start();
-                let Some(rest) = trimmed.strip_prefix("svelte-ignore") else {
-                    return Vec::new();
-                };
-                let rest = match rest.chars().next() {
-                    Some(ch) if ch.is_whitespace() => &rest[ch.len_utf8()..],
-                    _ => return Vec::new(),
-                };
-                return crate::ignore::parse_ignore_codes_public(rest, runes);
-            }
-            Node::Text(t) if t.range.slice(source).trim().is_empty() => {
-                end = r.start;
-            }
-            _ => break,
-        }
-    }
-    Vec::new()
+    fragment
+        .and_then(|fragment| crate::ignore::comment_before_tag(fragment, script_start, source))
+        .and_then(|c| crate::ignore::ignore_list(c.data_range.slice(source)))
+        .map(|rest| crate::ignore::parse_ignore_codes_public(rest, runes))
+        .unwrap_or_default()
+}
+
+/// Whether the compiler crashes on the template comment it keeps for a
+/// `<script>` opening at `script_start`. That comment is handed to the
+/// script's program as a leading comment with no position; in runes
+/// mode a code in it that names no warning is warned about at that
+/// missing position, and placing the warning throws "An impossible
+/// situation occurred" when the analysis reaches the script.
+pub(crate) fn script_comment_crashes(
+    fragment: &svn_parser::ast::Fragment,
+    source: &str,
+    script_start: u32,
+    runes: bool,
+) -> bool {
+    crate::ignore::comment_before_tag(fragment, script_start, source)
+        .and_then(|c| crate::ignore::ignore_list(c.data_range.slice(source)))
+        .is_some_and(|rest| crate::ignore::ignore_list_has_bad_code(rest, runes))
 }
 
 /// Like [`build`], but also walks the template fragment — capturing
@@ -1242,31 +1219,38 @@ impl TreeBuilder {
         drop(alloc);
     }
 
-    /// The compiler reads a snippet's parameters as the parameters of an
-    /// arrow function, attaching their comments as it does in any
-    /// expression; the codes naming no warning in the `svelte-ignore`
-    /// comments leading a parameter are reported in template order.
+    /// The compiler reads a snippet's head — its type parameters, when
+    /// it has them, and its parameters — as an arrow function, attaching
+    /// its comments as it does in any expression; the codes naming no
+    /// warning in the `svelte-ignore` comments leading a parameter are
+    /// reported in template order.
     fn snippet_parameter_ignore_codes(
         &mut self,
-        parameters: Range,
+        block: &svn_parser::SnippetBlock,
         source: &str,
         lang: svn_parser::document::ScriptLang,
     ) {
-        if !self.runes
-            || parameters.start == 0
-            || !parameters.slice(source).contains("svelte-ignore")
-        {
+        let parameters = block.parameters_range;
+        if !self.runes || parameters.start == 0 {
             return;
         }
-        let wrapped = format!("({}) => {{}}", parameters.slice(source));
+        // Where the arrow function starts: the `<` of the type
+        // parameters, or the `(`.
+        let head_start = block.generics_range.map_or(parameters.start, |g| g.start) - 1;
+        let Some(head) = source.get(head_start as usize..parameters.end as usize) else {
+            return;
+        };
+        if !head.contains("svelte-ignore") {
+            return;
+        }
+        let wrapped = format!("{head}) => {{}}");
         let alloc = oxc_allocator::Allocator::default();
         let parsed = parse_script_body(&alloc, &wrapped, lang);
         let mut comments = crate::ignore::ScriptComments::build(
             &parsed.program,
             &crate::ignore::CommentSource {
                 file: source,
-                // The `(` stands where the parser's own `(` does.
-                base: parameters.start - 1,
+                base: head_start,
                 blank_before: 0,
             },
             true,
@@ -1672,11 +1656,8 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
     /// references resolve to the snippet rather than to a same-named
     /// script binding.
     fn visit_snippet_block(&mut self, block: &svn_parser::SnippetBlock) {
-        self.builder.snippet_parameter_ignore_codes(
-            block.parameters_range,
-            self.ctx.source,
-            self.ctx.lang,
-        );
+        self.builder
+            .snippet_parameter_ignore_codes(block, self.ctx.source, self.ctx.lang);
         let Some(range) = snippet_name_range(block, self.ctx.source) else {
             return;
         };

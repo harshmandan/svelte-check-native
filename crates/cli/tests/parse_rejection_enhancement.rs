@@ -745,3 +745,45 @@ fn imports_are_followed_through_rejected_components() {
     );
     assert!(completed.starts_with("COMPLETED 3 FILES"), "{completed}");
 }
+
+/// `export *` in a rejected component's script names what the module's
+/// types export, as TypeScript reads them: a package's `types` before
+/// its CommonJS `main`, and a `.js` specifier reaching the `.ts` beside
+/// it.
+#[test]
+fn export_star_reads_the_modules_types() {
+    let dir = workspace(&[
+        (
+            "src/main.ts",
+            "import { fromPkg, fromTs, missing } from \"./Bad.svelte\";\nvoid [fromPkg, fromTs, missing];\n",
+        ),
+        (
+            "src/ambient.d.ts",
+            "declare module '*.svelte' {\n  const component: any;\n  export default component;\n}\n",
+        ),
+        (
+            "src/Bad.svelte",
+            "<script lang=\"ts\">\n  export * from \"pkg\";\n  export * from \"./local.js\";\n</script>\n<div>\n",
+        ),
+        ("src/local.ts", "export const fromTs = 1;\n"),
+        (
+            "node_modules/pkg/package.json",
+            r#"{ "name": "pkg", "main": "index.js", "types": "index.d.ts" }"#,
+        ),
+        ("node_modules/pkg/index.js", "exports.fromPkg = 1;\n"),
+        (
+            "node_modules/pkg/index.d.ts",
+            "export declare const fromPkg: number;\n",
+        ),
+    ]);
+    let (diagnostics, _) = check(dir.path(), &[]);
+    let found: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["filename"] == "src/main.ts")
+        .map(|d| d["message"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(
+        found,
+        ["Module '\"./Bad.svelte\"' has no exported member 'missing'."]
+    );
+}

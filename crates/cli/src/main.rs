@@ -2194,6 +2194,18 @@ fn check_project(
     // TSGO-ENHANCEMENT: the stub files written for those modules, whose
     // TS2306 "is not a module" is dropped after tsgo.
     let mut module_stub_paths: Vec<PathBuf> = Vec::new();
+    // TSGO-ENHANCEMENT: shared `.svelte`-import resolver, built once
+    // (tsconfig `paths` + node_modules + `exports`) and borrowed by the
+    // per-file pass below and the rejected-component checks after tsgo.
+    // Reports no missing import when `--disable-enhance` /
+    // `SVN_DISABLE_ENHANCE` is set, or when the workspace declares its
+    // own `*.svelte` wildcard.
+    let svelte_import_resolver = if disable_enhance {
+        svn_enhance::SvelteImportResolver::disabled()
+    } else {
+        svn_enhance::SvelteImportResolver::new(workspace, tsconfig)
+    };
+    let svelte_import_resolver_ref = &svelte_import_resolver;
     {
         // TSGO-ENHANCEMENT: the modules behind those TS2307s, stubbed
         // before tsgo runs so svelte's `*.svelte` wildcard doesn't type them.
@@ -2213,17 +2225,6 @@ fn check_project(
             session.set_path_aliases(svn_enhance::package_import_aliases(tsconfig));
         }
         let session_ref = &session;
-        // TSGO-ENHANCEMENT: shared `.svelte`-import resolver, built once
-        // (tsconfig `paths` + node_modules + `exports`) and borrowed by the
-        // per-file pass below. Holds a disabled state — reporting nothing —
-        // when `--disable-enhance`/`SVN_DISABLE_ENHANCE` is set, or when the
-        // workspace declares its own `*.svelte` wildcard.
-        let svelte_import_resolver = if disable_enhance {
-            svn_enhance::SvelteImportResolver::disabled()
-        } else {
-            svn_enhance::SvelteImportResolver::new(workspace, tsconfig)
-        };
-        let svelte_import_resolver_ref = &svelte_import_resolver;
         // Per-file parse → analyze → emit is pure compute with no shared
         // mutable state (each iteration owns its own oxc Allocator inside
         // the called functions); the trailing `prepare` call writes only
@@ -2612,7 +2613,7 @@ fn check_project(
             let mut importers = program_files.clone();
             importers.extend(rejected_inside.iter().cloned());
             let imported: std::collections::HashSet<PathBuf> = svn_enhance::components_imported_by(
-                tsconfig,
+                svelte_import_resolver_ref,
                 &importers,
                 &rejected_inside,
                 &rejected_outside,
@@ -2662,8 +2663,12 @@ fn check_project(
                 .into_iter()
                 .filter(|(p, _)| rejections_reported.contains(p))
                 .collect();
-            let at_imports =
-                svn_enhance::rejected_import_diagnostics(tsconfig, &program_files, &reported);
+            let at_imports = svn_enhance::rejected_import_diagnostics(
+                svelte_import_resolver_ref,
+                tsconfig,
+                &program_files,
+                &reported,
+            );
             // A `// @ts-expect-error` above such an import has its error
             // now; the compiler saw none there and called it unused.
             if !at_imports.satisfied_expectations.is_empty() {

@@ -74,6 +74,7 @@ use oxc_resolver::{
     ResolveOptions, Resolver, TsconfigDiscovery, TsconfigOptions, TsconfigReferences,
 };
 use oxc_span::{GetSpan, SourceType};
+use rayon::prelude::*;
 use svn_core::{PositionMap, Range};
 use svn_parser::{Document, Fragment};
 
@@ -135,13 +136,18 @@ pub fn module_stubs(
 }
 
 /// A shared `.svelte`-import resolver, built once per run and passed by
-/// reference into the per-file pass (the inner resolver is thread-safe).
+/// reference into the per-file pass and the rejected-component checks
+/// after tsgo (the inner resolver is thread-safe and caches what it has
+/// read of the file system).
 ///
-/// Holds `None` — disabling the whole check — when the workspace declares
-/// its own `declare module '*.svelte'` wildcard (see the module docs' "The
-/// ambient guard").
+/// Reports no missing import when the workspace declares its own
+/// `declare module '*.svelte'` wildcard (see the module docs' "The
+/// ambient guard"); the rejected-component checks still resolve with it.
 pub struct SvelteImportResolver {
-    inner: Option<Resolver>,
+    /// `None` under the kill-switch.
+    resolver: Option<Resolver>,
+    /// Whether missing imports are reported.
+    reports: bool,
     /// The program's `checkJs`; `None` when the tsconfig chain leaves it
     /// unset, which TypeScript treats differently from `false` only for
     /// diagnostics this check never produces (see
@@ -155,7 +161,8 @@ impl SvelteImportResolver {
     /// `SVN_DISABLE_ENHANCE` env kill-switch. Skips even the workspace scan.
     pub fn disabled() -> Self {
         Self {
-            inner: None,
+            resolver: None,
+            reports: false,
             check_js: None,
             skip_lib_check: false,
         }
@@ -164,21 +171,26 @@ impl SvelteImportResolver {
     /// `false` when the check reports nothing — the kill-switch or the
     /// ambient guard — so a caller can skip reading files for it.
     pub fn is_enabled(&self) -> bool {
-        self.inner.is_some()
+        self.reports
+    }
+
+    /// The resolver itself, for the checks that run whatever the ambient
+    /// guard says; `None` under the kill-switch.
+    pub(crate) fn resolver(&self) -> Option<&Resolver> {
+        self.resolver.as_ref()
     }
 
     /// Build the resolver from the user's `tsconfig` (for `paths`/`baseUrl`)
     /// and workspace (for the ambient-wildcard guard).
     pub fn new(workspace: &Path, tsconfig: &Path) -> Self {
-        if any_wildcard_in_scope(workspace, tsconfig) {
-            return Self::disabled();
-        }
+        let reports = !any_wildcard_in_scope(workspace, tsconfig);
         let compiler_options = svn_core::tsconfig::load(tsconfig)
             .map(|config| config.compiler_options)
             .unwrap_or_default();
         let options = resolve_options(tsconfig);
         Self {
-            inner: Some(Resolver::new(options)),
+            resolver: Some(Resolver::new(options)),
+            reports,
             check_js: compiler_options.check_js,
             skip_lib_check: compiler_options.skip_lib_check.unwrap_or(false),
         }
@@ -188,7 +200,7 @@ impl SvelteImportResolver {
     /// A disabled resolver (ambient guard tripped) reports everything as
     /// resolvable, so nothing fires.
     fn resolves(&self, dir: &Path, specifier: &str) -> bool {
-        match &self.inner {
+        match self.resolver.as_ref().filter(|_| self.reports) {
             None => true,
             Some(resolver) => {
                 resolver.resolve(dir, specifier).is_ok()
@@ -256,7 +268,7 @@ pub fn missing_svelte_import_diagnostics(
     fragment: &Fragment,
     resolver: &SvelteImportResolver,
 ) -> MissingImports {
-    if resolver.inner.is_none() || !source.contains(".svelte") {
+    if !resolver.reports || !source.contains(".svelte") {
         return MissingImports::default();
     }
     let is_ts = svn_parser::is_ts_svelte(source);
@@ -300,7 +312,7 @@ pub fn missing_svelte_import_diagnostics_in_script(
 ) -> MissingImports {
     // The early-outs skip the parse for the common file that imports no
     // component at all.
-    if resolver.inner.is_none() || !source.contains(".svelte") {
+    if !resolver.reports || !source.contains(".svelte") {
         return MissingImports::default();
     }
     let Ok(source_type) = SourceType::from_path(file) else {
@@ -335,38 +347,33 @@ pub fn missing_svelte_import_diagnostics_in_script(
 /// script the language server falls back to (the instance script, else
 /// the module script), so only that script's imports are followed.
 pub fn components_imported_by(
-    tsconfig: &Path,
+    resolver: &SvelteImportResolver,
     program_files: &[PathBuf],
     rejected: &[PathBuf],
     components: &[PathBuf],
 ) -> Vec<PathBuf> {
+    let Some(resolver) = resolver.resolver() else {
+        return Vec::new();
+    };
     if components.is_empty() {
         return Vec::new();
     }
-    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     let wanted: HashSet<PathBuf> = components.iter().map(|c| canonical(c)).collect();
     let fallback_only: HashSet<PathBuf> = rejected
         .iter()
         .map(|c| canonical(c))
         .chain(wanted.iter().cloned())
         .collect();
-    let resolver = Resolver::new(resolve_options(tsconfig));
-    let mut imported: HashSet<PathBuf> = HashSet::new();
-    // A component found this way is a file of the program too, and what
-    // it imports is followed like any other file's imports.
-    let mut files: Vec<PathBuf> = program_files.to_vec();
-    let mut next = 0;
-    while let Some(file) = files.get(next).cloned() {
-        next += 1;
-        let file = &file;
+    // The components among `components` that `file` imports.
+    let imports_of = |file: &Path| -> Vec<PathBuf> {
         if file.components().any(|c| c.as_os_str() == "node_modules") {
-            continue;
+            return Vec::new();
         }
         let Ok(source) = std::fs::read_to_string(file) else {
-            continue;
+            return Vec::new();
         };
         if !source.contains(".svelte") {
-            continue;
+            return Vec::new();
         }
         let refs = if file.extension().is_some_and(|e| e == "svelte") {
             let (doc, _) = svn_parser::parse_sections(&source);
@@ -380,19 +387,33 @@ pub fn components_imported_by(
             }
         } else {
             let Ok(source_type) = SourceType::from_path(file) else {
-                continue;
+                return Vec::new();
             };
             let allocator = Allocator::default();
             let parsed = Parser::new(&allocator, &source, source_type).parse();
             svelte_refs::collect_module(&parsed.program, source_type.is_javascript())
         };
         let dir = file.parent().unwrap_or_else(|| Path::new("."));
-        for r in refs {
-            if let Ok(resolution) = resolver.resolve(dir, &r.specifier) {
-                let target = canonical(resolution.path());
-                if wanted.contains(&target) && imported.insert(target.clone()) {
-                    files.push(target);
-                }
+        refs.iter()
+            .filter_map(|r| resolver.resolve(dir, &r.specifier).ok())
+            .map(|resolution| canonical(resolution.path()))
+            .filter(|target| wanted.contains(target))
+            .collect()
+    };
+    // A component found this way is a file of the program too, and what
+    // it imports is followed like any other file's imports.
+    let mut imported: HashSet<PathBuf> = HashSet::new();
+    let mut pending: Vec<PathBuf> = Vec::new();
+    let found: Vec<Vec<PathBuf>> = program_files.par_iter().map(|f| imports_of(f)).collect();
+    for target in found.into_iter().flatten() {
+        if imported.insert(target.clone()) {
+            pending.push(target);
+        }
+    }
+    while let Some(file) = pending.pop() {
+        for target in imports_of(&file) {
+            if imported.insert(target.clone()) {
+                pending.push(target);
             }
         }
     }
@@ -401,6 +422,12 @@ pub fn components_imported_by(
         .filter(|c| imported.contains(&canonical(c)))
         .cloned()
         .collect()
+}
+
+/// The path with its symbolic links resolved, written as the rest of
+/// the run writes paths (no `\\?\` prefix on Windows).
+pub(crate) fn canonical(path: &Path) -> PathBuf {
+    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Turn the collected specifiers of one file into `TS2307`s, and stub
@@ -703,8 +730,6 @@ fn is_skipped_scan_dir(name: &str) -> bool {
 }
 
 fn subtree_declares_svelte_wildcard(dir: &Path) -> bool {
-    use rayon::prelude::*;
-
     let Ok(read) = std::fs::read_dir(dir) else {
         return false;
     };

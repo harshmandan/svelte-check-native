@@ -23,11 +23,13 @@ use oxc_ast::ast::{Declaration, ModuleDeclaration, Program, Statement};
 use oxc_parser::Parser;
 use oxc_resolver::Resolver;
 use oxc_span::SourceType;
+use rayon::prelude::*;
 use svn_core::{PositionMap, Range};
 use svn_parser::ScriptLang;
 
 use crate::missing_svelte_imports::{
-    EnhancementDiagnostic, component_is_type_checked, resolve_options, script_is_type_checked,
+    EnhancementDiagnostic, SvelteImportResolver, canonical, component_is_type_checked,
+    resolve_options, script_is_type_checked,
 };
 use crate::svelte_refs::{self, SvelteImportRef};
 
@@ -193,10 +195,14 @@ fn comment_directive(
 /// The diagnostics at every import, in a file of `program_files`, of one
 /// of the `rejected` components (path and source).
 pub fn rejected_import_diagnostics(
+    resolver: &SvelteImportResolver,
     tsconfig: &Path,
     program_files: &[PathBuf],
     rejected: &[(PathBuf, String)],
 ) -> RejectedImports {
+    let Some(resolver) = resolver.resolver() else {
+        return RejectedImports::default();
+    };
     if rejected.is_empty() {
         return RejectedImports::default();
     }
@@ -219,46 +225,86 @@ pub fn rejected_import_diagnostics(
                 Some(svn_core::tsconfig::ModuleResolution::Bundler)
             ),
     );
-    let resolver = Resolver::new(resolve_options(tsconfig));
+    // What an `export *` in a fallback script names is read from the
+    // module's types, as TypeScript reads it.
+    let types_resolver = resolver.clone_with_options(type_resolve_options(tsconfig));
     let fallbacks: HashMap<PathBuf, Fallback> = rejected
-        .iter()
+        .par_iter()
         .map(|(path, source)| {
             let path = canonical(path);
-            let fallback = fallback(&path, source, &resolver);
+            let fallback = fallback(&path, source, &types_resolver);
             (path, fallback)
         })
         .collect();
 
+    let mut seen: HashSet<&Path> = HashSet::new();
+    let files: Vec<&PathBuf> = program_files
+        .iter()
+        .filter(|file| {
+            seen.insert(file) && !file.components().any(|c| c.as_os_str() == "node_modules")
+        })
+        .collect();
+    let per_file: Vec<RejectedImports> = files
+        .par_iter()
+        .map(|file| {
+            file_diagnostics(
+                file,
+                resolver,
+                &fallbacks,
+                &options,
+                force_modules,
+                synthetic_defaults,
+            )
+        })
+        .collect();
+    let mut all = RejectedImports::default();
+    for found in per_file {
+        all.diagnostics.extend(found.diagnostics);
+        all.satisfied_expectations
+            .extend(found.satisfied_expectations);
+        all.judged_names.extend(found.judged_names);
+    }
+    all
+}
+
+/// [`rejected_import_diagnostics`] for one file of the program.
+fn file_diagnostics(
+    file: &Path,
+    resolver: &Resolver,
+    fallbacks: &HashMap<PathBuf, Fallback>,
+    options: &svn_core::tsconfig::CompilerOptions,
+    force_modules: bool,
+    synthetic_defaults: bool,
+) -> RejectedImports {
     let mut out = Vec::new();
     let mut satisfied_expectations = Vec::new();
     let mut judged_names = Vec::new();
-    let mut seen: HashSet<&Path> = HashSet::new();
-    for file in program_files {
-        if !seen.insert(file) || file.components().any(|c| c.as_os_str() == "node_modules") {
-            continue;
-        }
+    {
         let Ok(source) = std::fs::read_to_string(file) else {
-            continue;
+            return RejectedImports::default();
         };
         if !source.contains(".svelte") {
-            continue;
+            return RejectedImports::default();
         }
         // TypeScript reports nothing in a declaration file it was told
         // not to check.
         if options.skip_lib_check == Some(true)
             && crate::missing_svelte_imports::is_declaration_file(file)
         {
-            continue;
+            return RejectedImports::default();
         }
         let Some(refs) = checked_refs(file, &source, options.check_js) else {
-            continue;
+            return RejectedImports::default();
         };
+        let file = file.to_path_buf();
         let dir = file.parent().unwrap_or_else(|| Path::new("."));
         let pm = PositionMap::new(&source);
-        let directives = comment_directives(file, &source);
+        // Read only when an import here names a rejected component.
+        let directives = std::cell::OnceCell::new();
         let mut push = |start: u32, end: u32, code: u32, message: String| {
+            let directives = directives.get_or_init(|| comment_directives(&file, &source));
             // A comment directive above the line takes the error.
-            match comment_directive(&source, &directives, start) {
+            match comment_directive(&source, directives, start) {
                 Some((line, true)) => {
                     satisfied_expectations.push((file.clone(), line + 1));
                     return;
@@ -392,10 +438,28 @@ pub fn rejected_import_diagnostics(
     }
 }
 
-/// The path with its symbolic links resolved, written as the rest of
-/// the run writes paths (no `\\?\` prefix on Windows).
-fn canonical(path: &Path) -> PathBuf {
-    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+/// [`resolve_options`] reading a package's types, as TypeScript does:
+/// its `types` / `typings` field before `main`, and a `.js` specifier
+/// reaching the `.ts` or `.d.ts` beside it.
+fn type_resolve_options(tsconfig: &Path) -> oxc_resolver::ResolveOptions {
+    let alias = |js: &str, ts: &[&str]| {
+        (
+            js.to_string(),
+            ts.iter().map(|e| (*e).to_string()).collect::<Vec<_>>(),
+        )
+    };
+    oxc_resolver::ResolveOptions {
+        main_fields: ["types", "typings", "main"]
+            .iter()
+            .map(|f| (*f).to_string())
+            .collect(),
+        extension_alias: vec![
+            alias(".js", &[".ts", ".tsx", ".d.ts", ".js"]),
+            alias(".mjs", &[".mts", ".d.mts", ".mjs"]),
+            alias(".cjs", &[".cts", ".d.cts", ".cjs"]),
+        ],
+        ..resolve_options(tsconfig)
+    }
 }
 
 /// The `.svelte` imports of a file the compiler type-checks.
@@ -705,7 +769,9 @@ fn exports(
                     let source_type = SourceType::from_path(&target).ok()?;
                     let allocator = Allocator::default();
                     let parsed = Parser::new(&allocator, &source, source_type).parse();
-                    if parsed.fatal_error {
+                    // A script with no module syntax (CommonJS, say)
+                    // exports what this can't read.
+                    if parsed.fatal_error || !has_module_syntax(&parsed.program) {
                         return None;
                     }
                     let target_dir = target.parent().unwrap_or_else(|| Path::new("."));

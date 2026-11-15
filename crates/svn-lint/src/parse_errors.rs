@@ -79,7 +79,7 @@ struct Finder<'s> {
     source: &'s str,
     /// The source as acorn reads it, prepared when the first expression
     /// is read with the whole template in view.
-    acorn_text: std::cell::OnceCell<svn_acorn::Text>,
+    acorn_text: std::cell::OnceCell<acorn_rs::Text>,
     ts: bool,
     /// The earliest finding so far, keyed by where the parser throws it.
     found: Option<(u32, ParseFinding)>,
@@ -88,9 +88,9 @@ struct Finder<'s> {
 }
 
 impl Finder<'_> {
-    fn acorn_text(&self) -> &svn_acorn::Text {
+    fn acorn_text(&self) -> &acorn_rs::Text {
         self.acorn_text
-            .get_or_init(|| svn_acorn::Text::new(self.source))
+            .get_or_init(|| acorn_rs::Text::new(self.source))
     }
 
     fn report(&mut self, at: u32, code: Code, message: String, range: Range) {
@@ -117,9 +117,9 @@ impl Finder<'_> {
     /// then shows.
     fn each_iterable_breaks(&mut self, start: u32) -> bool {
         let language = if self.ts {
-            svn_acorn::Language::TypeScript
+            acorn_rs::Language::TypeScript
         } else {
-            svn_acorn::Language::JavaScript
+            acorn_rs::Language::JavaScript
         };
         let mut end = self.source.len();
         loop {
@@ -129,7 +129,7 @@ impl Finder<'_> {
             let read = if end == self.source.len() {
                 self.acorn_text().parse_expression_at(start, language)
             } else {
-                svn_acorn::parse_expression_within(self.source, start, end as u32, language)
+                acorn_rs::parse_expression_within(self.source, start, end as u32, language)
             };
             let error = match read {
                 Ok(_) => return false,
@@ -139,7 +139,7 @@ impl Finder<'_> {
                 break;
             }
             let at = if error.column_of {
-                svn_acorn::column_as_offset_from(self.source, start, error.pos)
+                acorn_rs::column_as_offset_from(self.source, start, error.pos)
             } else {
                 error.pos
             };
@@ -221,12 +221,12 @@ impl Finder<'_> {
         // pattern, a parameter list or a statement in the text the
         // compiler builds around it.
         let language = if self.ts {
-            svn_acorn::Language::TypeScript
+            acorn_rs::Language::TypeScript
         } else {
-            svn_acorn::Language::JavaScript
+            acorn_rs::Language::JavaScript
         };
         let result = match read.shape {
-            AcornReadShape::Expression => svn_acorn::parse_expression_within(
+            AcornReadShape::Expression => acorn_rs::parse_expression_within(
                 self.source,
                 read.range.start,
                 read.range.end,
@@ -239,7 +239,7 @@ impl Finder<'_> {
             // the pattern is left out, and the offsets moved back.
             AcornReadShape::Pattern => {
                 let pattern = format!("{} = 1", read.range.slice(self.source));
-                svn_acorn::parse_expression_at(&pattern, 0, language).map_err(|mut error| {
+                acorn_rs::parse_expression_at(&pattern, 0, language).map_err(|mut error| {
                     error.pos += read.range.start;
                     error
                 })
@@ -247,9 +247,9 @@ impl Finder<'_> {
             shape => {
                 let (wrapped, origin) = read.wrapped(self.source);
                 let result = if shape == AcornReadShape::Statement {
-                    svn_acorn::parse_statement_at(&wrapped, 0, language)
+                    acorn_rs::parse_statement_at(&wrapped, 0, language)
                 } else {
-                    svn_acorn::parse_expression_at(&wrapped, 0, language)
+                    acorn_rs::parse_expression_at(&wrapped, 0, language)
                 };
                 result.map_err(|mut error| {
                     error.pos += origin;
@@ -281,7 +281,7 @@ impl Finder<'_> {
         // The compiler's read starts where this one does, in the template
         // or in text that keeps the template before it.
         let at = if error.column_of {
-            svn_acorn::column_as_offset_from(self.source, read.range.start, error.pos)
+            acorn_rs::column_as_offset_from(self.source, read.range.start, error.pos)
         } else {
             error.pos
         };

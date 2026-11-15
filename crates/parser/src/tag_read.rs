@@ -490,9 +490,9 @@ impl<'s> TagReader<'s> {
                 // taken for an offset, which the compiler cuts an each
                 // block's iterable at; the column counts from the line the
                 // read started on in the template.
-                let at = match svn_acorn::read_expression(text, self.language()) {
+                let at = match acorn_rs::read_expression(text, self.language()) {
                     Err(error) if error.column_of => {
-                        svn_acorn::column_as_offset_from(self.source, start, start + error.pos)
+                        acorn_rs::column_as_offset_from(self.source, start, start + error.pos)
                     }
                     _ => start + at,
                 };
@@ -506,11 +506,11 @@ impl<'s> TagReader<'s> {
         }
     }
 
-    fn language(&self) -> svn_acorn::Language {
+    fn language(&self) -> acorn_rs::Language {
         if self.ts {
-            svn_acorn::Language::TypeScript
+            acorn_rs::Language::TypeScript
         } else {
-            svn_acorn::Language::JavaScript
+            acorn_rs::Language::JavaScript
         }
     }
 
@@ -902,12 +902,12 @@ impl<'s> TagReader<'s> {
             shape: AcornReadShape::Statement,
         };
         let language = if self.ts {
-            svn_acorn::Language::TypeScript
+            acorn_rs::Language::TypeScript
         } else {
-            svn_acorn::Language::JavaScript
+            acorn_rs::Language::JavaScript
         };
         let template = self.template();
-        let end = match svn_acorn::parse_statement_at(template, start, language) {
+        let end = match acorn_rs::parse_statement_at(template, start, language) {
             Ok(end) => end,
             // A statement the template ends inside is the compiler's
             // `unexpected_eof`, not acorn's error.

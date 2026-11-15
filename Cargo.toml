@@ -5,7 +5,6 @@ members = [
     "crates/parser",
     "crates/analyze",
     "crates/emit",
-    "crates/acorn",
     "crates/svn-lint",
     "crates/svelte-compiler",
     "crates/typecheck",
@@ -70,8 +69,9 @@ json5 = "1"
 # classification for the destructure/typeof helpers (matches the JS
 # spec rather than the ASCII-only approximation).
 unicode-ident = "1"
-# Grows the stack on demand: the acorn port recurses as deep as its input nests.
-stacker = "0.1"
+# acorn and @sveltejs/acorn-typescript ported to Rust: syntax errors exactly as
+# the Svelte compiler's parser raises them (github.com/harshmandan/acorn-rs).
+acorn-rs = "0.1"
 
 # CLI
 clap = { version = "4", features = ["derive"] }

@@ -110,7 +110,7 @@ pub(crate) fn script_parse_error(
             // acorn reads the script with the text before it blanked
             // to spaces, its `\n`s kept: the column counts from the last
             // `\n` before the script, or from a break inside it.
-            Position::ColumnOf(rel) => svn_acorn::column_as_offset_from(source, base, base + rel),
+            Position::ColumnOf(rel) => acorn_rs::column_as_offset_from(source, base, base + rel),
             Position::Nowhere => 0,
         };
         if transpiled
@@ -189,11 +189,11 @@ fn first_error(script: &Script<'_, '_, '_>, mode: Mode) -> Option<Candidate> {
     // says.
     if !mode.transpiled {
         let language = if mode.ts {
-            svn_acorn::Language::TypeScript
+            acorn_rs::Language::TypeScript
         } else {
-            svn_acorn::Language::JavaScript
+            acorn_rs::Language::JavaScript
         };
-        return svn_acorn::parse(script.section.content, svn_acorn::Reading::Script, language)
+        return acorn_rs::parse(script.section.content, acorn_rs::Reading::Script, language)
             .err()
             .map(|error| {
                 let mut candidate = Candidate::at(error.pos, error.message);

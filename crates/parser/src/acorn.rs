@@ -9,7 +9,7 @@
 //! read.
 //!
 //! [`read_expression`] is that read, made by the port of acorn in
-//! `svn-acorn`. The helpers around it look inside what was read (an
+//! `acorn-rs`. The helpers around it look inside what was read (an
 //! assignment's `=`, a sequence's first expression, the comments) with
 //! oxc, on text acorn has already accepted.
 
@@ -53,11 +53,11 @@ pub fn complete_expression_end(text: &str, ts: bool) -> Option<u32> {
 /// acorn's read of the expression at the start of `text`.
 pub fn read_expression(text: &str, ts: bool) -> Read {
     let language = if ts {
-        svn_acorn::Language::TypeScript
+        acorn_rs::Language::TypeScript
     } else {
-        svn_acorn::Language::JavaScript
+        acorn_rs::Language::JavaScript
     };
-    match svn_acorn::read_expression(text, language) {
+    match acorn_rs::read_expression(text, language) {
         Ok((end, lookahead)) => Read::Expression { end, lookahead },
         Err(error) => Read::Error {
             at: error.pos,

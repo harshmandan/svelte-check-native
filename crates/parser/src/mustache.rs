@@ -38,7 +38,7 @@ fn tokenized_mustache_end(
     let start = expression_start as usize;
     let mut end = counted.map_or(source.len(), |close| close as usize + 1);
     loop {
-        match svn_acorn::closing_brace(source.get(start..end)?) {
+        match acorn_rs::closing_brace(source.get(start..end)?) {
             Ok(close) => return Some(Some(expression_start + close)),
             // The text ran out inside the tag: the `}` the count found
             // lies inside a regular expression.

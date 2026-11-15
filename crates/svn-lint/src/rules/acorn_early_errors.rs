@@ -927,8 +927,8 @@ fn ambient_const_initializer(init: &Expression<'_>) -> bool {
 pub(crate) fn regexp_pattern_error(raw: &str) -> Option<String> {
     let close = raw.rfind('/').filter(|&i| i > 0)?;
     let (pattern, flags) = (&raw[1..close], &raw[close + 1..]);
-    let reason = svn_acorn::regexp_pattern_error(pattern, flags)?;
-    if reason == svn_acorn::REGEXP_STACK_EXHAUSTED {
+    let reason = acorn_rs::regexp_pattern_error(pattern, flags)?;
+    if reason == acorn_rs::REGEXP_STACK_EXHAUSTED {
         return Some(reason.to_string());
     }
     Some(format!("Invalid regular expression: /{pattern}/: {reason}"))

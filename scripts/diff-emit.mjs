@@ -40,13 +40,16 @@
 //
 // The upstream svelte2tsx version is picked by searching the
 // workspace's node_modules; prefer whichever is highest-version. Pass
-// --isTsFile / --isJsFile to override the auto-detection (looks at
-// `<script lang="ts">` in the source).
+// --isTsFile / --isJsFile to override the auto-detection (svelte-check's
+// own `isTsSvelte`). svelte2tsx gets the options `svelte-check --tsgo`
+// passes it (see svelte-check-tsgo.mjs).
 
 import { readFileSync, existsSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { resolve, dirname, join, basename, relative } from 'node:path';
 import { execSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
+import { createRequire } from 'node:module';
+import { isTsSvelte, svelte2tsxOptions } from './svelte-check-tsgo.mjs';
 
 const args = process.argv.slice(2);
 if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
@@ -106,8 +109,7 @@ if (!tsconfig) {
 }
 
 if (forceTs === null) {
-    const src = readFileSync(filePath, 'utf8');
-    forceTs = /<script[^>]*\blang\s*=\s*["']ts["'][^>]*>/.test(src);
+    forceTs = isTsSvelte(readFileSync(filePath, 'utf8'));
 }
 
 // Find svelte2tsx. Multiple candidates can exist in pnpm/bun stores
@@ -210,11 +212,24 @@ if (!s2tsxPath) {
 async function dumpUpstream() {
     const mod = await import(s2tsxPath);
     const src = readFileSync(filePath, 'utf8');
-    const result = mod.svelte2tsx(src, {
-        filename: filePath,
-        isTsFile: forceTs,
-        mode: 'ts',
-    });
+    // The workspace's own compiler, as svelte-check loads it; svelte2tsx
+    // falls back to its bundled one without it.
+    let compiler = {};
+    try {
+        compiler = createRequire(join(workspace, 'package.json'))('svelte/compiler');
+    } catch {
+        console.error(`No svelte/compiler in ${workspace}; svelte2tsx uses its own.`);
+    }
+    const result = mod.svelte2tsx(
+        src,
+        svelte2tsxOptions({
+            parse: compiler.parse,
+            version: compiler.VERSION,
+            workspace,
+            sourcePath: filePath,
+            isTsFile: forceTs,
+        }),
+    );
     return result.code;
 }
 

@@ -35,6 +35,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { isTsSvelte, svelte2tsxOptions } from './svelte-check-tsgo.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PINNED = path.join(ROOT, 'scripts/upstream-emit');
@@ -71,20 +72,6 @@ if (s2tVersion !== submoduleVersion) {
             'update scripts/upstream-emit/package.json and reinstall'
     );
     process.exit(2);
-}
-
-// svelte-check's `isTsSvelte` (incremental.ts).
-function isTsSvelte(text) {
-    const scriptTag = /<script\b((?:\s+[^=>'"\/\s]+(?:=(?:"[^"]*"|'[^']*'|[^>\s]+))?)*)\s*>/gi;
-    const langAttr = /\blang\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i;
-    let m;
-    while ((m = scriptTag.exec(text)) !== null) {
-        const lang = langAttr.exec(m[1] ?? '');
-        if (!lang) continue;
-        const v = (lang[1] ?? lang[2] ?? lang[3] ?? '').toLowerCase();
-        if (v === 'ts' || v === 'typescript') return true;
-    }
-    return false;
 }
 
 /**
@@ -147,23 +134,11 @@ for (const corpus of Object.keys(inputDir)) {
             const sourcePath = path.join(workspace, rel);
             const text = fs.readFileSync(sourcePath, 'utf8');
             const isTsFile = isTsSvelte(text);
-            const generatedPath = path.join(
-                workspace,
-                '.svelte-check/svelte',
-                path.dirname(rel),
-                `++${path.basename(rel).replace(/\.svelte$/, `.svelte.${isTsFile ? 'ts' : 'js'}`)}`
-            );
             try {
-                const { code } = svelte2tsx(text, {
-                    parse,
-                    version: VERSION,
-                    filename: sourcePath,
-                    isTsFile,
-                    mode: 'ts',
-                    emitOnTemplateError: false,
-                    emitJsDoc: true,
-                    rewriteExternalImports: { workspacePath: workspace, generatedPath },
-                });
+                const { code } = svelte2tsx(
+                    text,
+                    svelte2tsxOptions({ parse, version: VERSION, workspace, sourcePath, isTsFile })
+                );
                 parts.push(`// === ${rel} ===\n${code}`);
             } catch (e) {
                 failures.push(`${rel}: ${String(e.message ?? e).split('\n')[0]}`);

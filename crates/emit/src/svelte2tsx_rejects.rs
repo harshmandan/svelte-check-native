@@ -191,10 +191,7 @@ impl TemplateProbe<'_> {
             let Some(Statement::ExpressionStatement(stmt)) = parsed.program.body.first() else {
                 return false;
             };
-            let mut expr = &stmt.expression;
-            while let Expression::ParenthesizedExpression(p) = expr {
-                expr = &p.expression;
-            }
+            let expr = stmt.expression.without_parentheses();
             matches!(
                 expr,
                 Expression::ObjectExpression(obj)

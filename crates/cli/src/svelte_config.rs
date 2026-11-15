@@ -673,10 +673,7 @@ fn default_export_config_object<'a>(
 fn compiler_options_in_object<'a>(
     obj: &'a ObjectExpression<'a>,
 ) -> Option<&'a ObjectExpression<'a>> {
-    let mut value = lookup_object_property(obj, "compilerOptions")?;
-    while let Expression::ParenthesizedExpression(px) = value {
-        value = &px.expression;
-    }
+    let value = lookup_object_property(obj, "compilerOptions")?.without_parentheses();
     match value {
         Expression::ObjectExpression(inner) => Some(inner),
         _ => None,
@@ -952,7 +949,7 @@ fn read_kit_files(root: &ObjectExpression<'_>) -> Option<KitFilesSettings> {
     if let Some(files) = lookup_object_property(root, "files") {
         return read_files_settings(Some(files));
     }
-    match lookup_object_property(root, "kit").map(unwrap_parens) {
+    match lookup_object_property(root, "kit").map(Expression::without_parentheses) {
         None => Some(KitFilesSettings::default()),
         Some(kit) if is_nullish(kit) => Some(KitFilesSettings::default()),
         Some(Expression::ObjectExpression(kit)) if !has_unknown_keys(kit) => {
@@ -966,7 +963,7 @@ fn read_kit_files(root: &ObjectExpression<'_>) -> Option<KitFilesSettings> {
 /// value can't be read statically.
 fn read_files_settings(files: Option<&Expression<'_>>) -> Option<KitFilesSettings> {
     let mut settings = KitFilesSettings::default();
-    let Some(files) = files.map(unwrap_parens) else {
+    let Some(files) = files.map(Expression::without_parentheses) else {
         return Some(settings);
     };
     if is_nullish(files) {
@@ -981,7 +978,7 @@ fn read_files_settings(files: Option<&Expression<'_>>) -> Option<KitFilesSetting
     if let Some(p) = read_path_value(lookup_object_property(files, "params"))? {
         settings.params_path = p;
     }
-    let hooks = lookup_object_property(files, "hooks").map(unwrap_parens);
+    let hooks = lookup_object_property(files, "hooks").map(Expression::without_parentheses);
     match hooks {
         None => {}
         Some(h) if is_nullish(h) => {}
@@ -1012,7 +1009,7 @@ fn read_files_settings(files: Option<&Expression<'_>>) -> Option<KitFilesSetting
 /// A path value: `Some(None)` when absent or nullish (the default
 /// applies), `Some(Some(path))` for a string, `None` when unknown.
 fn read_path_value(value: Option<&Expression<'_>>) -> Option<Option<String>> {
-    let Some(value) = value.map(unwrap_parens) else {
+    let Some(value) = value.map(Expression::without_parentheses) else {
         return Some(None);
     };
     if is_nullish(value) {
@@ -1043,13 +1040,6 @@ fn is_nullish(expr: &Expression<'_>) -> bool {
         Expression::Identifier(id) => id.name == "undefined",
         _ => false,
     }
-}
-
-fn unwrap_parens<'a>(mut expr: &'a Expression<'a>) -> &'a Expression<'a> {
-    while let Expression::ParenthesizedExpression(p) = expr {
-        expr = &p.expression;
-    }
-    expr
 }
 
 /// Read a `svelte.config.{js,cjs,mjs}`'s kit file settings by running

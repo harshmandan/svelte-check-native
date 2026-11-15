@@ -1353,16 +1353,6 @@ fn with_parsed_expression<R>(
     Some(f(&parsed))
 }
 
-/// Strip the parentheses the compiler's parser does not keep.
-fn unparenthesized<'a, 'b>(
-    mut expr: &'a oxc_ast::ast::Expression<'b>,
-) -> &'a oxc_ast::ast::Expression<'b> {
-    while let oxc_ast::ast::Expression::ParenthesizedExpression(p) = expr {
-        expr = &p.expression;
-    }
-    expr
-}
-
 /// The getter/setter checks of `BindDirective.js` when the bound
 /// expression is a comma sequence: `bind:group` cannot take one, the
 /// pair may not be wrapped in parentheses, and it must have exactly two
@@ -1374,7 +1364,7 @@ fn bind_sequence_checks(
     source: &str,
     ctx: &mut LintContext<'_>,
 ) -> bool {
-    let sequence = with_parsed_expression(range, source, |expr| match unparenthesized(expr) {
+    let sequence = with_parsed_expression(range, source, |expr| match expr.without_parentheses() {
         oxc_ast::ast::Expression::SequenceExpression(seq) => {
             Some((range.start + seq.span.start, seq.expressions.len()))
         }

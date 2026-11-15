@@ -411,14 +411,6 @@ impl<'s> TagReader<'s> {
         }
     }
 
-    /// Whether the character ending at `at` is whitespace.
-    pub fn whitespace_before(&self, at: u32) -> bool {
-        self.source
-            .get(..at as usize)
-            .and_then(|s| s.chars().next_back())
-            .is_some_and(is_svelte_whitespace)
-    }
-
     /// `require_whitespace()`: the position after the whitespace run, or
     /// the error at `at`.
     pub fn require_whitespace(&self, at: u32) -> Result<u32, TagReadError> {
@@ -431,20 +423,10 @@ impl<'s> TagReader<'s> {
     /// The end of the identifier at `at` (`at` itself when none starts
     /// there).
     fn identifier_end(&self, at: u32) -> u32 {
-        let Some(rest) = self.source.get(at as usize..) else {
-            return at;
-        };
-        let mut chars = rest.char_indices();
-        match chars.next() {
-            Some((_, c)) if oxc_syntax::identifier::is_identifier_start(c) => {}
-            _ => return at,
-        }
-        for (i, c) in chars {
-            if !oxc_syntax::identifier::is_identifier_part(c) {
-                return at + i as u32;
-            }
-        }
-        self.source.len() as u32
+        at + self
+            .source
+            .get(at as usize..)
+            .map_or(0, crate::scanner::unicode_identifier_len)
     }
 
     /// `read_identifier()` at `at`: its end (`at` when none starts
@@ -1295,9 +1277,9 @@ impl<'s> TagReader<'s> {
         )
         .parse_expression()
         .ok()?;
-        let mut first = unparenthesized(&expression);
+        let mut first = expression.without_parentheses();
         if let Expression::SequenceExpression(sequence) = first {
-            first = unparenthesized(sequence.expressions.first()?);
+            first = sequence.expressions.first()?.without_parentheses();
         }
         let first_end = first.span().end;
         let mut cast = TrailingCast {
@@ -1337,11 +1319,4 @@ impl<'a> Visit<'a> for TrailingCast {
         }
         walk::walk_ts_as_expression(self, it);
     }
-}
-
-fn unparenthesized<'a, 'b>(mut expr: &'a Expression<'b>) -> &'a Expression<'b> {
-    while let Expression::ParenthesizedExpression(p) = expr {
-        expr = &p.expression;
-    }
-    expr
 }

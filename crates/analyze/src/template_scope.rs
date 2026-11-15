@@ -1162,10 +1162,7 @@ pub fn each_expression_name_range(source: &str, range: Range) -> Range {
     if parsed.panicked {
         return range;
     }
-    let mut expr = &es.expression;
-    while let Expression::ParenthesizedExpression(p) = expr {
-        expr = &p.expression;
-    }
+    let expr = es.expression.without_parentheses();
     let end = match expr {
         Expression::TSAsExpression(e) => e.expression.span().end,
         Expression::TSSatisfiesExpression(e) => e.expression.span().end,

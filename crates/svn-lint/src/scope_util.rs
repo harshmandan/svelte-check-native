@@ -64,10 +64,7 @@ pub(crate) fn base_identifier_of_text(slice: &str) -> Option<String> {
     let Some(Statement::ExpressionStatement(stmt)) = parsed.program.body.first() else {
         return None;
     };
-    let mut expr = &stmt.expression;
-    while let Expression::ParenthesizedExpression(p) = expr {
-        expr = &p.expression;
-    }
+    let expr = stmt.expression.without_parentheses();
     base_identifier(expr).map(|(name, _, _)| name.to_string())
 }
 

@@ -1561,14 +1561,12 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
             self.error(it.span.start, "Deleting local variable in strict mode");
         }
         if it.operator == UnaryOperator::Delete {
-            let mut target = it.argument.get_inner_expression();
+            // `get_inner_expression` already strips parentheses.
+            let target = it.argument.get_inner_expression();
             if let Expression::ChainExpression(chain) = target
                 && let ChainElement::PrivateFieldExpression(_) = &chain.expression
             {
                 self.error(it.span.start, "Private fields can not be deleted");
-            }
-            while let Expression::ParenthesizedExpression(inner) = target {
-                target = &inner.expression;
             }
             if matches!(target, Expression::PrivateFieldExpression(_)) {
                 self.error(it.span.start, "Private fields can not be deleted");

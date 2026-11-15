@@ -52,10 +52,7 @@ pub(crate) fn emit_debug_tag(
     let Some(Statement::ExpressionStatement(stmt)) = parsed.program.body.first() else {
         return;
     };
-    let mut expr = &stmt.expression;
-    while let Expression::ParenthesizedExpression(p) = expr {
-        expr = &p.expression;
-    }
+    let expr = stmt.expression.without_parentheses();
     let spans: Vec<oxc_span::Span> = match expr {
         Expression::SequenceExpression(seq) => seq.expressions.iter().map(|e| e.span()).collect(),
         other => vec![other.span()],

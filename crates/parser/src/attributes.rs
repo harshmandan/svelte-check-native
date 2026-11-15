@@ -818,10 +818,7 @@ fn bind_pair_split(src: &str, start: u32, end: u32) -> Option<BindPairSplit> {
     let setter_end = oxc_span::GetSpan::span(&seq.expressions[1]).end;
     // acorn keeps no node for parentheses; oxc does.
     let node = |expression: &Expression<'_>| {
-        let mut inner = expression;
-        while let Expression::ParenthesizedExpression(paren) = inner {
-            inner = &paren.expression;
-        }
+        let inner = expression.without_parentheses();
         let span = oxc_span::GetSpan::span(inner);
         Range::new(start + span.start - 1, start + span.end - 1)
     };

@@ -107,10 +107,7 @@ pub(crate) fn sequence_expression_text(expr: &str) -> Option<std::ops::Range<usi
     let [Statement::ExpressionStatement(stmt)] = parsed.program.body.as_slice() else {
         return None;
     };
-    let mut expression = &stmt.expression;
-    while let Expression::ParenthesizedExpression(inner) = expression {
-        expression = &inner.expression;
-    }
+    let expression = stmt.expression.without_parentheses();
     let Expression::SequenceExpression(sequence) = expression else {
         return None;
     };

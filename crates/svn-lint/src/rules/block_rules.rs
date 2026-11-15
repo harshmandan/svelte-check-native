@@ -62,8 +62,8 @@ pub fn visit_each(b: &EachBlock, ctx: &mut LintContext<'_>) {
         let key = trimmed(key, ctx.source);
         let index = clause.index_range.map(|r| trimmed(r, ctx.source));
         let key_text = key.slice(ctx.source);
-        let keyed =
-            index.is_none_or(|i| i.slice(ctx.source) != key_text) || !is_identifier(key_text);
+        let keyed = index.is_none_or(|i| i.slice(ctx.source) != key_text)
+            || !oxc_syntax::identifier::is_identifier_name(key_text);
         if keyed {
             ctx.emit_error(
                 Code::each_key_without_as,
@@ -267,10 +267,7 @@ pub fn visit_render_tag(tag: &Interpolation, ctx: &mut LintContext<'_>) {
     let Ok(expr) = oxc_parser::Parser::new(&alloc, text, source_type).parse_expression() else {
         return;
     };
-    let mut expr = &expr;
-    while let Expression::ParenthesizedExpression(p) = expr {
-        expr = &p.expression;
-    }
+    let expr = expr.without_parentheses();
     let call = match expr {
         Expression::CallExpression(call) => call,
         Expression::ChainExpression(chain) => match &chain.expression {
@@ -291,10 +288,7 @@ pub fn visit_render_tag(tag: &Interpolation, ctx: &mut LintContext<'_>) {
             );
         }
     }
-    let mut callee = &call.callee;
-    while let Expression::ParenthesizedExpression(p) = callee {
-        callee = &p.expression;
-    }
+    let callee = call.callee.without_parentheses();
     if let Expression::StaticMemberExpression(member) = callee
         && matches!(member.property.name.as_str(), "bind" | "apply" | "call")
     {
@@ -348,14 +342,6 @@ fn trimmed(range: svn_core::Range, source: &str) -> svn_core::Range {
     let start = range.start + (text.len() - text.trim_start().len()) as u32;
     let end = range.end - (text.len() - text.trim_end().len()) as u32;
     svn_core::Range::new(start, end.max(start))
-}
-
-fn is_identifier(text: &str) -> bool {
-    let mut chars = text.chars();
-    chars
-        .next()
-        .is_some_and(|c| c.is_alphabetic() || c == '_' || c == '$')
-        && chars.all(|c| c.is_alphanumeric() || c == '_' || c == '$')
 }
 
 /// The range of a rest element among a snippet's parameters, read as

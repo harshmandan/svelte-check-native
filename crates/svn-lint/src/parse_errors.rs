@@ -743,15 +743,16 @@ impl Finder<'_> {
             InterpolationKind::AtDebug => self.debug_tag(i),
             InterpolationKind::AtRender => {
                 let range = trimmed_range(self.read_expression(i.expression_range), self.source);
-                let is_call =
-                    parse_expression(range, self.source, |expr| match unparenthesized(expr) {
+                let is_call = parse_expression(range, self.source, |expr| {
+                    match expr.without_parentheses() {
                         Expression::CallExpression(_) => true,
                         Expression::ChainExpression(chain) => matches!(
                             chain.expression,
                             oxc_ast::ast::ChainElement::CallExpression(_)
                         ),
                         _ => false,
-                    });
+                    }
+                });
                 if is_call == Some(false) {
                     self.report(
                         range.start,
@@ -781,8 +782,8 @@ impl Finder<'_> {
         }
         let offending = parse_expression(range, self.source, |expr| {
             let is_identifier =
-                |e: &Expression<'_>| matches!(unparenthesized(e), Expression::Identifier(_));
-            match unparenthesized(expr) {
+                |e: &Expression<'_>| matches!(e.without_parentheses(), Expression::Identifier(_));
+            match expr.without_parentheses() {
                 Expression::SequenceExpression(seq) => seq
                     .expressions
                     .iter()
@@ -834,14 +835,7 @@ impl Finder<'_> {
 }
 
 fn expression_start(e: &Expression<'_>) -> u32 {
-    unparenthesized(e).span().start
-}
-
-fn unparenthesized<'a, 'b>(mut expr: &'a Expression<'b>) -> &'a Expression<'b> {
-    while let Expression::ParenthesizedExpression(p) = expr {
-        expr = &p.expression;
-    }
-    expr
+    e.without_parentheses().span().start
 }
 
 fn trimmed_range(range: Range, source: &str) -> Range {
@@ -966,16 +960,18 @@ fn static_value(attr: &Attribute, source: &str) -> StaticValue {
         Attribute::Shorthand(_) => return StaticValue::Dynamic,
         _ => return StaticValue::Dynamic,
     };
-    parse_expression(expression, source, |expr| match unparenthesized(expr) {
-        Expression::BooleanLiteral(_) => StaticValue::Bool,
-        // A lone surrogate prints escaped, which still fails every
-        // keyword match and the tag-name check, as the raw value would.
-        Expression::StringLiteral(s) => StaticValue::Text(s.value.display().to_string()),
-        Expression::NullLiteral(_) => StaticValue::Null,
-        Expression::NumericLiteral(_)
-        | Expression::BigIntLiteral(_)
-        | Expression::RegExpLiteral(_) => StaticValue::OtherLiteral,
-        _ => StaticValue::Dynamic,
+    parse_expression(expression, source, |expr| {
+        match expr.without_parentheses() {
+            Expression::BooleanLiteral(_) => StaticValue::Bool,
+            // A lone surrogate prints escaped, which still fails every
+            // keyword match and the tag-name check, as the raw value would.
+            Expression::StringLiteral(s) => StaticValue::Text(s.value.display().to_string()),
+            Expression::NullLiteral(_) => StaticValue::Null,
+            Expression::NumericLiteral(_)
+            | Expression::BigIntLiteral(_)
+            | Expression::RegExpLiteral(_) => StaticValue::OtherLiteral,
+            _ => StaticValue::Dynamic,
+        }
     })
     .unwrap_or(StaticValue::Dynamic)
 }
@@ -1125,7 +1121,7 @@ fn custom_element(attr: &Attribute, source: &str) -> Option<ParseFinding> {
         },
     }
     let shape = parse_expression(expression, source, |expr| {
-        let obj = match unparenthesized(expr) {
+        let obj = match expr.without_parentheses() {
             Expression::NullLiteral(_) => return Shape::Null,
             Expression::ObjectExpression(obj) => obj,
             _ => return Shape::NotObject,

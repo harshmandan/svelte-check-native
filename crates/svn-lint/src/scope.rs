@@ -1510,10 +1510,7 @@ impl TreeBuilder {
         let Some(Statement::ExpressionStatement(stmt)) = parsed.program.body.first() else {
             return;
         };
-        let mut expr = &stmt.expression;
-        while let Expression::ParenthesizedExpression(p) = expr {
-            expr = &p.expression;
-        }
+        let expr = stmt.expression.without_parentheses();
         // The compiler strips TypeScript wrappers before it validates
         // the binding, so `bind:value={x as T}` binds to `x`.
         let mut target = expr;

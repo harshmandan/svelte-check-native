@@ -34,22 +34,6 @@ fn source_type(ts: bool) -> SourceType {
     SourceType::default().with_module(true).with_typescript(ts)
 }
 
-fn unparenthesized<'a, 'b>(mut expression: &'a Expression<'b>) -> &'a Expression<'b> {
-    while let Expression::ParenthesizedExpression(p) = expression {
-        expression = &p.expression;
-    }
-    expression
-}
-
-/// Where `text` ends when it reads as one complete expression.
-pub fn complete_expression_end(text: &str, ts: bool) -> Option<u32> {
-    let alloc = Allocator::default();
-    oxc_parser::Parser::new(&alloc, text, source_type(ts))
-        .parse_expression()
-        .ok()
-        .map(|expression| expression.span().end)
-}
-
 /// acorn's read of the expression at the start of `text`.
 pub fn read_expression(text: &str, ts: bool) -> Read {
     let language = if ts {
@@ -282,7 +266,7 @@ fn assignment_operator(text: &str) -> Option<u32> {
     let expression = oxc_parser::Parser::new(&alloc, text, source_type(true))
         .parse_expression()
         .ok()?;
-    let Expression::AssignmentExpression(assignment) = unparenthesized(&expression) else {
+    let Expression::AssignmentExpression(assignment) = expression.without_parentheses() else {
         return None;
     };
     let right = assignment.right.span().start as usize;
@@ -295,7 +279,7 @@ fn sequence_first_end(text: &str) -> Option<u32> {
     let expression = oxc_parser::Parser::new(&alloc, text, source_type(true))
         .parse_expression()
         .ok()?;
-    match unparenthesized(&expression) {
+    match expression.without_parentheses() {
         Expression::SequenceExpression(sequence) => Some(sequence.expressions.first()?.span().end),
         _ => None,
     }

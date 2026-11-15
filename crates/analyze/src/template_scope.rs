@@ -535,6 +535,12 @@ pub trait TemplateScopeVisitor {
     /// interpolation that's not `{@const …}`.
     fn visit_expr(&mut self, range: Range) {}
 
+    /// The iterable of an `{#each}` block, walked like any expression
+    /// unless the visitor needs what the block knows about it.
+    fn visit_each_expression(&mut self, block: &svn_parser::EachBlock) {
+        self.visit_expr(block.expression_range);
+    }
+
     /// Bracket entry into a control-flow block (`{#if}` / `{#each}` /
     /// `{#await}` / `{#key}`). Lint's `TemplateCtx.in_control_flow`
     /// flips `true` between these calls; analyze ignores them.
@@ -632,7 +638,7 @@ fn walk_node_inner<V: TemplateScopeVisitor>(node: &Node, source: &str, visitor: 
             // Outer expression walks in the PARENT scope, in the
             // parent's `in_control_flow` (it's the iterable, outside
             // the each-block's body).
-            visitor.visit_expr(b.expression_range);
+            visitor.visit_each_expression(b);
             // `{#each X as item, i (key)}`. `item` and `i` enter
             // scope for the body. Pattern in `context_range` may be a
             // destructure; index is always a bare identifier.
@@ -984,7 +990,7 @@ mod compiler {
             }
             Node::EachBlock(b) => {
                 visitor.visit_each_block(b);
-                visitor.visit_expr(b.expression_range);
+                visitor.visit_each_expression(b);
                 let mut bindings: Vec<BoundIdent> = Vec::new();
                 let mut defaults: Vec<Range> = Vec::new();
                 let mut has_index = false;

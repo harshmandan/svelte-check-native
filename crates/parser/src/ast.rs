@@ -633,6 +633,20 @@ pub struct EachBlock {
     /// The error the compiler throws reading the opening tag. The block
     /// is kept so the error has a place; the component is rejected.
     pub open_error: Option<crate::tag_read::TagReadError>,
+    /// The nodes the compiler read around the iterable and then threw
+    /// away for an inner one: the sequence of `{#each items, i}`, and
+    /// the cast of `{#each items as item}` read as TypeScript. Each
+    /// runs from the dropped node's start to the start of the node
+    /// kept in its place. A comment before a dropped node was attached
+    /// to it, so the compiler never reads it as a `svelte-ignore`.
+    pub dropped_nodes: Vec<Range>,
+    /// The comments the compiler's failed reads of the iterable lexed,
+    /// in the order they lexed them. The compiler retries a read that
+    /// fails (`{#each x as { y = z }}` read as TypeScript first fails
+    /// on the pattern), and every read adds its comments to the list
+    /// the iterable's comments are attached from, so these come first
+    /// in it, ahead of the final read's own.
+    pub failed_read_comments: Vec<Range>,
     pub range: Range,
 }
 

@@ -263,6 +263,29 @@ pub(crate) struct CommentSource<'s> {
     pub(crate) blank_before: u32,
 }
 
+/// How the tree the compiler's analysis walks differs from the one oxc
+/// parses from the same text: what the parser did after attaching the
+/// comments. The default is a script, read as parsed.
+#[derive(Default)]
+pub(crate) struct CompilerRead<'r> {
+    /// Comments queued ahead of the text's own when they were attached,
+    /// in queue order and file offsets (see
+    /// `EachBlock::failed_read_comments`).
+    pub(crate) queued_first: &'r [Range],
+    /// The text is a template expression: read as an expression, with
+    /// no statement around it, and with its parentheses as nodes,
+    /// removed after the comments were attached (acorn's
+    /// `preserveParens`, then `remove_parens`), so a comment leading a
+    /// `(…)` leads nothing.
+    pub(crate) template_expression: bool,
+    /// Nodes the compiler dropped for an inner one (see
+    /// `EachBlock::dropped_nodes`), in file offsets.
+    pub(crate) dropped_nodes: &'r [Range],
+    /// The analysis visits only the nodes inside these ranges (file
+    /// offsets); `None` visits every node.
+    pub(crate) visited: Option<&'r [Range]>,
+}
+
 impl ScriptComments {
     /// No comments at all — every lookup answers "no codes".
     pub(crate) fn empty() -> Self {
@@ -278,12 +301,14 @@ impl ScriptComments {
     ///
     /// `prior` holds the codes of the comments the compiler read before
     /// this script (see [`prior_script_ignores`]); they lead the
-    /// script's first node.
+    /// script's first node. `read` says how the compiler's tree differs
+    /// from the one `program` shows.
     pub(crate) fn build(
         program: &Program<'_>,
         from: &CommentSource<'_>,
         runes: bool,
         prior: PriorIgnores,
+        read: &CompilerRead<'_>,
     ) -> Self {
         let file = from.file;
         let codes: Vec<(Vec<SmolStr>, Vec<BadIgnoreCode>)> = program
@@ -313,16 +338,28 @@ impl ScriptComments {
             return Self::empty();
         }
         let content = file.get(from.base as usize..).unwrap_or_default();
-        let mut queue: Vec<(u32, u32, usize)> = program
+        let mut own: Vec<(u32, u32, usize)> = program
             .comments
             .iter()
             .enumerate()
             .map(|(i, c)| (c.span.start, c.span.end, i))
             .collect();
-        queue.sort_by_key(|&(start, _, _)| start);
+        own.sort_by_key(|&(start, _, _)| start);
+        // A comment queued ahead is one of the text's own when it lies
+        // inside the text; one that does not has no codes here.
+        let ahead = read.queued_first.iter().filter_map(|range| {
+            let start = range.start.checked_sub(from.base)?;
+            let index = own
+                .iter()
+                .find(|&&(own_start, _, _)| own_start == start)
+                .map_or(usize::MAX, |&(_, _, i)| i);
+            Some((start, range.end - from.base, index))
+        });
+        let queue: std::collections::VecDeque<_> = ahead.chain(own.iter().copied()).collect();
         let mut attacher = CommentAttacher {
             source: content,
-            queue: queue.into(),
+            template_expression: read.template_expression,
+            queue,
             frames: Vec::new(),
             skipped: Vec::new(),
             leading: Vec::new(),
@@ -340,7 +377,27 @@ impl ScriptComments {
                 bad: prior.bad_codes,
             });
         }
-        leading.extend(attacher.leading.into_iter().filter_map(|(span, i)| {
+        // Whether the compiler, by the time its analysis walks the tree,
+        // has thrown away the node the comment leads or never visits it.
+        let leads_nothing = |led: &Led| {
+            let node = Range::new(from.base + led.node.start, from.base + led.node.end);
+            let comment_start = from.base + led.comment_start;
+            led.removed_parens
+                || read.dropped_nodes.iter().any(|dropped| {
+                    comment_start < dropped.start
+                        && (dropped.start..=dropped.end).contains(&node.start)
+                })
+                || read.visited.is_some_and(|visited| {
+                    !visited
+                        .iter()
+                        .any(|v| v.start <= node.start && node.end <= v.end)
+                })
+        };
+        leading.extend(attacher.leading.into_iter().filter_map(|led| {
+            if leads_nothing(&led) {
+                return None;
+            }
+            let (span, i) = (led.node, led.comment);
             let (codes, bad) = codes.get(i).filter(|c| !nothing(c))?;
             Some(LeadingIgnores {
                 start: span.start,
@@ -685,16 +742,27 @@ pub(crate) fn prior_script_ignores(
 /// holes (`null` in estree) and the parameter list wrapper.
 struct CommentAttacher<'s> {
     source: &'s str,
-    /// Comments not yet attached, by start: `(start, end, index)`.
+    /// See [`CompilerRead::template_expression`].
+    template_expression: bool,
+    /// Comments not yet attached, in queue order: `(start, end, index)`.
     queue: std::collections::VecDeque<(u32, u32, usize)>,
     /// The estree nodes currently open, outermost first.
     frames: Vec<Frame>,
     /// One entry per entered oxc node: whether it was passed over.
     skipped: Vec<bool>,
-    /// `(node span, comment index)` of every leading comment.
-    leading: Vec<(Span, usize)>,
+    /// Every leading comment.
+    leading: Vec<Led>,
     /// The first node inside the program.
     first_node: Option<Span>,
+}
+
+/// A comment leading a node.
+struct Led {
+    node: Span,
+    comment: usize,
+    comment_start: u32,
+    /// The node is parentheses the compiler removes.
+    removed_parens: bool,
 }
 
 struct Frame {
@@ -705,17 +773,15 @@ struct Frame {
     last_in_list: Option<Span>,
 }
 
-fn passed_over(kind: AstKind<'_>) -> bool {
-    matches!(
-        kind,
-        AstKind::ParenthesizedExpression(_)
-            | AstKind::Elision(_)
-            | AstKind::FormalParameters(_)
-            | AstKind::Hashbang(_)
-    )
+fn passed_over(kind: AstKind<'_>, parens_are_nodes: bool) -> bool {
+    match kind {
+        AstKind::ParenthesizedExpression(_) => !parens_are_nodes,
+        AstKind::Elision(_) | AstKind::FormalParameters(_) | AstKind::Hashbang(_) => true,
+        _ => false,
+    }
 }
 
-fn last_in_list(kind: AstKind<'_>) -> Option<Span> {
+fn last_in_list(kind: AstKind<'_>, parens_are_nodes: bool) -> Option<Span> {
     match kind {
         AstKind::Program(p) => p
             .body
@@ -731,9 +797,13 @@ fn last_in_list(kind: AstKind<'_>) -> Option<Span> {
         AstKind::ArrayExpression(a) => a.elements.last().and_then(|el| match el {
             ArrayExpressionElement::Elision(_) => None,
             ArrayExpressionElement::SpreadElement(s) => Some(s.span),
-            other => other
-                .as_expression()
-                .map(|e| e.without_parentheses().span()),
+            other => other.as_expression().map(|e| {
+                if parens_are_nodes {
+                    e.span()
+                } else {
+                    e.without_parentheses().span()
+                }
+            }),
         }),
         AstKind::ObjectExpression(o) => o.properties.last().map(GetSpan::span),
         _ => None,
@@ -775,7 +845,12 @@ impl<'a> Visit<'a> for CommentAttacher<'_> {
     }
 
     fn enter_node(&mut self, kind: AstKind<'a>) {
-        let skip = passed_over(kind);
+        // A template expression is parsed as a statement here; the
+        // compiler's root is the expression itself.
+        let skip = passed_over(kind, self.template_expression)
+            || (self.template_expression
+                && matches!(kind, AstKind::ExpressionStatement(_))
+                && self.frames.len() == 1);
         self.skipped.push(skip);
         if skip {
             return;
@@ -788,11 +863,16 @@ impl<'a> Visit<'a> for CommentAttacher<'_> {
             && start < span.start
         {
             self.queue.pop_front();
-            self.leading.push((span, index));
+            self.leading.push(Led {
+                node: span,
+                comment: index,
+                comment_start: start,
+                removed_parens: matches!(kind, AstKind::ParenthesizedExpression(_)),
+            });
         }
         self.frames.push(Frame {
             span,
-            last_in_list: last_in_list(kind),
+            last_in_list: last_in_list(kind, self.template_expression),
         });
     }
 

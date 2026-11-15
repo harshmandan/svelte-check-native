@@ -1015,8 +1015,14 @@ impl TreeBuilder {
                         setter_range,
                         ..
                     }) => {
-                        self.walk_expr_range(*getter_range, ctx, flags);
-                        self.walk_expr_range(*setter_range, ctx, flags);
+                        // The compiler reads the pair as one sequence, so a
+                        // comment after the comma trails the getter.
+                        let pair = Range::new(getter_range.start, setter_range.end);
+                        let read = ExpressionRead {
+                            bind_pair: true,
+                            ..ExpressionRead::default()
+                        };
+                        self.walk_read_expression(pair, ctx, flags, read);
                     }
                     Some(svn_parser::ast::DirectiveValue::Quoted(v)) => {
                         for part in &v.parts {
@@ -1255,6 +1261,7 @@ impl TreeBuilder {
             },
             true,
             crate::ignore::PriorIgnores::default(),
+            &crate::ignore::CompilerRead::default(),
         );
         for bad in comments.take_unreported() {
             self.snippet_ignore_codes_reported.push(bad.range.start);
@@ -1267,6 +1274,18 @@ impl TreeBuilder {
     }
 
     fn walk_expr_range(&mut self, range: Range, ctx: &mut TemplateCtx<'_>, flags: RefFlags) {
+        self.walk_read_expression(range, ctx, flags, ExpressionRead::default());
+    }
+
+    /// [`Self::walk_expr_range`] for an expression whose reading did
+    /// more than parse it.
+    fn walk_read_expression(
+        &mut self,
+        range: Range,
+        ctx: &mut TemplateCtx<'_>,
+        flags: RefFlags,
+        read: ExpressionRead<'_>,
+    ) {
         let Some(slice) = ctx.source.get(range.start as usize..range.end as usize) else {
             return;
         };
@@ -1352,15 +1371,26 @@ impl TreeBuilder {
             // to its nodes as it does a script's; most expressions
             // hold no `svelte-ignore` at all.
             script_comments: if slice.contains("svelte-ignore") {
+                let base = range.start - base_adjust;
+                let visited = read
+                    .bind_pair
+                    .then(|| bind_pair_bodies(&parsed.program, base))
+                    .flatten();
                 crate::ignore::ScriptComments::build(
                     &parsed.program,
                     &crate::ignore::CommentSource {
                         file: ctx.source,
-                        base: range.start - base_adjust,
+                        base,
                         blank_before: 0,
                     },
                     runes,
                     crate::ignore::PriorIgnores::default(),
+                    &crate::ignore::CompilerRead {
+                        queued_first: read.queued_first,
+                        template_expression: true,
+                        dropped_nodes: read.dropped_nodes,
+                        visited: visited.as_deref(),
+                    },
                 )
             } else {
                 crate::ignore::ScriptComments::empty()
@@ -1839,6 +1869,19 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
             .walk_expr_range(range, &mut self.ctx, RefFlags::default());
     }
 
+    fn visit_each_expression(&mut self, block: &svn_parser::EachBlock) {
+        self.builder.walk_read_expression(
+            block.expression_range,
+            &mut self.ctx,
+            RefFlags::default(),
+            ExpressionRead {
+                queued_first: &block.failed_read_comments,
+                dropped_nodes: &block.dropped_nodes,
+                bind_pair: false,
+            },
+        );
+    }
+
     fn visit_element(&mut self, e: &svn_parser::Element) {
         // Plain DOM element: no component-name reference; just walk
         // attributes (skipping let:directives, which the walker's
@@ -1960,6 +2003,7 @@ impl TreeBuilder {
             },
             runes,
             prior_ignores,
+            &crate::ignore::CompilerRead::default(),
         );
         let mut walker = ScriptWalker {
             tree: self,
@@ -5715,4 +5759,46 @@ fn declarator_name_end(d: &VariableDeclarator<'_>, id: &BindingIdentifier<'_>) -
     d.type_annotation
         .as_ref()
         .map_or(id.span.end, |annotation| annotation.span.end)
+}
+
+/// What reading a template expression did beyond parsing it (see
+/// [`crate::ignore::CompilerRead`]).
+#[derive(Default, Clone, Copy)]
+struct ExpressionRead<'r> {
+    /// See `EachBlock::failed_read_comments`.
+    queued_first: &'r [Range],
+    /// See `EachBlock::dropped_nodes`.
+    dropped_nodes: &'r [Range],
+    /// A `bind:` getter/setter pair (see [`bind_pair_bodies`]).
+    bind_pair: bool,
+}
+
+/// What the compiler's analysis visits of a `bind:` getter/setter pair
+/// parsed as `program`, in file offsets: the body of each function,
+/// or the whole half when it is no arrow function
+/// (`2-analyze/visitors/BindDirective.js`). The sequence and the
+/// functions themselves are never visited, so neither are the comments
+/// leading them.
+fn bind_pair_bodies(program: &Program<'_>, base: u32) -> Option<Vec<Range>> {
+    let [Statement::ExpressionStatement(statement)] = program.body.as_slice() else {
+        return None;
+    };
+    let Expression::SequenceExpression(sequence) = statement.expression.without_parentheses()
+    else {
+        return None;
+    };
+    Some(
+        sequence
+            .expressions
+            .iter()
+            .take(2)
+            .map(|half| {
+                let span = match half.without_parentheses() {
+                    Expression::ArrowFunctionExpression(arrow) => arrow.body.span(),
+                    other => other.span(),
+                };
+                Range::new(base + span.start, base + span.end)
+            })
+            .collect(),
+    )
 }

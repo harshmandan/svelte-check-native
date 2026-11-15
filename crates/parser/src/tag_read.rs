@@ -163,6 +163,10 @@ pub struct EachOpen {
     pub key: Option<Range>,
     /// Just past the `}` that closes the tag.
     pub end: u32,
+    /// See [`crate::ast::EachBlock::dropped_nodes`].
+    pub dropped_nodes: Vec<Range>,
+    /// See [`crate::ast::EachBlock::failed_read_comments`].
+    pub failed_read_comments: Vec<Range>,
 }
 
 /// Which branch an `{#await}` opening tag starts.
@@ -388,11 +392,11 @@ impl<'s> TagReader<'s> {
     }
 
     /// The comments the reads so far have lexed, in source order, each
-    /// once; the record starts again empty.
+    /// as often as a read lexed it (a read that fails and is retried
+    /// lexes its comments again); the record starts again empty.
     pub fn take_comments(&self) -> Vec<Range> {
         let mut comments = std::mem::take(&mut *self.read_comments.borrow_mut());
         comments.sort_by_key(|c| (c.start, c.end));
-        comments.dedup();
         comments
     }
 
@@ -640,9 +644,14 @@ impl<'s> TagReader<'s> {
         // again: `{#each x as { y = z }}` reads the pattern as an object
         // first.
         let mut cut = limit;
-        let iterable_end = loop {
+        let first_read = self.read_comments.borrow().len();
+        let (iterable_end, failed_read_comments) = loop {
+            let this_read = self.read_comments.borrow().len();
             match self.read_expression(start, cut, &mut comments) {
-                Ok(end) => break end,
+                Ok(end) => {
+                    let failed = self.read_comments.borrow()[first_read..this_read].to_vec();
+                    break (end, failed);
+                }
                 Err(error) => match self.as_before(start, error.at) {
                     Some(at) => cut = at,
                     None => return Err(error),
@@ -653,16 +662,18 @@ impl<'s> TagReader<'s> {
         // Reading an expression moves past the last collected comment.
         let mut index = self.skip_whitespace(iterable_end.max(comments.last_end));
         let mut expression_end = iterable_end;
+        let mut dropped_nodes = Vec::new();
         if !self.source[index as usize..].starts_with("as") {
             // No `as` after the iterable: it keeps the first expression
             // of a sequence, and a TypeScript cast that ends it is the
             // context.
-            if let Some((end, cast)) = self.iterable_without_as(start, iterable_end) {
-                expression_end = end;
-                if let Some((inner_end, as_at)) = cast {
+            if let Some(kept) = self.iterable_without_as(start, iterable_end) {
+                expression_end = kept.end;
+                if let Some((inner_end, as_at)) = kept.cast {
                     expression_end = inner_end;
                     index = as_at;
                 }
+                dropped_nodes = kept.dropped_nodes;
             }
         }
         let (context, context_end) = if self.source[index as usize..].starts_with("as") {
@@ -713,6 +724,8 @@ impl<'s> TagReader<'s> {
             index: index_range,
             key,
             end: index + 1,
+            dropped_nodes,
+            failed_read_comments,
         })
     }
 
@@ -1291,11 +1304,9 @@ impl<'s> TagReader<'s> {
         }
     }
 
-    /// The iterable `start..end` when no `as` follows it: where its first
-    /// expression ends (parentheses removed, as the compiler removes
-    /// them), and for a TypeScript cast that ends it, where the cast's
-    /// expression ends and where its `as` is.
-    fn iterable_without_as(&self, start: u32, end: u32) -> Option<(u32, Option<(u32, u32)>)> {
+    /// The iterable `start..end` when no `as` follows it, as the
+    /// compiler keeps it.
+    fn iterable_without_as(&self, start: u32, end: u32) -> Option<IterableWithoutAs> {
         let text = self.source.get(start as usize..end as usize)?;
         let alloc = Allocator::default();
         let expression = oxc_parser::Parser::new(
@@ -1307,9 +1318,12 @@ impl<'s> TagReader<'s> {
         )
         .parse_expression()
         .ok()?;
+        let at = |offset: u32| start + offset;
+        let mut dropped_nodes = Vec::new();
         let mut first = expression.without_parentheses();
         if let Expression::SequenceExpression(sequence) = first {
             first = sequence.expressions.first()?.without_parentheses();
+            dropped_nodes.push(Range::new(at(sequence.span.start), at(first.span().start)));
         }
         let first_end = first.span().end;
         let mut cast = TrailingCast {
@@ -1317,17 +1331,35 @@ impl<'s> TagReader<'s> {
             found: None,
         };
         cast.visit_expression(first);
-        let cast = cast.found.and_then(|(inner_end, type_start)| {
+        let cast = cast.found.and_then(|found| {
+            dropped_nodes.push(Range::new(at(found.start), at(found.inner_start)));
             // From just before the cast's type back to its `as` (a byte
             // offset inside a wider character is skipped over).
-            let mut at = (start + type_start).checked_sub(2)?;
-            while self.source.get(at as usize..at as usize + 2) != Some("as") {
-                at = at.checked_sub(1).filter(|&a| a >= start)?;
+            let mut as_at = at(found.type_start).checked_sub(2)?;
+            while self.source.get(as_at as usize..as_at as usize + 2) != Some("as") {
+                as_at = as_at.checked_sub(1).filter(|&a| a >= start)?;
             }
-            Some((start + inner_end, at))
+            Some((at(found.inner_end), as_at))
         });
-        Some((start + first_end, cast))
+        Some(IterableWithoutAs {
+            end: at(first_end),
+            cast,
+            dropped_nodes,
+        })
     }
+}
+
+/// An `{#each}` iterable with no `as` after it, as the compiler keeps
+/// it: the first expression of a sequence, without the TypeScript cast
+/// that ends it (the cast's type is the context).
+struct IterableWithoutAs {
+    /// Where the first expression ends, parentheses removed.
+    end: u32,
+    /// For a cast that ends it, where the cast's expression ends and
+    /// where its `as` is.
+    cast: Option<(u32, u32)>,
+    /// See [`crate::ast::EachBlock::dropped_nodes`].
+    dropped_nodes: Vec<Range>,
 }
 
 /// The outermost TypeScript cast that ends where the expression does
@@ -1335,7 +1367,16 @@ impl<'s> TagReader<'s> {
 /// its expression ends and where its type starts.
 struct TrailingCast {
     end: u32,
-    found: Option<(u32, u32)>,
+    found: Option<FoundCast>,
+}
+
+struct FoundCast {
+    start: u32,
+    /// Where the cast's expression starts and ends, parentheses
+    /// removed at the start.
+    inner_start: u32,
+    inner_end: u32,
+    type_start: u32,
 }
 
 impl<'a> Visit<'a> for TrailingCast {
@@ -1344,7 +1385,12 @@ impl<'a> Visit<'a> for TrailingCast {
             return;
         }
         if it.span.end == self.end {
-            self.found = Some((it.expression.span().end, it.type_annotation.span().start));
+            self.found = Some(FoundCast {
+                start: it.span.start,
+                inner_start: it.expression.without_parentheses().span().start,
+                inner_end: it.expression.span().end,
+                type_start: it.type_annotation.span().start,
+            });
             return;
         }
         walk::walk_ts_as_expression(self, it);

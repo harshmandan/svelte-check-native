@@ -168,6 +168,87 @@ fn template_comments_are_read_again_before_a_later_script() {
     );
 }
 
+#[test]
+fn a_comment_leading_parentheses_is_not_read() {
+    // A template expression is read with its parentheses as nodes, and
+    // they are removed after the comments are attached: a comment that
+    // led `(…)` leads nothing.
+    let src = "<svelte:options runes />\n\
+               <script lang=\"ts\">let a = 1; let b = 2; let items = [1]; function f(v: number) { return v; }</script>\n\
+               {/* svelte-ignore p1 */ (a)}\n\
+               {(/* svelte-ignore p2 */ a)}\n\
+               {a + /* svelte-ignore p3 */ (b)}\n\
+               {a + (/* svelte-ignore p4 */ b)}\n\
+               <div title={/* svelte-ignore p5 */ (a + b)}></div>\n\
+               {#if /* svelte-ignore p6 */ ((a))}{/if}\n\
+               {#each items as i (/* svelte-ignore p7 */ (i))}{i}{/each}\n\
+               {[ /* svelte-ignore p8 */ (a), b]}\n\
+               {f(/* svelte-ignore p9 */ (a))}\n\
+               {#key /* svelte-ignore p10 */ (a)}{/key}\n\
+               {@html /* svelte-ignore p11 */ (a)}\n\
+               {#each items as i}{@const c = /* svelte-ignore p12 */ (i)}{c}{/each}\n";
+    assert_eq!(positions(src), ["unknown_code 4:20", "unknown_code 6:24"]);
+}
+
+/// `{#each}` heads with a comment before the iterable, then three
+/// `bind:` pairs; `lang` is spliced in.
+fn each_heads_and_bind_pairs(lang: &str) -> String {
+    format!(
+        "<svelte:options runes />\n\
+         <script{lang}>let items = [{{a: 1}}]; let x = $state(1);</script>\n\
+         {{#each /* svelte-ignore b1 */ items as item}}{{item.a}}{{/each}}\n\
+         {{#each /* svelte-ignore b2 */ items as item, i (i)}}{{item.a}}{{/each}}\n\
+         {{#each /* svelte-ignore b3 */ items, i}}{{i}}{{/each}}\n\
+         {{#each /* svelte-ignore b4 */ items as {{ a = 1 }}}}{{a}}{{/each}}\n\
+         {{#each ( /* svelte-ignore b5 */ items) as item}}{{item.a}}{{/each}}\n\
+         {{#each /* svelte-ignore b6 */ (items) as item}}{{item.a}}{{/each}}\n\
+         <input bind:value={{/* svelte-ignore b7 */ () => x, (v) => x = v}} />\n\
+         <input bind:value={{() => x /* svelte-ignore b8 */, (v) => x = v}} />\n\
+         <input bind:value={{() => x, (v) => /* svelte-ignore b10 */ x = v}} />\n"
+    )
+}
+
+#[test]
+fn each_iterable_comments_lead_the_nodes_the_compiler_drops() {
+    // Read as TypeScript, `items as item` is a cast and `items, i` a
+    // sequence; with no `as` after either, the compiler keeps only the
+    // iterable inside, and the comment that led the dropped node is
+    // never read. `{ a = 1 }` fails as a type, so the iterable is read
+    // again on its own: both reads queue the comment, which then leads
+    // `items` twice. A bind pair is visited only through its two
+    // bodies, so a comment before the getter or after the comma is not
+    // read either.
+    assert_eq!(
+        positions(&each_heads_and_bind_pairs(" lang=\"ts\"")),
+        [
+            "unknown_code 6:25",
+            "unknown_code 6:25",
+            "unknown_code 7:27",
+            "unknown_code 11:53"
+        ]
+    );
+    // As JavaScript, the reads stop before `as`: nothing is dropped but
+    // the sequence and the parentheses.
+    assert_eq!(
+        positions(&each_heads_and_bind_pairs("")),
+        [
+            "unknown_code 3:25",
+            "unknown_code 4:25",
+            "unknown_code 6:25",
+            "unknown_code 7:27",
+            "unknown_code 11:53"
+        ]
+    );
+}
+
+#[test]
+fn a_retried_each_read_queues_its_comment_twice_for_a_later_script() {
+    let src = "<svelte:options runes />\n\
+               {#each /* svelte-ignore b4 */ items as { a = 1 }}{a}{/each}\n\
+               <script lang=\"ts\">let items = [{a: 1}];</script>\n";
+    assert_eq!(positions(src), ["unknown_code 2:25"; 4]);
+}
+
 // ----------------------------------------------------------------
 // A multi-line block comment loses its line's indentation first
 // ----------------------------------------------------------------

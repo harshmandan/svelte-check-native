@@ -680,33 +680,40 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
         let counted_close = find_mustache_end(source, keyword_end);
         let limit = counted_close.unwrap_or(self.fragment_end);
         let reader = &self.reader;
-        let (expr_range, as_clause, open_error) = match reader.read_each_open(keyword_end, limit) {
-            Ok(open) => {
-                self.scanner.set_pos(open.end);
-                let as_clause =
-                    (open.context.is_some() || open.index.is_some() || open.key.is_some())
-                        .then_some(EachAsClause {
-                            context_range: open.context,
-                            index_range: open.index,
-                            key_range: open.key,
-                        });
-                (open.expression, as_clause, None)
-            }
-            Err(error) => {
-                // The compiler throws, and the component is rejected. The
-                // block stays, carrying the error: its tag ends at the
-                // counted `}`, or where the error is.
-                let end = counted_close.unwrap_or(error.at.max(keyword_end));
-                let header = trimmed_range(source, keyword_end, end)
-                    .unwrap_or(Range::new(keyword_end, keyword_end));
-                self.scanner.set_pos(if counted_close.is_some() {
-                    end + 1
-                } else {
-                    end
-                });
-                (header, None, Some(error))
-            }
-        };
+        let (expr_range, as_clause, dropped_nodes, failed_read_comments, open_error) =
+            match reader.read_each_open(keyword_end, limit) {
+                Ok(open) => {
+                    self.scanner.set_pos(open.end);
+                    let as_clause =
+                        (open.context.is_some() || open.index.is_some() || open.key.is_some())
+                            .then_some(EachAsClause {
+                                context_range: open.context,
+                                index_range: open.index,
+                                key_range: open.key,
+                            });
+                    (
+                        open.expression,
+                        as_clause,
+                        open.dropped_nodes,
+                        open.failed_read_comments,
+                        None,
+                    )
+                }
+                Err(error) => {
+                    // The compiler throws, and the component is rejected. The
+                    // block stays, carrying the error: its tag ends at the
+                    // counted `}`, or where the error is.
+                    let end = counted_close.unwrap_or(error.at.max(keyword_end));
+                    let header = trimmed_range(source, keyword_end, end)
+                        .unwrap_or(Range::new(keyword_end, keyword_end));
+                    self.scanner.set_pos(if counted_close.is_some() {
+                        end + 1
+                    } else {
+                        end
+                    });
+                    (header, None, Vec::new(), Vec::new(), Some(error))
+                }
+            };
         let opening_tag_end = self.scanner.pos();
         let (body_nodes, term) = self.parse_fragment_until(None);
         let body = Fragment {
@@ -756,6 +763,8 @@ impl<'src, 'col> TemplateParser<'src, 'col> {
             alternate,
             opening_tag_end,
             open_error,
+            dropped_nodes,
+            failed_read_comments,
             range: Range::new(block_start, self.scanner.pos()),
         })))
     }

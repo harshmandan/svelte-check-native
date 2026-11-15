@@ -266,6 +266,7 @@ pub fn missing_svelte_import_diagnostics(
     source: &str,
     doc: &Document<'_>,
     fragment: &Fragment,
+    scripts: &svn_parser::ScriptParses<'_>,
     resolver: &SvelteImportResolver,
 ) -> MissingImports {
     if !resolver.reports || !source.contains(".svelte") {
@@ -275,7 +276,7 @@ pub fn missing_svelte_import_diagnostics(
     if !component_is_type_checked(doc, is_ts, resolver.check_js) {
         return MissingImports::default();
     }
-    let refs = svelte_refs::collect_component(doc, fragment, source, is_ts);
+    let refs = svelte_refs::collect_component(doc, fragment, source, is_ts, scripts);
     missing_imports(file, source, refs, resolver)
 }
 
@@ -383,7 +384,9 @@ pub fn components_imported_by(
             } else {
                 let (fragment, _) =
                     svn_parser::parse_all_template_runs(&source, &doc.template.text_runs);
-                svelte_refs::collect_component(&doc, &fragment, &source, is_ts)
+                let alloc = Allocator::default();
+                let scripts = svn_parser::ScriptParses::new(&alloc, &doc);
+                svelte_refs::collect_component(&doc, &fragment, &source, is_ts, &scripts)
             }
         } else {
             let Ok(source_type) = SourceType::from_path(file) else {
@@ -775,7 +778,15 @@ mod tests {
     fn refs(src: &str) -> Vec<SvelteImportRef> {
         let (doc, _) = svn_parser::parse_sections(src);
         let (fragment, _) = svn_parser::parse_all_template_runs(src, &doc.template.text_runs);
-        svelte_refs::collect_component(&doc, &fragment, src, svn_parser::is_ts_svelte(src))
+        let alloc = Allocator::default();
+        let scripts = svn_parser::ScriptParses::new(&alloc, &doc);
+        svelte_refs::collect_component(
+            &doc,
+            &fragment,
+            src,
+            svn_parser::is_ts_svelte(src),
+            &scripts,
+        )
     }
 
     fn specifiers(src: &str) -> Vec<String> {

@@ -111,10 +111,9 @@ use oxc_allocator::Allocator;
 use smol_str::SmolStr;
 use svn_analyze::{PropsInfo, TemplateSummary};
 use svn_parser::Document;
-use svn_parser::{Fragment, Node, SnippetBlock, parse_script_body};
+use svn_parser::{Fragment, Node, SnippetBlock};
 
 use crate::emit_buffer::EmitBuffer;
-use crate::process_instance_script_content::split_imports;
 use crate::svelte2tsx_nodes::hoistable_interfaces::{HoistContext, PropsTypeShape};
 
 /// Output of [`emit_document`].
@@ -212,18 +211,41 @@ pub struct TokenMapEntry {
 /// annotation, say) still has its declarations, annotations included,
 /// to svelte2tsx; oxc's JavaScript parse gives up on such a script, so
 /// its TypeScript parse stands in when that one succeeds.
-fn parse_script_as_svelte2tsx<'a>(
-    allocator: &'a Allocator,
-    script: &svn_parser::ScriptSection<'a>,
-) -> svn_parser::ParsedScript<'a> {
-    let parsed = parse_script_body(allocator, script.content, script.lang);
-    if parsed.panicked && script.lang == svn_parser::ScriptLang::Js {
-        let typescript = parse_script_body(allocator, script.content, svn_parser::ScriptLang::Ts);
+fn parse_script_as_svelte2tsx<'p, 'a>(
+    scripts: &'p svn_parser::ScriptParses<'a>,
+    kind: svn_parser::ScriptKind,
+    lang: svn_parser::ScriptLang,
+) -> Option<&'p svn_parser::ParsedScript<'a>> {
+    let parsed = scripts.get(kind, lang)?;
+    if parsed.panicked && lang == svn_parser::ScriptLang::Js {
+        let typescript = scripts.get(kind, svn_parser::ScriptLang::Ts)?;
         if !typescript.panicked {
-            return typescript;
+            return Some(typescript);
         }
     }
-    parsed
+    Some(parsed)
+}
+
+/// The instance and module scripts as svelte2tsx reads them (see
+/// [`parse_script_as_svelte2tsx`]).
+#[allow(clippy::type_complexity)]
+fn component_scripts<'p, 'a>(
+    doc: &Document<'_>,
+    scripts: &'p svn_parser::ScriptParses<'a>,
+) -> (
+    Option<&'p svn_parser::ParsedScript<'a>>,
+    Option<&'p svn_parser::ParsedScript<'a>>,
+) {
+    let read = |kind, script: Option<&svn_parser::ScriptSection<'_>>| {
+        script.and_then(|s| parse_script_as_svelte2tsx(scripts, kind, s.lang))
+    };
+    (
+        read(
+            svn_parser::ScriptKind::Instance,
+            doc.instance_script.as_ref(),
+        ),
+        read(svn_parser::ScriptKind::Module, doc.module_script.as_ref()),
+    )
 }
 
 /// What the instance-script split needs to decide which type
@@ -298,8 +320,31 @@ pub fn emit_document_with_lang(
     source_path: &Path,
     is_ts: bool,
 ) -> EmitOutput {
+    let alloc = Allocator::default();
+    let scripts = svn_parser::ScriptParses::new(&alloc, doc);
+    emit_document_with_parses(doc, fragment, summary, source_path, is_ts, &scripts)
+}
+
+/// [`emit_document_with_lang`] reading the scripts from `scripts`, the
+/// parses another pass over the same document already made.
+pub fn emit_document_with_parses(
+    doc: &Document<'_>,
+    fragment: &Fragment,
+    summary: &TemplateSummary,
+    source_path: &Path,
+    is_ts: bool,
+    scripts: &svn_parser::ScriptParses<'_>,
+) -> EmitOutput {
     let render_name = render_function_name(source_path);
-    emit_document_with_render_name(doc, fragment, summary, render_name, source_path, is_ts)
+    emit_document_with_render_name(
+        doc,
+        fragment,
+        summary,
+        render_name,
+        source_path,
+        is_ts,
+        Some(scripts),
+    )
 }
 
 fn emit_document_with_render_name(
@@ -309,6 +354,7 @@ fn emit_document_with_render_name(
     render_name: SmolStr,
     source_path: &Path,
     is_ts: bool,
+    scripts: Option<&svn_parser::ScriptParses<'_>>,
 ) -> EmitOutput {
     // Set the thread-local so deep emit sites (bind:this casts,
     // each-block `let i`, branch bindings, snippet params) can branch
@@ -327,6 +373,7 @@ fn emit_document_with_render_name(
                 render_name,
                 source_path,
                 is_ts,
+                None,
             )
         });
     }
@@ -376,6 +423,7 @@ fn emit_document_with_render_name(
                 render_name,
                 source_path,
                 is_ts,
+                None,
             )
         });
     }
@@ -406,16 +454,17 @@ fn emit_document_with_render_name(
     // separate (different source string) and only fires when the
     // rewrite chain actually changed the script bytes — identity
     // chains collapse `rewritten_content` to None below.
-    let alloc_instance = Allocator::default();
-    let parsed_instance = doc
-        .instance_script
-        .as_ref()
-        .map(|s| parse_script_as_svelte2tsx(&alloc_instance, s));
-    let alloc_module = Allocator::default();
-    let parsed_module = doc
-        .module_script
-        .as_ref()
-        .map(|s| parse_script_as_svelte2tsx(&alloc_module, s));
+    // Shared with the other passes over this document when the caller
+    // made them; a document rebuilt above has its own.
+    let alloc_scripts = Allocator::default();
+    let own_scripts;
+    let (parsed_instance, parsed_module) = match scripts.filter(|s| s.covers(doc)) {
+        Some(scripts) => component_scripts(doc, scripts),
+        None => {
+            own_scripts = svn_parser::ScriptParses::new(&alloc_scripts, doc);
+            component_scripts(doc, &own_scripts)
+        }
+    };
     // Root `{#snippet}` blocks are hoisted out of the template
     // (upstream `index.ts`, `rootSnippets`): to module scope when
     // every free name they reference is allowed there — nothing the
@@ -429,12 +478,8 @@ fn emit_document_with_render_name(
             _ => None,
         })
         .collect();
-    let module_hoisted: Vec<bool> = module_hoistable_snippets(
-        &root_snippets,
-        doc,
-        parsed_instance.as_ref(),
-        parsed_module.as_ref(),
-    );
+    let module_hoisted: Vec<bool> =
+        module_hoistable_snippets(&root_snippets, doc, parsed_instance, parsed_module);
     let instantiations = render_function::instantiation_index(summary);
     let mut snippet_action_counter: usize = 0;
     // Module script content. Without an instance script, root snippets
@@ -524,20 +569,17 @@ fn emit_document_with_render_name(
     // call `has_strict_events_decl`.
     // SVELTE-4-COMPAT: declared `$$Events`.
     let has_strict_events_decl =
-        svelte4::compat::has_strict_events_ast(parsed_instance.as_ref(), parsed_module.as_ref());
+        svelte4::compat::has_strict_events_ast(parsed_instance, parsed_module);
     // SlotHandler PLAN Stage 5: instance-script-only `$$Slots`
     // detection. When the user declared `interface $$Slots` or
     // `type $$Slots`, the render-fn return uses that as the slots
     // surface; the synthesised slot-defs are ignored.
     // SVELTE-4-COMPAT: declared `$$Slots`.
-    let has_strict_slots_decl = svelte4::compat::has_strict_slots_ast(parsed_instance.as_ref());
+    let has_strict_slots_decl = svelte4::compat::has_strict_slots_ast(parsed_instance);
     // SVELTE-4-COMPAT: runes mode decides between the Svelte 4 and 5 shapes.
-    let runes_mode = is_runes_mode(doc, fragment, parsed_instance.as_ref());
-    let ambients = svn_analyze::find_ambient_refs(
-        fragment,
-        doc.source,
-        parsed_instance.as_ref().map(|p| &p.program),
-    );
+    let runes_mode = is_runes_mode(doc, fragment, parsed_instance);
+    let ambients =
+        svn_analyze::find_ambient_refs(fragment, doc.source, parsed_instance.map(|p| &p.program));
 
     // Single analyze-time resolution of every Props decision emit
     // makes downstream — type text, type root name, destructure
@@ -553,7 +595,7 @@ fn emit_document_with_render_name(
     // `keyof typeof X` resolves against the real declaration rather
     // than the lossy declare-const stub.
     let raw_props_info: PropsInfo =
-        if let (Some(s), Some(parsed)) = (doc.instance_script.as_ref(), parsed_instance.as_ref()) {
+        if let (Some(s), Some(parsed)) = (doc.instance_script.as_ref(), parsed_instance) {
             PropsInfo::build(&parsed.program, s.content, runes_mode)
         } else {
             PropsInfo::default()
@@ -753,7 +795,7 @@ fn emit_document_with_render_name(
                 .unwrap_or_default();
             // Calls to an untyped dispatcher made in the template
             // (`on:click={() => dispatch('save')}`) dispatch events too.
-            if let Some(p) = parsed_instance.as_ref() {
+            if let Some(p) = parsed_instance {
                 let dispatchers = svn_analyze::find_untyped_dispatcher_local_names(&p.program);
                 for name in svn_analyze::find_template_dispatched_event_names(
                     fragment,
@@ -783,7 +825,7 @@ fn emit_document_with_render_name(
             // primitives, which TS rejects on every consumer call.
             // The post-fix override produces `CustomEvent<any>`,
             // which matches upstream and accepts every handler.
-            if let Some(p) = parsed_instance.as_ref() {
+            if let Some(p) = parsed_instance {
                 let all_inline_member_names =
                     svn_analyze::collect_inline_typed_dispatcher_member_names(&p.program);
                 let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -1147,7 +1189,8 @@ fn emit_document_with_render_name(
     let store_refs = script_template_analysis::collect_store_refs(
         doc,
         fragment,
-        parsed_instance.as_ref(),
+        parsed_instance,
+        parsed_module,
         rewritten_content.as_deref(),
     );
     let split = doc.instance_script.as_ref().map(|s| {
@@ -1159,7 +1202,10 @@ fn emit_document_with_render_name(
             &props_info,
             &store_refs,
         );
-        split_imports(content, s.lang, &hoist)
+        // The script as written, parsed as TypeScript already, unless
+        // the rewrites above changed it.
+        let typescript = parsed_instance.filter(|_| rewritten_content.is_none());
+        process_instance_script_content::split_imports_parsed(content, typescript, &hoist)
     });
 
     // svelte2tsx moves the root snippets that stay in the component to
@@ -1536,7 +1582,7 @@ fn emit_document_with_render_name(
         store_refs,
     } = analyze_script_and_template_refs(
         doc,
-        parsed_instance.as_ref(),
+        parsed_instance,
         split.as_ref(),
         &props_info,
         effective_props_type_text.as_deref(),
@@ -1554,10 +1600,10 @@ fn emit_document_with_render_name(
         .collect();
     {
         let mut import_names: std::collections::HashSet<SmolStr> = std::collections::HashSet::new();
-        if let Some(p) = parsed_instance.as_ref() {
+        if let Some(p) = parsed_instance {
             store_subscriptions::import_local_names(&p.program, &mut import_names);
         }
-        if let Some(p) = parsed_module.as_ref() {
+        if let Some(p) = parsed_module {
             store_subscriptions::import_local_names(&p.program, &mut import_names);
         }
         let imported: Vec<&str> = store_bases
@@ -1796,7 +1842,7 @@ fn emit_document_with_render_name(
     // otherwise dispatcher and bubbled events count.
     let has_events = if has_strict_events_decl {
         // SVELTE-4-COMPAT: events named by a declared `$$Events`.
-        svelte4::compat::strict_events_decl_has_events(parsed_instance.as_ref())
+        svelte4::compat::strict_events_decl_has_events(parsed_instance)
     } else {
         has_concrete_dispatcher_events || has_bubbled_events
     };
@@ -1890,8 +1936,8 @@ fn emit_document_with_render_name(
         rejected_by_svelte2tsx: svelte2tsx_rejects::svelte2tsx_rejects(
             doc,
             fragment,
-            parsed_instance.as_ref(),
-            parsed_module.as_ref(),
+            parsed_instance,
+            parsed_module,
         ),
     }
 }

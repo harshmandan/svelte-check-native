@@ -32,7 +32,7 @@ use svn_analyze::{
     PropsInfo, collect_rune_scan_context, collect_top_level_bindings,
     find_store_refs_with_bindings, find_template_store_refs, has_svelte_store_derived_import,
 };
-use svn_parser::parse_script_body;
+use svn_parser::{ScriptLang, parse_script_body};
 
 use crate::process_instance_script_content;
 
@@ -88,20 +88,31 @@ pub(crate) fn collect_store_refs<'alloc>(
     doc: &svn_parser::Document<'_>,
     fragment: &svn_parser::Fragment,
     parsed_instance: Option<&svn_parser::ParsedScript<'alloc>>,
+    parsed_module: Option<&svn_parser::ParsedScript<'alloc>>,
     rewritten_content: Option<&str>,
 ) -> Vec<SmolStr> {
+    // The module script in its own language: the caller's parse when it
+    // is that one (not TypeScript standing in for a JavaScript parse
+    // that gave up).
     let alloc_mod = Allocator::default();
-    let parsed_mod = doc
-        .module_script
-        .as_ref()
-        .map(|ms| parse_script_body(&alloc_mod, ms.content, ms.lang));
+    let own_mod;
+    let parsed_mod = match (&doc.module_script, parsed_module) {
+        (Some(ms), Some(parsed)) if parsed.is_typescript == (ms.lang == ScriptLang::Ts) => {
+            Some(parsed)
+        }
+        (Some(ms), _) => {
+            own_mod = parse_script_body(&alloc_mod, ms.content, ms.lang);
+            Some(&own_mod)
+        }
+        (None, _) => None,
+    };
 
     let mut script_bindings: HashSet<String> = HashSet::new();
     // Type-only imports count too: upstream declares `$name` for any
     // imported `name` it sees read that way (inside ignore comments,
     // so a type that isn't a store just leaves `$name` as `any`).
     let mut imports: HashSet<SmolStr> = HashSet::new();
-    if let Some(parsed) = &parsed_mod {
+    if let Some(parsed) = parsed_mod {
         collect_top_level_bindings(&parsed.program, &mut script_bindings);
         crate::store_subscriptions::import_local_names(&parsed.program, &mut imports);
     }

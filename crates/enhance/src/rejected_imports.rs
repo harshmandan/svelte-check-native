@@ -469,8 +469,10 @@ fn checked_refs(file: &Path, source: &str, check_js: Option<bool>) -> Option<Vec
             return None;
         }
         let (fragment, _) = svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
+        let allocator = Allocator::default();
+        let scripts = svn_parser::ScriptParses::new(&allocator, &doc);
         return Some(svelte_refs::collect_component(
-            &doc, &fragment, source, is_ts,
+            &doc, &fragment, source, is_ts, &scripts,
         ));
     }
     let source_type = SourceType::from_path(file).ok()?;

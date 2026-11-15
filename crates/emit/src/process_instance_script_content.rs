@@ -28,7 +28,7 @@ use oxc_ast::ast::{
 };
 use oxc_span::GetSpan;
 use smol_str::SmolStr;
-use svn_parser::{ScriptLang, parse_script_body};
+use svn_parser::{ParsedScript, ScriptLang, parse_script_body};
 
 use crate::jsdoc::{attached_jsdoc_tags, has_type_tag};
 use crate::svelte2tsx_nodes::exported_type_info::collect_export_type_infos;
@@ -173,14 +173,32 @@ fn comma_end(comments: &[oxc_ast::Comment], content: &str, from: usize) -> usize
 ///
 /// Re-parses the body once with oxc. If parsing panics on malformed user
 /// code, the content is passed through unchanged.
+#[cfg(test)]
 pub fn split_imports(content: &str, _lang: ScriptLang, hoist: &HoistContext) -> SplitScript {
+    split_imports_parsed(content, None, hoist)
+}
+
+/// [`split_imports`] given `content`'s TypeScript parse when the caller
+/// holds it.
+pub fn split_imports_parsed(
+    content: &str,
+    typescript: Option<&ParsedScript<'_>>,
+    hoist: &HoistContext,
+) -> SplitScript {
     // Always parse as TypeScript — TS is a superset of JS for our
     // purposes (we're identifying statement spans, not generating
     // runtime code). Parsing as TS lets us correctly handle scripts
     // that use type annotations even when `<script>` doesn't carry
     // `lang="ts"`. (Svelte 5 + svelte:options runes accepts this.)
     let allocator = Allocator::default();
-    let parsed = parse_script_body(&allocator, content, ScriptLang::Ts);
+    let own;
+    let parsed = match typescript.filter(|p| p.is_typescript) {
+        Some(parsed) => parsed,
+        None => {
+            own = parse_script_body(&allocator, content, ScriptLang::Ts);
+            &own
+        }
+    };
 
     if parsed.panicked {
         return SplitScript {

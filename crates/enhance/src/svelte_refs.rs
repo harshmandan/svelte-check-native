@@ -83,16 +83,23 @@ pub(crate) fn collect_component(
     fragment: &Fragment,
     source: &str,
     is_ts: bool,
+    scripts: &svn_parser::ScriptParses<'_>,
 ) -> Vec<SvelteImportRef> {
     let mut out = Vec::new();
-    for section in [doc.instance_script.as_ref(), doc.module_script.as_ref()]
-        .into_iter()
-        .flatten()
+    for (kind, section) in [
+        (
+            svn_parser::ScriptKind::Instance,
+            doc.instance_script.as_ref(),
+        ),
+        (svn_parser::ScriptKind::Module, doc.module_script.as_ref()),
+    ] {
         // Every reference names a `.svelte` file.
-        .filter(|section| section.content.contains(".svelte"))
-    {
-        let allocator = Allocator::default();
-        let parsed = svn_parser::parse_script_body(&allocator, section.content, section.lang);
+        let Some(section) = section.filter(|s| s.content.contains(".svelte")) else {
+            continue;
+        };
+        let Some(parsed) = scripts.get(kind, section.lang) else {
+            continue;
+        };
         if parsed.panicked {
             // A syntactically broken script yields a garbage AST; the
             // caller reports the parse error separately. Skip.
@@ -501,7 +508,9 @@ mod tests {
         let (doc, _) = svn_parser::parse_sections(src);
         let (fragment, _) = svn_parser::parse_all_template_runs(src, &doc.template.text_runs);
         let is_ts = svn_parser::is_ts_svelte(src);
-        collect_component(&doc, &fragment, src, is_ts)
+        let alloc = Allocator::default();
+        let scripts = svn_parser::ScriptParses::new(&alloc, &doc);
+        collect_component(&doc, &fragment, src, is_ts, &scripts)
             .into_iter()
             .map(|r| {
                 (

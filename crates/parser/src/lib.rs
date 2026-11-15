@@ -52,7 +52,7 @@ pub use document::{
 pub use error::ParseError;
 pub use mustache::find_mustache_end;
 pub use scanner::is_svelte_whitespace;
-pub use script::{ParsedScript, parse_script_body};
+pub use script::{ParsedScript, ScriptKind, ScriptParses, parse_script_body};
 pub use script_tag_expression::{
     script_tag_expression_spans, svelte2tsx_script_spans, typescript_regex_end,
 };

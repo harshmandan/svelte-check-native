@@ -931,6 +931,7 @@ fn native_diagnostics_for_parsed(
     source: &str,
     doc: &svn_parser::Document<'_>,
     fragment: &svn_parser::ast::Fragment,
+    scripts: &svn_parser::ScriptParses<'_>,
     section_errors: &[svn_parser::ParseError],
     template_errors: &[svn_parser::ParseError],
     config_resolver: &svelte_config::ConfigResolver,
@@ -993,7 +994,7 @@ fn native_diagnostics_for_parsed(
         // a second, transpiled reading has not been asked about.
         template_parse_accepted: !already_transpiled,
     };
-    let report = svn_lint::lint_parsed(doc, fragment, source, pm, path, options, compat);
+    let report = svn_lint::lint_parsed(doc, fragment, scripts, source, pm, path, options, compat);
     // A compiler crash reaches svelte-check as an exception with no
     // position and no code; `createParserErrorDiagnostic` places it at
     // the start of the file and copies the message alone.
@@ -1049,11 +1050,14 @@ impl NativeLint<'_> {
         let (doc, section_errors) = svn_parser::parse_sections(text);
         let (fragment, template_errors) =
             svn_parser::parse_all_template_runs(text, &doc.template.text_runs);
+        let script_alloc = oxc_allocator::Allocator::default();
+        let scripts = svn_parser::ScriptParses::new(&script_alloc, &doc);
         let mut result = native_diagnostics_for_parsed(
             path,
             text,
             &doc,
             &fragment,
+            &scripts,
             &section_errors,
             &template_errors,
             self.config_resolver,
@@ -1342,14 +1346,18 @@ fn rejection_diagnostic(
 fn missing_svelte_import_diagnostics(
     file: &Path,
     source: &str,
-    component: Option<(&svn_parser::Document<'_>, &svn_parser::Fragment)>,
+    component: Option<(
+        &svn_parser::Document<'_>,
+        &svn_parser::Fragment,
+        &svn_parser::ScriptParses<'_>,
+    )>,
     resolver: &svn_enhance::SvelteImportResolver,
 ) -> MissingImportsFound {
     let script_is_ts = svn_parser::is_ts_svelte(source);
     let found = match component {
-        Some((doc, fragment)) => {
-            svn_enhance::missing_svelte_import_diagnostics(file, source, doc, fragment, resolver)
-        }
+        Some((doc, fragment, scripts)) => svn_enhance::missing_svelte_import_diagnostics(
+            file, source, doc, fragment, scripts, resolver,
+        ),
         None => svn_enhance::missing_svelte_import_diagnostics_in_script(file, source, resolver),
     };
     let diagnostics = found
@@ -2282,12 +2290,16 @@ fn check_project(
                 // monorepo whose chosen config included only e2e
                 // globs. Bridge mode already lints the full set;
                 // native now agrees.
+                // Every pass below reads the scripts from one parse each.
+                let script_alloc = oxc_allocator::Allocator::default();
+                let scripts = svn_parser::ScriptParses::new(&script_alloc, &doc);
                 let native = native_compat.map(|compat| {
                     native_diagnostics_for_parsed(
                         file,
                         source,
                         &doc,
                         &fragment,
+                        &scripts,
                         &section_errors,
                         &template_errors,
                         config_resolver_ref,
@@ -2304,7 +2316,7 @@ fn check_project(
                     missing_svelte_import_diagnostics(
                         file,
                         source,
-                        Some((&doc, &fragment)),
+                        Some((&doc, &fragment, &scripts)),
                         svelte_import_resolver_ref,
                     )
                 } else {
@@ -2321,8 +2333,9 @@ fn check_project(
                 // parse user-authored JSDoc `@typedef` / `@type`
                 // annotations on Svelte-4 `export let` props.
                 let is_ts = svn_parser::is_ts_svelte(source);
-                let emitted =
-                    svn_emit::emit_document_with_lang(&doc, &fragment, &summary, file, is_ts);
+                let emitted = svn_emit::emit_document_with_parses(
+                    &doc, &fragment, &summary, file, is_ts, &scripts,
+                );
                 // A component svelte2tsx refuses to convert leaves the
                 // run upstream: no overlay, no diagnostics of any kind,
                 // not counted; importers resolve it through Svelte's

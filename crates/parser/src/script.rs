@@ -63,6 +63,68 @@ pub fn parse_script_body<'alloc>(
     }
 }
 
+/// Which of a component's two scripts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptKind {
+    Instance,
+    Module,
+}
+
+/// The parses of one component's scripts, shared by every pass that
+/// reads them (lint, emit, the import checks): each script is parsed at
+/// most once per language, when a pass first asks for it.
+pub struct ScriptParses<'a> {
+    allocator: &'a Allocator,
+    instance: Option<&'a str>,
+    module: Option<&'a str>,
+    /// `[instance JS, instance TS, module JS, module TS]`.
+    parsed: [std::cell::OnceCell<ParsedScript<'a>>; 4],
+}
+
+impl<'a> ScriptParses<'a> {
+    pub fn new(allocator: &'a Allocator, doc: &crate::document::Document<'a>) -> Self {
+        Self {
+            allocator,
+            instance: doc.instance_script.as_ref().map(|s| s.content),
+            module: doc.module_script.as_ref().map(|s| s.content),
+            parsed: Default::default(),
+        }
+    }
+
+    /// The `kind` script's body parsed as `lang`; `None` when the
+    /// component has no such script.
+    pub fn get(&self, kind: ScriptKind, lang: ScriptLang) -> Option<&ParsedScript<'a>> {
+        let (content, slot) = match kind {
+            ScriptKind::Instance => (self.instance?, 0),
+            ScriptKind::Module => (self.module?, 2),
+        };
+        let slot = slot + usize::from(lang == ScriptLang::Ts);
+        Some(self.parsed[slot].get_or_init(|| parse_script_body(self.allocator, content, lang)))
+    }
+
+    /// Whether these are the parses of `doc`'s scripts: the same text,
+    /// not just equal text.
+    pub fn covers(&self, doc: &crate::document::Document<'_>) -> bool {
+        let same = |held: Option<&str>, script: Option<&crate::document::ScriptSection<'_>>| match (
+            held, script,
+        ) {
+            (None, None) => true,
+            (Some(a), Some(b)) => std::ptr::eq(a, b.content),
+            _ => false,
+        };
+        same(self.instance, doc.instance_script.as_ref())
+            && same(self.module, doc.module_script.as_ref())
+    }
+
+    pub fn instance(&self, lang: ScriptLang) -> Option<&ParsedScript<'a>> {
+        self.get(ScriptKind::Instance, lang)
+    }
+
+    pub fn module(&self, lang: ScriptLang) -> Option<&ParsedScript<'a>> {
+        self.get(ScriptKind::Module, lang)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

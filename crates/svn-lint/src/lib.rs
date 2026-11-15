@@ -179,11 +179,14 @@ pub fn lint_file_or_exception(
 /// both fatal-compile-error detection and this lint walk — and builds
 /// one [`PositionMap`](svn_core::PositionMap) per file. This entry lets
 /// it hand the parse (`doc` + `fragment`) and the map straight in,
-/// instead of [`lint_file`] re-parsing and re-indexing the source.
+/// instead of [`lint_file`] re-parsing and re-indexing the source;
+/// `scripts` are the parses of its scripts the other passes share.
 /// `options.runes`/`compat` behave as `runes`/`compat` in [`lint_file`].
+#[allow(clippy::too_many_arguments)]
 pub fn lint_parsed<'src>(
     doc: &svn_parser::Document<'_>,
     fragment: &svn_parser::ast::Fragment,
+    scripts: &svn_parser::ScriptParses<'_>,
     source: &'src str,
     positions: svn_core::PositionMap<'src>,
     path: &Path,
@@ -198,7 +201,15 @@ pub fn lint_parsed<'src>(
     ctx.bidi_last_index = options.bidi_last_index;
     ctx.template_parse_accepted = options.template_parse_accepted;
     report_compile_options(&options, &mut ctx);
-    crate::walk::walk_parsed(doc, fragment, source, path, options.runes, &mut ctx);
+    crate::walk::walk_parsed(
+        doc,
+        fragment,
+        scripts,
+        source,
+        path,
+        options.runes,
+        &mut ctx,
+    );
     let exception = ctx.take_exception();
     let needs_real_transpile = ctx.needs_real_transpile && !ctx.real_transpile_unavailable;
     // A compile that throws never reaches the analysis, where the regex

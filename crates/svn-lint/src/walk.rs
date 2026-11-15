@@ -9,7 +9,7 @@ use std::path::Path;
 use smol_str::SmolStr;
 
 use svn_parser::ast::{Attribute, Fragment, Node, SvelteElementKind};
-use svn_parser::{parse_all_template_runs, parse_script_body, parse_sections};
+use svn_parser::{parse_all_template_runs, parse_sections};
 
 use crate::codes::Code;
 use crate::context::{CustomElementInfo, LintContext};
@@ -140,7 +140,9 @@ pub fn walk(source: &str, path: &Path, runes: Option<bool>, ctx: &mut LintContex
     if let Some((code, message, range)) = crate::parse_rejection::script_tag_error(&doc, &errors) {
         ctx.emit_error(code, message, range);
     }
-    walk_parsed(&doc, &fragment, source, path, runes, ctx);
+    let script_alloc = oxc_allocator::Allocator::default();
+    let scripts = svn_parser::ScriptParses::new(&script_alloc, &doc);
+    walk_parsed(&doc, &fragment, &scripts, source, path, runes, ctx);
 }
 
 /// Walk an ALREADY-PARSED `.svelte` document — the body of [`walk`]
@@ -150,6 +152,7 @@ pub fn walk(source: &str, path: &Path, runes: Option<bool>, ctx: &mut LintContex
 pub fn walk_parsed(
     doc: &svn_parser::Document<'_>,
     fragment: &Fragment,
+    scripts: &svn_parser::ScriptParses<'_>,
     source: &str,
     path: &Path,
     runes: Option<bool>,
@@ -203,23 +206,22 @@ pub fn walk_parsed(
             s.lang
         }
     };
-    let script_alloc = oxc_allocator::Allocator::default();
     let parsed_module = doc
         .module_script
         .as_ref()
-        .map(|s| parse_script_body(&script_alloc, s.content, script_lang(s)));
+        .and_then(|s| scripts.module(script_lang(s)));
     let parsed_instance = doc
         .instance_script
         .as_ref()
-        .map(|s| parse_script_body(&script_alloc, s.content, script_lang(s)));
-    let module_program = parsed_module.as_ref().map(|p| &p.program);
-    let instance_program = parsed_instance.as_ref().map(|p| &p.program);
+        .and_then(|s| scripts.instance(script_lang(s)));
+    let module_program = parsed_module.map(|p| &p.program);
+    let instance_program = parsed_instance.map(|p| &p.program);
     // Only the language server's fallback preprocessor (no Svelte
     // config) is TypeScript's own transpile.
     if ctx.ts_scripts_transpiled && !ctx.preprocess_configured {
         let scripts: Vec<_> = [
-            (doc.module_script.as_ref(), parsed_module.as_ref()),
-            (doc.instance_script.as_ref(), parsed_instance.as_ref()),
+            (doc.module_script.as_ref(), parsed_module),
+            (doc.instance_script.as_ref(), parsed_instance),
         ]
         .into_iter()
         .filter_map(|(section, parsed)| Some((section?, parsed?)))
@@ -319,8 +321,8 @@ pub fn walk_parsed(
     {
         use crate::rules::js_parse_error::{Script, Settings, script_parse_error};
         let scripts: Vec<Script<'_, '_, '_>> = [
-            (doc.module_script.as_ref(), parsed_module.as_ref()),
-            (doc.instance_script.as_ref(), parsed_instance.as_ref()),
+            (doc.module_script.as_ref(), parsed_module),
+            (doc.instance_script.as_ref(), parsed_instance),
         ]
         .into_iter()
         .filter_map(|(section, parsed)| {

@@ -229,10 +229,10 @@ fn check_element(
                 ctx.emit(Code::a11y_aria_attributes, msg, attr_range);
             }
             // a11y_unknown_aria_attribute: name after "aria-" must
-            // be in the known attribute table. Suggest closest via
-            // Damerau-free Levenshtein similarity.
+            // be in the known attribute table. The suggestion is the
+            // compiler's `fuzzymatch`.
             if !ARIA_ATTRIBUTES.contains(&aria_name) {
-                let suggestion = fuzzy_match(aria_name, ARIA_ATTRIBUTES);
+                let suggestion = crate::fuzzymatch::fuzzymatch(aria_name, ARIA_ATTRIBUTES);
                 let msg = messages::a11y_unknown_aria_attribute(aria_name, suggestion);
                 ctx.emit(Code::a11y_unknown_aria_attribute, msg, attr_range);
             } else if let Some(p) = plain
@@ -286,7 +286,7 @@ fn check_element(
                             let msg = messages::a11y_no_abstract_role(role_word);
                             ctx.emit(Code::a11y_no_abstract_role, msg, attr_range);
                         } else if !ARIA_ROLES.contains(&role_word) {
-                            let suggestion = fuzzy_match(role_word, ARIA_ROLES);
+                            let suggestion = crate::fuzzymatch::fuzzymatch(role_word, ARIA_ROLES);
                             let msg = messages::a11y_unknown_role(role_word, suggestion);
                             ctx.emit(Code::a11y_unknown_role, msg, attr_range);
                         } else {
@@ -945,14 +945,9 @@ fn classify_autocomplete_value<'a>(
 ) -> AutocompleteValue<'a> {
     match p.value.as_ref() {
         None => AutocompleteValue::Bare,
-        Some(v) if v.parts.is_empty() && v.quoted => AutocompleteValue::Literal("".into()),
-        Some(v) if v.parts.len() == 1 => match &v.parts[0] {
-            AttrValuePart::Text { range } => AutocompleteValue::Literal(
-                crate::html_decode::decode_character_references(range.slice(source), true),
-            ),
-            AttrValuePart::Expression { .. } => AutocompleteValue::Dynamic,
-        },
-        _ => AutocompleteValue::Dynamic,
+        Some(v) => {
+            static_text(v, source).map_or(AutocompleteValue::Dynamic, AutocompleteValue::Literal)
+        }
     }
 }
 
@@ -1355,20 +1350,7 @@ fn validate_aria_value(
     // decoded as the compiler holds it. None == dynamic → skip.
     let decoded: Option<std::borrow::Cow<'_, str>> = match p.value.as_ref() {
         None => Some("".into()), // bare attribute `aria-level`
-        Some(v) => {
-            if v.parts.is_empty() && v.quoted {
-                Some("".into())
-            } else if v.parts.len() == 1 {
-                match &v.parts[0] {
-                    AttrValuePart::Text { range } => Some(
-                        crate::html_decode::decode_character_references(range.slice(source), true),
-                    ),
-                    AttrValuePart::Expression { .. } => None,
-                }
-            } else {
-                None
-            }
-        }
+        Some(v) => static_text(v, source),
     };
     let value: Option<&str> = decoded.as_deref();
     let Some(val) = value else { return };
@@ -1526,58 +1508,6 @@ fn has_disabled_attr(attrs: &HashMap<String, &Attribute>, source: &str) -> bool 
     })
 }
 
-fn fuzzy_match<'a>(name: &str, candidates: &[&'a str]) -> Option<&'a str> {
-    // Simple Levenshtein similarity — find the closest match where
-    // similarity ≥ 0.7. Matches the threshold upstream uses in
-    // fuzzymatch.js.
-    let target = name.to_ascii_lowercase();
-    let mut best: Option<(f64, &str)> = None;
-    for c in candidates {
-        let sim = levenshtein_similarity(&target, &c.to_ascii_lowercase());
-        if sim >= 0.7 && best.map(|(s, _)| sim > s).unwrap_or(true) {
-            best = Some((sim, *c));
-        }
-    }
-    best.map(|(_, c)| c)
-}
-
-fn levenshtein_similarity(a: &str, b: &str) -> f64 {
-    let distance = levenshtein_distance(a, b);
-    let max_len = a.chars().count().max(b.chars().count()) as f64;
-    if max_len == 0.0 {
-        return 1.0;
-    }
-    1.0 - (distance as f64) / max_len
-}
-
-fn levenshtein_distance(a: &str, b: &str) -> usize {
-    let a_chars: Vec<char> = a.chars().collect();
-    let b_chars: Vec<char> = b.chars().collect();
-    if a_chars.is_empty() {
-        return b_chars.len();
-    }
-    if b_chars.is_empty() {
-        return a_chars.len();
-    }
-    let mut prev_row: Vec<usize> = (0..=b_chars.len()).collect();
-    let mut curr_row = vec![0usize; b_chars.len() + 1];
-    for i in 1..=a_chars.len() {
-        curr_row[0] = i;
-        for j in 1..=b_chars.len() {
-            let cost = if a_chars[i - 1] == b_chars[j - 1] {
-                0
-            } else {
-                1
-            };
-            curr_row[j] = (prev_row[j] + 1)
-                .min(curr_row[j - 1] + 1)
-                .min(prev_row[j - 1] + cost);
-        }
-        std::mem::swap(&mut prev_row, &mut curr_row);
-    }
-    prev_row[b_chars.len()]
-}
-
 fn is_render_tag(source: &str, range: Range) -> bool {
     source
         .get(range.start as usize..range.end as usize)
@@ -1687,7 +1617,15 @@ fn get_static_text_value<'a>(
     p: &svn_parser::ast::PlainAttr,
     source: &'a str,
 ) -> Option<std::borrow::Cow<'a, str>> {
-    let v = p.value.as_ref()?;
+    static_text(p.value.as_ref()?, source)
+}
+
+/// A written attribute value when it is one piece of text (or quoted
+/// and empty), decoded; `None` when an expression is part of it.
+fn static_text<'a>(
+    v: &svn_parser::ast::AttrValue,
+    source: &'a str,
+) -> Option<std::borrow::Cow<'a, str>> {
     if v.parts.is_empty() && v.quoted {
         return Some("".into());
     }

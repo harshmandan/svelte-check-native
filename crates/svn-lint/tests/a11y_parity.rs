@@ -418,3 +418,22 @@ fn warnings_come_in_the_compiler_order() {
         assert_eq!(codes(&warnings), *want, "{src}");
     }
 }
+
+/// Unknown ARIA attribute and role suggestions come from the compiler's
+/// `fuzzymatch` (n-gram ranking), not from plain edit distance: the two
+/// disagree on these names.
+#[test]
+fn unknown_aria_names_are_suggested_by_fuzzymatch() {
+    let warnings = lint(r#"<div aria-rpoeffect="x"></div><div role="azption"></div>"#);
+    let messages: Vec<&str> = warnings
+        .iter()
+        .map(|w| w.message.lines().next().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        messages,
+        [
+            "Unknown aria attribute 'aria-rpoeffect'",
+            "Unknown role 'azption'. Did you mean 'option'?",
+        ]
+    );
+}

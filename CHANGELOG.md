@@ -3519,8 +3519,7 @@ issues` from both tools.
   at the expected version.
 - **`--tsgo-diagnostics`** — forward `--extendedDiagnostics` to tsgo
   and print its perf/memory stats block (file/line/symbol counts,
-  memory, phase timings) after the run. Same intent as upstream
-  `svelte-check-rs`'s flag of the same name.
+  memory, phase timings) after the run.
 - **`--tsgo`** — accepted as a no-op for command-line compatibility
   with upstream `svelte-check` (tsgo is always on in our pipeline).
 - **Partial Svelte 4 syntax compat** — `export let foo` and
@@ -3538,7 +3537,6 @@ On the same ~1200-file workload (M-series 8-core, warm cache, median of
 | Tool                     | Warm     |
 | ------------------------ | -------- |
 | `svelte-check-native`    | **~3 s** |
-| `svelte-check-rs`        | ~11 s    |
 | `svelte-check --tsgo`    | ~13 s    |
 | `svelte-check` (default) | ~40 s    |
 

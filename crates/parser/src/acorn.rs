@@ -49,10 +49,20 @@ pub fn read_expression(text: &str, ts: bool) -> Read {
     match acorn_rs::read_expression(text, language) {
         Ok((end, lookahead)) => Read::Expression { end, lookahead },
         Err(error) => Read::Error {
-            at: error.pos,
+            at: error_offset(&error),
+            column_of: matches!(error.position, acorn_rs::Position::ColumnOf(_)),
             message: error.message,
-            column_of: error.column_of,
         },
+    }
+}
+
+/// The offset an acorn error names: for one placed at a column number,
+/// the offset that column was taken from; 0 for one with no position,
+/// which the compiler reports at the start of the file.
+pub fn error_offset(error: &acorn_rs::SyntaxError) -> u32 {
+    match error.position {
+        acorn_rs::Position::Offset(at) | acorn_rs::Position::ColumnOf(at) => at,
+        _ => 0,
     }
 }
 

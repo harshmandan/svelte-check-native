@@ -71,7 +71,7 @@ json5 = "1"
 unicode-ident = "1"
 # acorn and @sveltejs/acorn-typescript ported to Rust: syntax errors exactly as
 # the Svelte compiler's parser raises them (github.com/harshmandan/acorn-rs).
-acorn-rs = "0.1"
+acorn-rs = "0.2"
 
 # CLI
 clap = { version = "4", features = ["derive"] }

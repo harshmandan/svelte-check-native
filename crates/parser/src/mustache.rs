@@ -42,14 +42,14 @@ fn tokenized_mustache_end(
             Ok(close) => return Some(Some(expression_start + close)),
             // The text ran out inside the tag: the `}` the count found
             // lies inside a regular expression.
-            Err(true) if end < source.len() => {
+            Err(acorn_rs::NoClosingBrace::EndOfText) if end < source.len() => {
                 end = (start + (end - start) * 2 + 64).min(source.len());
                 while !source.is_char_boundary(end) {
                     end += 1;
                 }
             }
-            Err(true) => return Some(None),
-            Err(false) => return None,
+            Err(acorn_rs::NoClosingBrace::EndOfText) => return Some(None),
+            Err(acorn_rs::NoClosingBrace::Unreadable) => return None,
         }
     }
 }

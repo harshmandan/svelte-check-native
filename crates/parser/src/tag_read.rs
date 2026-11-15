@@ -897,17 +897,18 @@ impl<'s> TagReader<'s> {
             Ok(end) => end,
             // A statement the template ends inside is the compiler's
             // `unexpected_eof`, not acorn's error.
-            Err(error) if error.pos as usize == template.len() && !error.no_position => {
+            Err(error) if error.position == acorn_rs::Position::Offset(template.len() as u32) => {
                 return Err(TagReadError::new(
-                    error.pos,
+                    template.len() as u32,
                     TagReadErrorKind::UnexpectedEof,
                 ));
             }
             Err(error) => {
-                return Err(
-                    TagReadError::new(error.pos, TagReadErrorKind::JsParse(error.message))
-                        .reading(read),
-                );
+                return Err(TagReadError::new(
+                    acorn::error_offset(&error),
+                    TagReadErrorKind::JsParse(error.message),
+                )
+                .reading(read));
             }
         };
         let text = self.source.get(start as usize..end as usize).unwrap_or("");

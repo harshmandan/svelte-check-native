@@ -191,13 +191,13 @@ fn first_error(script: &Script<'_, '_, '_>, mode: Mode, transpiled: bool) -> Opt
         return acorn_rs::parse(script.section.content, acorn_rs::Reading::Script, language)
             .err()
             .map(|error| {
-                let mut candidate = Candidate::at(error.pos, error.message);
-                if error.column_of {
-                    candidate.at = Position::ColumnOf(error.pos);
-                }
-                if error.no_position {
-                    candidate.at = Position::Nowhere;
-                }
+                let mut candidate =
+                    Candidate::at(svn_parser::acorn::error_offset(&error), error.message);
+                candidate.at = match error.position {
+                    acorn_rs::Position::Offset(at) => Position::At(at),
+                    acorn_rs::Position::ColumnOf(at) => Position::ColumnOf(at),
+                    _ => Position::Nowhere,
+                };
                 candidate
             });
     }

@@ -135,13 +135,12 @@ impl Finder<'_> {
                 Ok(_) => return false,
                 Err(error) => error,
             };
-            if error.no_position {
-                break;
-            }
-            let at = if error.column_of {
-                acorn_rs::column_as_offset_from(self.source, start, error.pos)
-            } else {
-                error.pos
+            let at = match error.position {
+                acorn_rs::Position::Offset(at) => at,
+                acorn_rs::Position::ColumnOf(at) => {
+                    acorn_rs::column_as_offset_from(self.source, start, at)
+                }
+                _ => break,
             };
             let Some(mut cut) = (at as usize).checked_sub(2) else {
                 return false;
@@ -239,10 +238,8 @@ impl Finder<'_> {
             // the pattern is left out, and the offsets moved back.
             AcornReadShape::Pattern => {
                 let pattern = format!("{} = 1", read.range.slice(self.source));
-                acorn_rs::parse_expression_at(&pattern, 0, language).map_err(|mut error| {
-                    error.pos += read.range.start;
-                    error
-                })
+                acorn_rs::parse_expression_at(&pattern, 0, language)
+                    .map_err(|error| shifted(error, read.range.start))
             }
             shape => {
                 let (wrapped, origin) = read.wrapped(self.source);
@@ -251,10 +248,7 @@ impl Finder<'_> {
                 } else {
                     acorn_rs::parse_expression_at(&wrapped, 0, language)
                 };
-                result.map_err(|mut error| {
-                    error.pos += origin;
-                    error
-                })
+                result.map_err(|error| shifted(error, origin))
             }
         };
         let Err(error) = result else {
@@ -262,7 +256,10 @@ impl Finder<'_> {
         };
         // The parser failed without an offset. The compiler's error then
         // has no position, and one is shown at the start of the file.
-        if error.no_position {
+        if !matches!(
+            error.position,
+            acorn_rs::Position::Offset(_) | acorn_rs::Position::ColumnOf(_)
+        ) {
             self.report(
                 read.range.start,
                 Code::js_parse_error,
@@ -273,17 +270,20 @@ impl Finder<'_> {
         }
         // In the text the wrapping adds after the read, the wrapping
         // itself is at fault.
-        if error.pos > read.range.end && read.shape != AcornReadShape::Expression {
+        if svn_parser::acorn::error_offset(&error) > read.range.end
+            && read.shape != AcornReadShape::Expression
+        {
             return false;
         }
         // acorn-typescript places a few errors at the column number of
         // a position, taken for an offset.
         // The compiler's read starts where this one does, in the template
         // or in text that keeps the template before it.
-        let at = if error.column_of {
-            acorn_rs::column_as_offset_from(self.source, read.range.start, error.pos)
-        } else {
-            error.pos
+        let at = match error.position {
+            acorn_rs::Position::ColumnOf(at) => {
+                acorn_rs::column_as_offset_from(self.source, read.range.start, at)
+            }
+            _ => svn_parser::acorn::error_offset(&error),
         };
         self.report(
             at,
@@ -1292,4 +1292,15 @@ fn validate_tag(tag: Option<&str>, range: Range) -> Option<ParseFinding> {
         );
     }
     None
+}
+
+/// `error` with its position moved on by `by`: what it names in the
+/// text a read was cut from.
+fn shifted(mut error: acorn_rs::SyntaxError, by: u32) -> acorn_rs::SyntaxError {
+    error.position = match error.position {
+        acorn_rs::Position::Offset(at) => acorn_rs::Position::Offset(at + by),
+        acorn_rs::Position::ColumnOf(at) => acorn_rs::Position::ColumnOf(at + by),
+        other => other,
+    };
+    error
 }

@@ -687,7 +687,7 @@ pub(crate) fn regexp_pattern_error(raw: &str) -> Option<String> {
     let close = raw.rfind('/').filter(|&i| i > 0)?;
     let (pattern, flags) = (&raw[1..close], &raw[close + 1..]);
     let reason = acorn_rs::regexp_pattern_error(pattern, flags)?;
-    if reason == acorn_rs::REGEXP_STACK_EXHAUSTED {
+    if reason == acorn_rs::STACK_EXHAUSTED {
         return Some(reason.to_string());
     }
     Some(format!("Invalid regular expression: /{pattern}/: {reason}"))

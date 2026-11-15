@@ -689,7 +689,13 @@ fn rejections_on(
             match worker.rejection(path, source) {
                 Ok(rejection) => out.push((path.clone(), rejection)),
                 Err(BridgeError::SubprocessDied) => return Err(BridgeError::SubprocessDied),
-                Err(_) => {}
+                Err(BridgeError::Io(e)) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+                    return Err(BridgeError::SubprocessDied);
+                }
+                // A reply that could not be read leaves this file out;
+                // a fresh worker keeps it from putting the next file's
+                // reply out of step.
+                Err(_) => worker = Worker::spawn_on(&pkg, workspace, runtime)?,
             }
         }
     }
@@ -723,6 +729,8 @@ fn compile_chunk(
                     path.display()
                 );
                 out.push((path, Vec::new()));
+                // The unread reply would otherwise answer the next file.
+                worker = Worker::spawn_on(svelte_pkg, workspace, runtime)?;
             }
         }
     }

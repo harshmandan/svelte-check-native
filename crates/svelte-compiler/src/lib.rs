@@ -222,7 +222,7 @@ impl Worker {
             "filename": filename.to_string_lossy(),
             "source": source,
         });
-        writeln!(self.stdin, "{req}")?;
+        writeln!(self.stdin, "{}", request_line(&req))?;
         self.stdin.flush()?;
 
         let mut line = String::new();
@@ -267,7 +267,7 @@ impl Worker {
             "source": source,
             "rejection": true,
         });
-        writeln!(self.stdin, "{req}")?;
+        writeln!(self.stdin, "{}", request_line(&req))?;
         self.stdin.flush()?;
         let mut line = String::new();
         loop {
@@ -330,6 +330,20 @@ impl Drop for Worker {
 /// line to our own stderr with a prefix so it's distinguishable from
 /// host output. Returns when the read side closes (typically when the
 /// child exits).
+/// One request as a line the bridge's `readline` reads whole.
+/// `readline` also ends a line at U+2028 and U+2029, which JSON allows
+/// raw inside strings: a component holding one would arrive as two
+/// malformed halves and leave every later reply out of step.
+fn request_line(request: &serde_json::Value) -> String {
+    let line = request.to_string();
+    if line.contains(['\u{2028}', '\u{2029}']) {
+        line.replace('\u{2028}', "\\u2028")
+            .replace('\u{2029}', "\\u2029")
+    } else {
+        line
+    }
+}
+
 fn pump_stderr<R: Read + Send + 'static>(reader: R) {
     let mut buf = BufReader::new(reader);
     let mut line = String::new();
@@ -883,6 +897,15 @@ fn transpile_in_one_process(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_line_escapes_line_separators() {
+        let source = "{const\u{2028}1}\u{2029}";
+        let line = request_line(&serde_json::json!({ "source": source }));
+        assert!(!line.contains(['\u{2028}', '\u{2029}', '\n']));
+        let back: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(back["source"], source);
+    }
 
     #[test]
     fn position_is_1_based() {

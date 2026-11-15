@@ -42,6 +42,7 @@ jobs:
       - name: Unit tests
         run: cargo test --workspace --lib
       - name: Install the emit diff's TypeScript
-        run: npm ci --prefix scripts/upstream-emit
+        # The repo commits no lockfiles; the dependencies are exact pins.
+        run: npm install --no-audit --no-fund --prefix scripts/upstream-emit
       - name: Emit snapshots
         run: cargo test --test emit_snapshots

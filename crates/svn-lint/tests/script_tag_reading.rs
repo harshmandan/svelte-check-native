@@ -31,6 +31,13 @@ const CASES: &[(&str, &str, u32)] = &[
         "attribute_duplicate",
         39,
     ),
+    // A template error the parser only meets after the tag: its
+    // exception is shown at the file start but thrown later.
+    (
+        "<script lang=\"ts\"></script>\n<style a a></style>\n{#each a?.<T>b as x}x{/each}",
+        "attribute_duplicate",
+        37,
+    ),
 ];
 
 #[test]

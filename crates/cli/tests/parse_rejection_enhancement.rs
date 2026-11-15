@@ -208,6 +208,34 @@ fn a_component_only_our_parser_rejects_is_named_on_stderr() {
     assert!(stdout.contains("COMPLETED 1 FILES 0 ERRORS"), "{stdout}");
 }
 
+/// A component svelte2tsx refuses to convert is left out by upstream
+/// too, so leaving it out says nothing about our parser.
+#[test]
+fn a_component_svelte2tsx_refuses_is_not_named_on_stderr() {
+    let dir = workspace(&[
+        ("src/Ok.svelte", OK),
+        ("src/x.ts", "export const x = 1;\n"),
+        (
+            "src/ExportsAll.svelte",
+            "<script lang=\"ts\">\n  export * from './x';\n</script>\n",
+        ),
+    ]);
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = crate_dir.parent().and_then(Path::parent).unwrap();
+    let tsgo = svn_typecheck::discover(repo_root)
+        .expect("could not locate native TypeScript; install dependencies or set TSGO_BIN");
+    let output = Command::new(env!("CARGO_BIN_EXE_svelte-check-native"))
+        .args(["--workspace", dir.path().to_str().unwrap()])
+        .args(["--output", "machine"])
+        .env("TSGO_BIN", tsgo.path)
+        .output()
+        .expect("run svelte-check-native");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("was not checked"), "stderr: {stderr}");
+    assert!(stdout.contains("COMPLETED 1 FILES 0 ERRORS"), "{stdout}");
+}
+
 #[test]
 fn disable_enhance_keeps_the_tsgo_drop() {
     let dir = workspace(&[("src/Ok.svelte", OK), ("src/Unclosed.svelte", UNCLOSED)]);

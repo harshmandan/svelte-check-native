@@ -2184,6 +2184,9 @@ fn check_project(
     // Components whose template the compiler's `parse()` rejects — left
     // out of the program, the diagnostics and the entry count.
     let mut dropped_files: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    // The dropped components our own parser rejects, as opposed to those
+    // dropped because svelte2tsx would refuse to convert them.
+    let mut parser_dropped: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     // TSGO-ENHANCEMENT: native TS2307 for missing relative `.svelte`
     // imports. Collected during the emit fan-out (below) and merged into
     // the diagnostics stream after tsgo, since it's a `js`-source error.
@@ -2246,7 +2249,10 @@ fn check_project(
                     || svn_lint::script_tag_rejected(&doc)
                     || svn_lint::template_parse_rejected(&fragment, source)
                 {
-                    return (None, (None, (Vec::new(), Vec::new()), Some(file.clone())));
+                    return (
+                        None,
+                        (None, (Vec::new(), Vec::new()), Some((file.clone(), true))),
+                    );
                 }
                 // Fused native pass: derive fatal/lint diagnostics from
                 // THIS parse instead of re-parsing the corpus after
@@ -2308,7 +2314,10 @@ fn check_project(
                 // Leaving it out of the session also lets the cache GC
                 // remove an overlay an earlier run wrote for it.
                 if emitted.rejected_by_svelte2tsx {
-                    return (None, (None, (Vec::new(), Vec::new()), Some(file.clone())));
+                    return (
+                        None,
+                        (None, (Vec::new(), Vec::new()), Some((file.clone(), false))),
+                    );
                 }
                 let kind = if idx < svelte_sources_in_scope_end {
                     svn_typecheck::InputKind::Svelte
@@ -2337,14 +2346,19 @@ fn check_project(
         let natives: Vec<(
             Option<NativeFileDiagnostics>,
             MissingImportsFound,
-            Option<PathBuf>,
+            Option<(PathBuf, bool)>,
         )> = natives;
         native_results = Vec::with_capacity(natives.len());
         for (native, (missing, modules), dropped) in natives {
             native_results.push(native);
             missing_import_diags.extend(missing);
             missing_modules.extend(modules);
-            dropped_files.extend(dropped);
+            if let Some((file, by_parser)) = dropped {
+                if by_parser {
+                    parser_dropped.insert(file.clone());
+                }
+                dropped_files.insert(file);
+            }
         }
         // TSGO-ENHANCEMENT: missing `.svelte` imports in the program's
         // TS/JS modules (kit files included, checked against the source
@@ -2622,8 +2636,9 @@ fn check_project(
                 .unwrap_or_default();
             // Our parser could not read a component the compiler parses,
             // so it stays out of the run; svelte-check would check it, and
-            // a clean result must not hide that it was not.
-            for file in &accepted {
+            // a clean result must not hide that it was not. One dropped
+            // because svelte2tsx refuses it is left out by upstream too.
+            for file in accepted.iter().filter(|f| parser_dropped.contains(*f)) {
                 let shown = file.strip_prefix(workspace).unwrap_or(file);
                 eprintln!(
                     "svelte-check-native: {} was not checked: svelte/compiler parses it, \

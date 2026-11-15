@@ -1392,6 +1392,10 @@ type MissingImportsFound = (
     Vec<svn_enhance::StubTarget>,
 );
 
+/// A component left out of the run, and whether our own parser
+/// rejected it (`false`: dropped because svelte2tsx refuses it).
+type DroppedFile = (PathBuf, bool);
+
 /// Merge per-file native diagnostics into the output vec in the
 /// two-phase emission order documented on [`NativeFileDiagnostics`].
 fn merge_native_diagnostics(
@@ -2358,7 +2362,7 @@ fn check_project(
         let natives: Vec<(
             Option<NativeFileDiagnostics>,
             MissingImportsFound,
-            Option<(PathBuf, bool)>,
+            Option<DroppedFile>,
         )> = natives;
         native_results = Vec::with_capacity(natives.len());
         for (native, (missing, modules), dropped) in natives {

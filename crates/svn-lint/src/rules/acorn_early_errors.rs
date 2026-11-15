@@ -844,7 +844,6 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
             self.in_parameter_default,
             self.parameter_await_is_expression,
         ) = outer;
-        if it.body.is_none() {}
         if is_declaration
             && self.mode.ts
             && it.body.is_some()

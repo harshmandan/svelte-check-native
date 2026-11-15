@@ -175,14 +175,12 @@ fn comment_directive(
     offset: u32,
 ) -> Option<(u32, bool)> {
     let before = source.get(..offset as usize)?;
-    let mut lines: Vec<&str> = before.lines().collect();
-    // The line the diagnostic is on.
-    if !before.ends_with('\n') {
-        lines.pop();
-    }
-    for (index, line) in lines.iter().enumerate().rev() {
-        if let Some(&expects) = directives.get(&(index as u32)) {
-            return Some((index as u32, expects));
+    // The lines before the one the diagnostic is on, nearest first.
+    let head = &before[..before.rfind('\n').map_or(0, |i| i + 1)];
+    let lines_before = head.bytes().filter(|&b| b == b'\n').count() as u32;
+    for (index, line) in (0..lines_before).rev().zip(head.lines().rev()) {
+        if let Some(&expects) = directives.get(&index) {
+            return Some((index, expects));
         }
         let trimmed = line.trim();
         if !(trimmed.is_empty() || trimmed.starts_with("//")) {

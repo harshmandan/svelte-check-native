@@ -60,6 +60,9 @@
 // locals renamed (`$$_tnenopmoC0C` / `__svn_C_0` → `$C`), and redundant
 // parentheses around a value dropped.
 //
+// Reads the emits with the TypeScript compiler pinned in
+// scripts/upstream-emit: `(cd scripts/upstream-emit && npm install)`.
+//
 // Usage:
 //   node scripts/diff-upstream-emit.mjs              report, exit 1 on any
 //                                                   divergence not allowed
@@ -82,6 +85,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SNAP = path.join(ROOT, 'crates/cli/tests/emit_snapshots');
@@ -97,68 +101,112 @@ const opt = (f) => {
 
 // ---------------------------------------------------------------- scanning
 
-/** Index just past the string/template/comment starting at `i`, or -1. */
-function skipNonCode(s, i) {
-    const c = s[i];
-    if (c === '/' && s[i + 1] === '/') {
-        const e = s.indexOf('\n', i);
-        return e < 0 ? s.length : e;
-    }
-    if (c === '/' && s[i + 1] === '*') {
-        const e = s.indexOf('*/', i + 2);
-        return e < 0 ? s.length : e + 2;
-    }
-    if (c === '/' && regexCanStart(s, i)) {
-        // A regex literal: to the unescaped `/` outside a class.
-        let j = i + 1;
-        let cls = false;
-        while (j < s.length && s[j] !== '\n' && (cls || s[j] !== '/')) {
-            if (s[j] === '\\') j++;
-            else if (s[j] === '[') cls = true;
-            else if (s[j] === ']') cls = false;
-            j++;
+// What is code and what is not (a string, a template literal, a regular
+// expression, a comment) is read off TypeScript's own parse of the text:
+// only the parser knows whether a `/` divides or starts a regular
+// expression. The helpers below are handed whole emits and pieces of
+// them (an object's members, a parameter list), so a piece is parsed in
+// the first wrapper that makes it parse cleanly.
+let ts;
+try {
+    ts = createRequire(path.join(ROOT, 'scripts/upstream-emit/package.json'))('typescript');
+} catch {
+    console.error('missing pinned deps: run `(cd scripts/upstream-emit && npm install)`');
+    process.exit(2);
+}
+const WRAPPERS = [
+    ['', ''],
+    ['(', '\n)'],
+    ['({', '\n})'],
+    ['[', '\n]'],
+    ['function f(', '\n) {}'],
+    ['type T<', '\n> = 0'],
+];
+const nonCodeCache = new Map();
+
+/** Start → end of every string, template, regular expression and comment in `s`. */
+function nonCodeSpans(s) {
+    let spans = nonCodeCache.get(s);
+    if (spans) return spans;
+    let sf = null;
+    let shift = 0;
+    for (const [prefix, suffix] of WRAPPERS) {
+        const parsed = parse(prefix + s + suffix);
+        if (parsed.parseDiagnostics.length === 0) {
+            sf = parsed;
+            shift = prefix.length;
+            break;
         }
-        if (s[j] === '/') {
-            j++;
-            while (/[a-z]/.test(s[j] ?? '')) j++;
-            return j;
+        sf ??= parsed;
+    }
+    sf = joinBrokenStrings(sf);
+    const text = sf.text;
+    spans = new Map();
+    const add = (start, end) => {
+        if (start >= shift && start - shift < s.length && !spans.has(start - shift)) {
+            spans.set(start - shift, Math.min(end, shift + s.length) - shift);
         }
-    }
-    if (c === '"' || c === "'") {
-        let j = i + 1;
-        while (j < s.length && s[j] !== c) j += s[j] === '\\' ? 2 : 1;
-        return j + 1;
-    }
-    if (c === '`') {
-        let j = i + 1;
-        while (j < s.length && s[j] !== '`') {
-            if (s[j] === '\\') j += 2;
-            else if (s[j] === '$' && s[j + 1] === '{') j = matchClose(s, j + 1) + 1;
-            else j++;
+    };
+    const comments = (pos) => {
+        for (const r of ts.getLeadingCommentRanges(text, pos) ?? []) add(r.pos, r.end);
+        for (const r of ts.getTrailingCommentRanges(text, pos) ?? []) add(r.pos, r.end);
+    };
+    const visit = (node) => {
+        comments(node.pos);
+        comments(node.end);
+        switch (node.kind) {
+            case ts.SyntaxKind.StringLiteral:
+            case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+            case ts.SyntaxKind.RegularExpressionLiteral:
+            case ts.SyntaxKind.TemplateExpression:
+                // A template is skipped whole, substitutions included.
+                add(node.getStart(sf), node.end);
+                if (node.kind === ts.SyntaxKind.TemplateExpression) return;
         }
-        return j + 1;
-    }
-    return -1;
+        for (const child of node.getChildren(sf)) visit(child);
+    };
+    visit(sf);
+    nonCodeCache.set(s, spans);
+    return spans;
+}
+
+function parse(text) {
+    return ts.createSourceFile('x.ts', text, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
 }
 
 /**
- * Whether a `/` at `i` starts a regex literal rather than dividing:
- * true after an operator, an opening bracket, a separator or a keyword
- * that takes an expression, false after a value (a name, a number, a
- * closing bracket).
+ * svelte2tsx copies an attribute value that spans lines into a string
+ * literal as it is, line breaks included, which is no JavaScript: the
+ * string ends at the line break. Read it as svelte2tsx meant it, up to
+ * its closing quote, by blanking those line breaks (offsets stay put).
  */
-function regexCanStart(s, i) {
-    let j = i - 1;
-    while (j >= 0 && /\s/.test(s[j])) j--;
-    if (j < 0) return true;
-    const p = s[j];
-    if ('(,=:[!&|?{};+-*%<>~^'.includes(p)) return true;
-    if (/[\w$]/.test(p)) {
-        let k = j;
-        while (k >= 0 && /[\w$]/.test(s[k])) k--;
-        return /^(?:return|typeof|case|do|else|in|of|void|yield|await|delete|instanceof|new)$/.test(s.slice(k + 1, j + 1));
+function joinBrokenStrings(sf) {
+    for (;;) {
+        let broken = null;
+        const find = (node) => {
+            if (broken) return;
+            if (node.kind === ts.SyntaxKind.StringLiteral && node.isUnterminated) {
+                broken = node;
+                return;
+            }
+            for (const child of node.getChildren(sf)) find(child);
+        };
+        find(sf);
+        if (!broken) return sf;
+        const text = sf.text;
+        const start = broken.getStart(sf);
+        const quote = text[start];
+        let end = start + 1;
+        while (end < text.length && text[end] !== quote) end += text[end] === '\\' ? 2 : 1;
+        if (end >= text.length) return sf;
+        const joined = text.slice(0, start) + text.slice(start, end).replace(/[\r\n\u2028\u2029]/g, ' ') + text.slice(end);
+        sf = parse(joined);
     }
-    return false;
+}
+
+/** Index just past the string/template/comment starting at `i`, or -1. */
+function skipNonCode(s, i) {
+    return nonCodeSpans(s).get(i) ?? -1;
 }
 
 /** Index of the bracket closing the one at `open`. */

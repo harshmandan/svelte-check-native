@@ -10,8 +10,8 @@
 #     and keyed to workspace-relative paths, so they compare
 #     byte-identically on any checkout. It then compares the snapshots
 #     with upstream's committed reference emit (upstream.emit.ts) via
-#     scripts/diff-upstream-emit.mjs, which needs only the runner's
-#     preinstalled node (builtins, no npm install).
+#     scripts/diff-upstream-emit.mjs, which reads the emits with the
+#     TypeScript compiler pinned in scripts/upstream-emit.
 #
 # The tsgo-backed suites (bug_fixtures, ls_diagnostics, upstream_sanity)
 # need a node_modules with a native-compiler install — they stay local
@@ -41,5 +41,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Unit tests
         run: cargo test --workspace --lib
+      - name: Install the emit diff's TypeScript
+        run: npm ci --prefix scripts/upstream-emit
       - name: Emit snapshots
         run: cargo test --test emit_snapshots

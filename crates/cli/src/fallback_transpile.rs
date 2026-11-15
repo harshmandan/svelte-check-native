@@ -135,8 +135,9 @@ fn is_js_word(c: char) -> bool {
 }
 
 /// The rest of the tag pattern after `<script`, from `from`: the
-/// attribute text range, the content range (`None` for a self-closing
-/// tag) and the end of the match.
+/// attribute text range (the expression's first group, white space
+/// before the tag's end included), the content range (`None` for a
+/// self-closing tag) and the end of the match.
 #[allow(clippy::type_complexity)]
 fn match_script_tag(
     source: &str,
@@ -146,78 +147,25 @@ fn match_script_tag(
     Option<std::ops::Range<usize>>,
     usize,
 )> {
-    let run = |at: usize, pred: &dyn Fn(char) -> bool| -> usize {
-        source[at..]
-            .char_indices()
-            .find(|&(_, c)| !pred(c))
-            .map_or(source.len(), |(i, _)| at + i)
-    };
-    let name_char = |c: char| {
-        !matches!(c, '=' | '>' | '\'' | '"' | '/') && !svn_parser::is_svelte_whitespace(c)
-    };
-    let mut at = from;
-    // Where the last attribute's unquoted value ends, when the tag
-    // ends right after it: the value may give its last `/` back to
-    // close the tag as `/>`.
-    let mut unquoted_value_end = None;
-    loop {
-        let ws_end = run(at, &svn_parser::is_svelte_whitespace);
-        if ws_end == at {
-            break;
+    let last_close = source.rfind("</script>");
+    let (_, (attrs_end, content, end)) = svn_parser::match_attributes_then(source, from, |q| {
+        let rest = &source[q..];
+        if rest.starts_with("/>") {
+            return Some((q, None, q + 2));
         }
-        let name_end = run(ws_end, &name_char);
-        if name_end == ws_end {
-            break;
+        if !rest.starts_with('>') || last_close.is_none_or(|last| last < q + 1) {
+            return None;
         }
-        at = name_end;
-        unquoted_value_end = None;
-        if source[at..].starts_with('=') {
-            let value = at + 1;
-            let quoted = |q: char| {
-                source[value..]
-                    .strip_prefix(q)
-                    .and_then(|body| body.find(q))
-                    .map(|len| value + 1 + len + 1)
-            };
-            if let Some(end) = quoted('"').or_else(|| quoted('\'')) {
-                at = end;
-            } else {
-                let end = run(value, &|c| c != '>' && !svn_parser::is_svelte_whitespace(c));
-                if end > value {
-                    at = end;
-                    unquoted_value_end = Some((value, end));
-                }
-                // Otherwise `=` is not part of the attribute list and
-                // the tag cannot end here: the match fails below.
-            }
-        }
-    }
-    let attrs = from..at;
-    let close = run(at, &svn_parser::is_svelte_whitespace);
-    if source[close..].starts_with("/>") {
-        return Some((attrs, None, close + 2));
-    }
-    if source[close..].starts_with('>') {
-        let content_start = close + 1;
-        if let Some(len) = source[content_start..].find("</script>") {
-            let content_end = content_start + len;
-            return Some((
-                attrs,
-                Some(content_start..content_end),
-                content_end + "</script>".len(),
-            ));
-        }
-        // No closing tag anywhere: an unquoted value ending in `/`
-        // right before `>` can still close the tag as `/>`.
-        if let Some((value, end)) = unquoted_value_end
-            && end == close
-            && end - 1 > value
-            && source[..end].ends_with('/')
-        {
-            return Some((from..end - 1, None, end + 1));
-        }
-    }
-    None
+        let content_start = q + 1;
+        let len = source[content_start..].find("</script>")?;
+        let content_end = content_start + len;
+        Some((
+            q,
+            Some(content_start..content_end),
+            content_end + "</script>".len(),
+        ))
+    })?;
+    Some((from..attrs_end, content, end))
 }
 
 /// Whether the attribute text gives `lang` the value `ts`, read the way
@@ -873,6 +821,12 @@ mod tests {
         assert_eq!(preprocess_steps("<script></script><p>{a}</p>"), 1);
         assert_eq!(preprocess_steps("<script>let a = 1;</script>"), 2);
         assert_eq!(preprocess_steps("<script lang=\"ts\"></script>"), 2);
+        // The attribute text is the expression's group, white space
+        // included: a lone space is text, and the preprocessor is called.
+        assert_eq!(preprocess_steps("<script ></script>"), 2);
+        // An unquoted value gives back its `/` to close the tag.
+        assert_eq!(preprocess_steps("<script a=b/>"), 2);
+        assert_eq!(preprocess_steps("<script />"), 2);
     }
 
     #[test]

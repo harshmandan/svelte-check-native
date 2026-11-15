@@ -15,8 +15,6 @@
 //! that style. The compiler's `preprocess` looks for scripts alone, so
 //! the same text opens a script there.
 
-use crate::scanner::{is_svelte_whitespace_at, skip_svelte_whitespace_at};
-
 /// The script blocks the compiler's `preprocess` expression matches:
 /// source spans, opening `<` through the closing `>`, in source order.
 pub fn script_tag_expression_spans(source: &str) -> Vec<(usize, usize)> {
@@ -32,6 +30,9 @@ pub fn svelte2tsx_script_spans(source: &str) -> Vec<(usize, usize)> {
 
 fn verbatim_spans(source: &str, styles_shadow_scripts: bool) -> Vec<(usize, usize)> {
     let bytes = source.as_bytes();
+    // The compiler's `preprocess` also takes a self-closing `<script />`;
+    // svelte2tsx's expressions don't.
+    let self_closing = !styles_shadow_scripts;
     let mut spans = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
@@ -44,13 +45,11 @@ fn verbatim_spans(source: &str, styles_shadow_scripts: bool) -> Vec<(usize, usiz
                 i = i + 4 + end + 3;
                 continue;
             }
-        } else if let Some(end) = block_end(source, i, "<script", "</script>") {
+        } else if let Some(end) = block_end(source, i, "script", self_closing) {
             spans.push((i, end));
             i = end;
             continue;
-        } else if styles_shadow_scripts
-            && let Some(end) = block_end(source, i, "<style", "</style>")
-        {
+        } else if styles_shadow_scripts && let Some(end) = block_end(source, i, "style", false) {
             i = end;
             continue;
         }
@@ -59,61 +58,29 @@ fn verbatim_spans(source: &str, styles_shadow_scripts: bool) -> Vec<(usize, usiz
     spans
 }
 
-/// The end of a `<TAG …>…</TAG>` block opening at `at`: just past the
-/// first literal close tag after the opening tag.
-fn block_end(source: &str, at: usize, open: &str, close: &str) -> Option<usize> {
-    if !source[at..].starts_with(open) {
+/// The end of a `<TAG …>…</TAG>` block (or, when `self_closing`, a
+/// `<TAG … />`) opening at `at`: just past the first literal close tag
+/// after the opening tag.
+fn block_end(source: &str, at: usize, tag: &str, self_closing: bool) -> Option<usize> {
+    let after_name = at + 1 + tag.len();
+    if !source[at..].strip_prefix('<')?.starts_with(tag) {
         return None;
     }
-    let open_end = open_tag_end(source.as_bytes(), at + open.len())?;
-    let close_at = source[open_end..].find(close)?;
-    Some(open_end + close_at + close.len())
-}
-
-/// Match `(?:\s+NAME=(?:"…"|'…'|[^>\s]+)|\s+NAME)*\s*>` at `pos`, where
-/// NAME is `[^=>'"/\s]+`; the offset after the `>`.
-/// `\s` is JavaScript's: ASCII white space and the Unicode spaces.
-fn open_tag_end(bytes: &[u8], mut pos: usize) -> Option<usize> {
-    let is_space = |i: usize| is_svelte_whitespace_at(bytes, i);
-    loop {
-        let save = pos;
-        let mut j = skip_svelte_whitespace_at(bytes, pos);
-        if j == pos {
-            break;
+    let close = format!("</{tag}>");
+    // No close tag after this point: an opening `>` there ends nothing.
+    let last_close = source.rfind(&close);
+    let (_, end) = crate::match_attributes_then(source, after_name, |q| {
+        let rest = &source[q..];
+        if self_closing && rest.starts_with("/>") {
+            return Some(q + 2);
         }
-        let name_start = j;
-        while j < bytes.len()
-            && !matches!(bytes[j], b'=' | b'>' | b'\'' | b'"' | b'/')
-            && !is_space(j)
-        {
-            j += 1;
+        if !rest.starts_with('>') || last_close.is_none_or(|last| last < q + 1) {
+            return None;
         }
-        if j == name_start {
-            pos = save;
-            break;
-        }
-        if bytes.get(j) == Some(&b'=') {
-            let value_start = j + 1;
-            let value_end = match bytes.get(value_start) {
-                Some(&q @ (b'"' | b'\'')) => bytes[value_start + 1..]
-                    .iter()
-                    .position(|&b| b == q)
-                    .map(|p| value_start + 1 + p + 1),
-                _ => {
-                    let mut k = value_start;
-                    while k < bytes.len() && bytes[k] != b'>' && !is_space(k) {
-                        k += 1;
-                    }
-                    (k > value_start).then_some(k)
-                }
-            };
-            // `NAME` alone matched; the `=` then fails the tag.
-            j = value_end?;
-        }
-        pos = j;
-    }
-    pos = skip_svelte_whitespace_at(bytes, pos);
-    (bytes.get(pos) == Some(&b'>')).then_some(pos + 1)
+        let len = source[q + 1..].find(&close)?;
+        Some(q + 1 + len + close.len())
+    })?;
+    Some(end)
 }
 
 /// Where TypeScript's scanner ends a regular expression starting at the
@@ -184,6 +151,18 @@ mod tests {
         let src = "<script lang=\"ts\">\n// see the <style> block\n</script>\n<style>p{}</style>";
         let end = src.find("</script>").unwrap() + "</script>".len();
         assert_eq!(svelte2tsx_script_spans(src), vec![(0, end)]);
+    }
+
+    #[test]
+    fn tags_matched_by_backtracking() {
+        let src = "<script x=\"a lang=ts\"c>let a: number = 1;</script>";
+        assert_eq!(svelte2tsx_script_spans(src), vec![(0, src.len())]);
+        assert_eq!(script_tag_expression_spans(src), vec![(0, src.len())]);
+        // The compiler's preprocess takes a self-closing tag; svelte2tsx
+        // looks on for a `>`.
+        let src = "<script a=b/><p>{x}</p>";
+        assert_eq!(script_tag_expression_spans(src), vec![(0, 13)]);
+        assert!(svelte2tsx_script_spans(src).is_empty());
     }
 
     #[test]

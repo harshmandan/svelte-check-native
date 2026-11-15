@@ -2376,48 +2376,14 @@ fn module_hoistable_snippets(
 /// <style((?:\s+[^=>'"\/\s]+=(?:"[^"]*"|'[^']*'|[^>\s]+)|\s+[^=>'"\/\s]+)*\s*)>([\S\s]*?)<\/style>
 /// ```
 fn svelte2tsx_removes_style(text: &str) -> bool {
-    /// The regex's attribute list and `>` at the start of `text`: what
-    /// follows the `>`.
-    fn after_open_tag(text: &str) -> Option<&str> {
-        let spaced = text.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
-        if spaced.len() < text.len() {
-            let name_len = spaced
-                .find(|c: char| {
-                    matches!(c, '=' | '>' | '\'' | '"' | '/')
-                        || c.is_whitespace()
-                        || c == '\u{feff}'
-                })
-                .unwrap_or(spaced.len());
-            if name_len > 0 {
-                let after_name = &spaced[name_len..];
-                if let Some(value) = after_name.strip_prefix('=') {
-                    let quoted = value
-                        .chars()
-                        .next()
-                        .filter(|c| matches!(c, '"' | '\''))
-                        .and_then(|q| value[1..].find(q))
-                        .map(|close| close + 2);
-                    let bare = value
-                        .find(|c: char| c == '>' || c.is_whitespace() || c == '\u{feff}')
-                        .unwrap_or(value.len());
-                    let found = [quoted, Some(bare).filter(|&len| len > 0)]
-                        .into_iter()
-                        .flatten()
-                        .find_map(|len| after_open_tag(&value[len..]));
-                    if found.is_some() {
-                        return found;
-                    }
-                }
-                if let Some(rest) = after_open_tag(after_name) {
-                    return Some(rest);
-                }
-            }
-        }
-        spaced.strip_prefix('>')
-    }
-    text.strip_prefix("<style")
-        .and_then(after_open_tag)
-        .is_some_and(|rest| rest.contains("</style>"))
+    let Some(after_name) = text.strip_prefix("<style") else {
+        return false;
+    };
+    let from = text.len() - after_name.len();
+    svn_parser::match_attributes_then(text, from, |q| {
+        (text[q..].starts_with('>') && text[q + 1..].contains("</style>")).then_some(())
+    })
+    .is_some()
 }
 
 #[cfg(test)]
@@ -2454,7 +2420,10 @@ mod style_tag_tests {
             "<styles>p{}</style>",
         ] {
             assert!(!svelte2tsx_removes_style(text), "{text}");
-        }
+        } // Every quoted value can also be read unquoted: a regex engine
+        // explores 2^40 ways before giving up; the answer comes at once.
+        let many = format!("<style{} />", " a=\"1\"".repeat(40));
+        assert!(!svelte2tsx_removes_style(&many));
     }
 }
 

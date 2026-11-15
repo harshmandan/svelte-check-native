@@ -184,44 +184,15 @@ fn is_word_char(c: char) -> bool {
 }
 
 /// The attribute text of a `<script` tag whose name ends at `at`, when
-/// the rest of the tag matches the first expression. The expression
-/// admits exactly one way to match, so a greedy walk decides it.
+/// the rest of the tag matches the first expression, as its first group
+/// holds it.
 fn script_tag_attrs(text: &str, at: usize) -> Option<&str> {
-    let rest = &text[at..];
-    if rest.chars().next().is_some_and(is_word_char) {
+    if text[at..].chars().next().is_some_and(is_word_char) {
         return None;
     }
-    let mut pos = 0;
-    loop {
-        let ws = rest[pos..].len() - rest[pos..].trim_start_matches(is_svelte_whitespace).len();
-        let name_start = pos + ws;
-        let name_len = rest[name_start..]
-            .find(|c: char| matches!(c, '=' | '>' | '\'' | '"' | '/') || is_svelte_whitespace(c))
-            .unwrap_or(rest.len() - name_start);
-        if ws == 0 || name_len == 0 {
-            break;
-        }
-        let mut end = name_start + name_len;
-        if rest[end..].starts_with('=') {
-            let value = &rest[end + 1..];
-            let len = match value.chars().next() {
-                Some(q @ ('"' | '\'')) => value[1..].find(q).map(|i| i + 2),
-                Some(_) => {
-                    let n = value
-                        .find(|c: char| c == '>' || is_svelte_whitespace(c))
-                        .unwrap_or(value.len());
-                    (n > 0).then_some(n)
-                }
-                None => None,
-            };
-            // `=` with no value: the optional group can't match, and
-            // `=` can't start the closing `\s*>` either.
-            end += 1 + len?;
-        }
-        pos = end;
-    }
-    let closing = rest[pos..].trim_start_matches(is_svelte_whitespace);
-    closing.starts_with('>').then(|| &rest[..pos])
+    let (end, ()) =
+        crate::match_attributes_then(text, at, |q| text[q..].starts_with('>').then_some(()))?;
+    Some(&text[at..end])
 }
 
 /// The first `lang=value` match in a tag's attribute text.
@@ -280,5 +251,7 @@ mod is_ts_svelte_tests {
         assert!(!is_ts_svelte(r#"<script lang="js">"#));
         assert!(!is_ts_svelte(r#"<script xlang="ts">"#));
         assert!(is_ts_svelte(r#"<script x-lang="ts">"#));
+        // Read with backtracking: `x="a` unquoted, then `lang=ts"c`.
+        assert!(is_ts_svelte(r#"<script x="a lang=ts"c>"#));
     }
 }

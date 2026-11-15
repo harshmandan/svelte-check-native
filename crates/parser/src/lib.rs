@@ -33,6 +33,7 @@ mod scanner;
 mod script;
 mod script_tag_expression;
 mod sections;
+mod tag_pattern;
 pub mod tag_read;
 mod template;
 mod ts_check;
@@ -56,5 +57,6 @@ pub use script_tag_expression::{
     script_tag_expression_spans, svelte2tsx_script_spans, typescript_regex_end,
 };
 pub use sections::parse_sections;
+pub use tag_pattern::match_attributes_then;
 pub use template::{parse_all_template_runs, parse_template};
 pub use ts_check::{ts_check_directive, ts_check_directives};

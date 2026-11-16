@@ -29,8 +29,10 @@ Recorded on a SvelteKit + TypeScript monorepo with **1,357 `.svelte` files**.
 Benched on M1 Pro with 8 CPU. svelte-check-native `1.12.1`: mean of four runs, type-checking with TypeScript `7.1.0-beta`, and with tsrs `0.25.0` (pinned to the same TypeScript). svelte-check `4.7.7`: mean of two runs, `--tsgo` type-checking with TypeScript `7.0.0-dev.20260618.1`, and without `--tsgo` with the project's TypeScript `6.0.2`.
 
 ```sh
-svelte-check-native --tsconfig tsconfig.json --diagnostic-sources 'ts,svelte'
+svelte-check-native --tsconfig tsconfig.svn-parity.json --diagnostic-sources 'ts,svelte'
 ```
+
+The monorepo's `tsconfig.json` sets `composite: true`. With `incremental` off, which is how svelte-check type-checks, TypeScript then stops at error TS6379 and checks nothing. So every tool is benchmarked against `tsconfig.svn-parity.json`, which extends it with `composite`, `incremental` and declaration output turned off ([the recipe](./scripts/parity-rigs.json)).
 
 See the [benchmark script](./scripts/bench.mjs) for the cold, warm, and single-file-edit scenarios.
 

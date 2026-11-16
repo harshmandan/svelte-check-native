@@ -18,7 +18,11 @@
 //   - real errors we're missing that upstream catches.
 //
 // The timing mode is the perf-signal: cache-wiped cold run vs
-// cache-hot warm run vs single-file-edit dirty run.
+// cache-hot warm run vs single-file-edit dirty run (a real content
+// change to one component, restored on exit). A target with a recipe in
+// scripts/parity-rigs.json is timed against the recipe's tsconfig: the
+// control rigs' own tsconfig is `composite`, and with `incremental` off
+// TypeScript stops at TS6379 and checks nothing.
 //
 // Usage
 //   # Timing (default, legacy behavior):
@@ -37,10 +41,11 @@
 //                            (default 3). Parity mode always runs once per
 //                            tool — counts are deterministic.
 //   --tsconfig <path>        Pass through to the binary.
-//   --no-rig                 Parity mode: skip the target's recipe in
-//                            scripts/parity-rigs.json (tsconfig override
-//                            and source patches that let upstream
-//                            --tsgo type-check the rig at all).
+//   --no-rig                 Skip the target's recipe in
+//                            scripts/parity-rigs.json: the tsconfig
+//                            override (both modes) and, in parity mode,
+//                            the source patches that let upstream
+//                            --tsgo type-check the rig at all.
 //   --quiet                  Suppress per-run timing lines (CSV still prints).
 //   $UPSTREAM_SVELTE_CHECK   Parity mode: the upstream `svelte-check` bin
 //                            to compare against, instead of the one found
@@ -72,7 +77,7 @@
 // non-matching count (see --allow-delta to opt out).
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { performance } from 'node:perf_hooks';
 
@@ -102,7 +107,11 @@ if (mode !== 'timing' && mode !== 'parity') fail(`unknown --mode: ${mode}`);
 
 const extraArgs = [];
 if (args.tsconfig) extraArgs.push('--tsconfig', args.tsconfig);
-if (mode === 'parity' && !args.noRig) applyParityRig();
+// Timing takes only the recipe's tsconfig: without it a rig whose
+// tsconfig is composite stops at TS6379 and type-checks nothing, so the
+// timings would measure an empty check. The source patches exist for
+// upstream's sake and stay out of timing runs.
+if (!args.noRig) applyParityRig({ patches: mode === 'parity' });
 
 if (mode === 'timing') {
     runTimingMode();
@@ -119,7 +128,7 @@ function runTimingMode() {
     const scenarios = [
         { name: 'cold', setup: () => wipeCaches(), measure: () => runBinary() },
         { name: 'warm', setup: () => {}, measure: () => runBinary() },
-        { name: 'dirty', setup: () => touchOneSvelteFile(targetAbs), measure: () => runBinary() },
+        { name: 'dirty', setup: () => editOneSvelteFile(targetAbs), measure: () => runBinary() },
     ];
 
     const results = [];
@@ -352,12 +361,12 @@ function runUpstream(bin, { tsgo, cwd }) {
 }
 
 /// Apply this target's recipe from scripts/parity-rigs.json: a
-/// tsconfig layered over the target's own (checked by every tool) and
-/// source patches that are reverted when the process exits, however it
-/// exits. A patch whose `find` text is not present exactly once fails
-/// the run, so a rig that drifts can't silently fall back to a hollow
-/// comparison.
-function applyParityRig() {
+/// tsconfig layered over the target's own (checked by every tool) and,
+/// with `patches`, source patches that are reverted when the process
+/// exits, however it exits. A patch whose `find` text is not present
+/// exactly once fails the run, so a rig that drifts can't silently fall
+/// back to a hollow comparison.
+function applyParityRig({ patches }) {
     const rigs = JSON.parse(readFileSync(join(repoRoot, 'scripts/parity-rigs.json'), 'utf8'));
     const key = relative(join(repoRoot, 'bench'), targetAbs).split(sep).join('/');
     const rig = rigs[key];
@@ -373,7 +382,7 @@ function applyParityRig() {
     for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
         process.on(sig, () => { restore(); process.exit(130); });
     }
-    for (const patch of rig.patches ?? []) {
+    for (const patch of patches ? rig.patches ?? [] : []) {
         const file = join(targetAbs, patch.file);
         const text = readFileSync(file, 'utf8');
         const count = text.split(patch.find).length - 1;
@@ -389,7 +398,8 @@ function applyParityRig() {
     );
     extraArgs.push('--tsconfig', 'tsconfig.svn-parity.json');
     if (!args.quiet) {
-        console.error(`  parity recipe ${key}: ${(rig.patches ?? []).length} patch(es), tsconfig.svn-parity.json`);
+        const applied = patches ? (rig.patches ?? []).length : 0;
+        console.error(`  parity recipe ${key}: ${applied} patch(es), tsconfig.svn-parity.json`);
     }
 }
 
@@ -745,11 +755,25 @@ function wipeCaches() {
     }
 }
 
-function touchOneSvelteFile(root) {
-    const svelte = findFirstSvelteFile(root);
-    if (!svelte) throw new Error(`no .svelte file found under ${root} — dirty scenario needs at least one`);
-    const now = new Date();
-    utimesSync(svelte, now, now);
+/// Change the first `.svelte` file's content, differently each call, so
+/// the run sees a real edit: the overlay cache is keyed by content, so a
+/// touched modification time alone is a cache hit. The file is restored
+/// when the process exits, however it exits. (The state lives on the
+/// function: timing runs before the module's later bindings exist.)
+function editOneSvelteFile(root) {
+    const state = (editOneSvelteFile.state ??= { file: null, original: '', edits: 0 });
+    if (!state.file) {
+        state.file = findFirstSvelteFile(root);
+        if (!state.file) throw new Error(`no .svelte file found under ${root} — dirty scenario needs at least one`);
+        state.original = readFileSync(state.file, 'utf8');
+        const restore = () => writeFileSync(state.file, state.original);
+        process.on('exit', restore);
+        for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+            process.on(sig, () => { restore(); process.exit(130); });
+        }
+    }
+    state.edits += 1;
+    writeFileSync(state.file, `${state.original}\n<!-- bench edit ${state.edits} -->\n`);
 }
 
 function findFirstSvelteFile(root) {

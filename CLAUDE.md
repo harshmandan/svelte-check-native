@@ -583,6 +583,14 @@ syntax error makes tsgo skip semantic checking program-wide), and the
 run fails instead of comparing against an empty side. `--no-rig`
 skips the recipe.
 
+Timing mode applies the recipe's tsconfig too, but not its source
+patches. The rigs' own tsconfig is `composite`, and with `incremental`
+off TypeScript stops at TS6379 and checks nothing, so a timing run
+without the override measures an empty check. The `dirty` scenario
+makes a real content edit to one component and restores it on exit. A
+touched modification time alone is a cache hit, because the overlay
+cache is keyed by content.
+
 **SvelteKit test apps as differential targets.**
 `scripts/bootstrap-kit-bench.mjs` clones `sveltejs/kit` shallowly
 into `bench/_kit/` (dev-local — `bench/*` stays gitignored) and

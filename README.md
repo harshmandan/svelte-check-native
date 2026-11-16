@@ -21,12 +21,12 @@ Recorded on a SvelteKit + TypeScript monorepo with **1,357 `.svelte` files**.
 
 | Tool | Cold | Warm | After an edit | Errors / warnings / files with problems |
 | --- | ---: | ---: | ---: | ---: |
-| **svelte-check-native** | **3.4 s** | **0.3 s** | **3.2 s** | 7 / 49 / 23 |
-| **svelte-check-native (tsrs)** | **1.3 s** | **0.3 s** | **1.1 s** | 7 / 49 / 23 |
+| **svelte-check-native** | **2.8 s** | **0.3 s** | **2.5 s** | 7 / 49 / 23 |
+| **svelte-check-native (tsrs)** | **1.5 s** | **0.3 s** | **1.4 s** | 7 / 49 / 23 |
 | svelte-check | 25.8 s | 25.9 s | 26.2 s | 7 / 49 / 23 |
 | svelte-check --tsgo | 13.4 s | 13.2 s | 13.8 s | 7 / 49 / 23 |
 
-Each result is a mean of two runs. Benched on M1 Pro with 8 CPU. svelte-check-native `1.10.0` and svelte-check `4.7.7`, both type-checking with TypeScript `7.0.0-dev.20260618.1`. tsrs `0.18.0`. `svelte-check` without `--tsgo` uses the project's TypeScript `6.0.2`.
+Benched on M1 Pro with 8 CPU. svelte-check-native `1.12.1`: mean of four runs, type-checking with TypeScript `7.1.0-beta`, and with tsrs `0.25.0` (pinned to the same TypeScript). svelte-check `4.7.7`: mean of two runs, `--tsgo` type-checking with TypeScript `7.0.0-dev.20260618.1`, and without `--tsgo` with the project's TypeScript `6.0.2`.
 
 ```sh
 svelte-check-native --tsconfig tsconfig.json --diagnostic-sources 'ts,svelte'

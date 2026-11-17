@@ -47,7 +47,7 @@ npx svelte-check-native --workspace .
 
 Requires `typescript` 7+ or `@typescript/native-preview` (tsgo). TypeScript 6 and earlier cannot run checks; you can keep them in your project and install `@typescript/native-preview` instead of TypeScript 7. The checker prefers TypeScript 7+ when both are installed.
 
-TypeScript 7.1 nightlies (`typescript@next`) work from `7.1.0-dev.20261027.1` on. Skip `7.1.0-beta`: it types a missing `.svelte` import through Svelte's `*.svelte` wildcard ([microsoft/TypeScript#64882](https://github.com/microsoft/TypeScript/issues/64882)), so you get extra errors beside the real TS2307. `--disable-enhance` avoids them on the beta, but then a missing import goes unreported, as in `svelte-check --tsgo`.
+TypeScript 7.1 nightlies (`typescript@next`) work from `7.1.0-dev.20261027.1` on (`7.1.0-beta` reports false errors).
 
 Replace `svelte-check` in your `package.json` check script, keeping your supported flags. For example:
 

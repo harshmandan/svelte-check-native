@@ -96,10 +96,13 @@ pub struct EnhancementDiagnostic {
 /// What the missing-import pass found in one file.
 #[derive(Default)]
 pub struct MissingImports {
-    /// One `TS2307` per unresolvable `.svelte` reference.
+    /// One `TS2307` per unsuppressed unresolvable `.svelte` reference.
     pub diagnostics: Vec<EnhancementDiagnostic>,
     /// The modules behind them — the input to [`module_stubs`].
     pub stub_targets: Vec<StubTarget>,
+    /// `// @ts-expect-error` directives (file, 1-based line) satisfied by
+    /// a suppressed `TS2307`.
+    pub satisfied_expectations: Vec<(PathBuf, u32)>,
 }
 
 /// Where a missing module's stub has to be reachable from.
@@ -447,9 +450,29 @@ fn missing_imports(
     let dir = file.parent().unwrap_or_else(|| Path::new("."));
     let pm = PositionMap::new(source);
     let mut found = MissingImports::default();
+    let directives = std::cell::OnceCell::new();
     for r in refs {
         if resolver.resolves(dir, &r.specifier) {
             continue;
+        }
+        found
+            .stub_targets
+            .push(if is_relative_specifier(&r.specifier) {
+                StubTarget::SvelteFile(normalise(&dir.join(&r.specifier)))
+            } else {
+                StubTarget::Specifier(r.specifier.clone())
+            });
+        let directives =
+            directives.get_or_init(|| crate::rejected_imports::comment_directives(file, source));
+        match crate::rejected_imports::comment_directive(source, directives, r.start) {
+            Some((line, true)) => {
+                found
+                    .satisfied_expectations
+                    .push((file.to_path_buf(), line + 1));
+                continue;
+            }
+            Some((_, false)) => continue,
+            None => {}
         }
         let (start, end) = pm.range_positions(Range::new(r.start, r.end));
         found.diagnostics.push(EnhancementDiagnostic {
@@ -465,13 +488,6 @@ fn missing_imports(
                 r.specifier
             ),
         });
-        found
-            .stub_targets
-            .push(if is_relative_specifier(&r.specifier) {
-                StubTarget::SvelteFile(normalise(&dir.join(&r.specifier)))
-            } else {
-                StubTarget::Specifier(r.specifier)
-            });
     }
     found
 }
@@ -1257,5 +1273,78 @@ mod tests {
             ),
             vec![PathBuf::from("/repo")]
         );
+    }
+
+    fn setup_resolver(root: &Path) -> SvelteImportResolver {
+        let tsconfig = root.join("tsconfig.json");
+        std::fs::write(
+            &tsconfig,
+            r#"{ "compilerOptions": { "strict": true }, "include": ["src/**/*"] }"#,
+        )
+        .unwrap();
+        SvelteImportResolver::new(root, &tsconfig)
+    }
+
+    #[test]
+    fn ts_expect_error_suppresses_missing_svelte_import_in_component_and_script() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let resolver = setup_resolver(root);
+
+        let comp = root.join("src/App.svelte");
+        let comp_src = "<script lang=\"ts\">\n// @ts-expect-error - suppressed\nimport { a } from './MissingA.svelte';\n/* @ts-expect-error */\nimport './MissingB.svelte';\nimport c from './MissingC.svelte';\n</script>\n<p>{a}{c}</p>\n";
+        let (doc, _) = svn_parser::parse_sections(comp_src);
+        let (fragment, _) = svn_parser::parse_all_template_runs(comp_src, &doc.template.text_runs);
+        let alloc = Allocator::default();
+        let scripts = svn_parser::ScriptParses::new(&alloc, &doc);
+        let res = missing_svelte_import_diagnostics(
+            &comp, comp_src, &doc, &fragment, &scripts, &resolver,
+        );
+        assert_eq!(res.diagnostics.len(), 1);
+        assert!(res.diagnostics[0].message.contains("./MissingC.svelte"));
+        assert_eq!(res.stub_targets.len(), 3);
+        assert_eq!(
+            res.satisfied_expectations,
+            vec![(comp.clone(), 2), (comp, 4)]
+        );
+
+        let ts_file = root.join("src/mod.ts");
+        let ts_src =
+            "// @ts-expect-error\nimport { x } from './MissingTs.svelte';\nexport const y = x;\n";
+        let ts_res = missing_svelte_import_diagnostics_in_script(&ts_file, ts_src, &resolver);
+        assert!(ts_res.diagnostics.is_empty());
+        assert_eq!(ts_res.stub_targets.len(), 1);
+        assert_eq!(ts_res.satisfied_expectations, vec![(ts_file, 1)]);
+    }
+
+    #[test]
+    fn ts_ignore_suppresses_missing_svelte_import() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let resolver = setup_resolver(root);
+
+        let ts_file = root.join("src/mod.ts");
+        let ts_src = "// @ts-ignore\nimport a from './MissingA.svelte';\n/* @ts-ignore */\nimport b from './MissingB.svelte';\nexport const y = [a, b];\n";
+        let res = missing_svelte_import_diagnostics_in_script(&ts_file, ts_src, &resolver);
+        assert!(res.diagnostics.is_empty());
+        assert_eq!(res.stub_targets.len(), 2);
+        assert!(res.satisfied_expectations.is_empty());
+    }
+
+    #[test]
+    fn suppression_directive_applies_only_to_following_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let resolver = setup_resolver(root);
+
+        let ts_file = root.join("src/mod.ts");
+        let ts_src = "// @ts-expect-error\n\n// comment\nimport a from './Suppressed.svelte';\n// @ts-expect-error\nconst ok = 1;\nimport b from './Unsuppressed.svelte';\nexport const y = [ok, a, b];\n";
+        let res = missing_svelte_import_diagnostics_in_script(&ts_file, ts_src, &resolver);
+        assert_eq!(res.diagnostics.len(), 1);
+        assert!(res.diagnostics[0].message.contains("./Unsuppressed.svelte"));
+        assert_eq!(res.satisfied_expectations, vec![(ts_file, 1)]);
     }
 }

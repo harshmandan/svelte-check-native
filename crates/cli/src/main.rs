@@ -1365,7 +1365,11 @@ fn missing_svelte_import_diagnostics(
         .into_iter()
         .map(|d| enhancement_type_error(d, script_is_ts))
         .collect();
-    (diagnostics, found.stub_targets)
+    (
+        diagnostics,
+        found.stub_targets,
+        found.satisfied_expectations,
+    )
 }
 
 // TSGO-ENHANCEMENT: a TypeScript error from the `svn-enhance` crate as
@@ -1393,11 +1397,12 @@ fn enhancement_type_error(
     }
 }
 
-// TSGO-ENHANCEMENT: one file's missing-import TS2307s and the modules
-// behind them.
+// TSGO-ENHANCEMENT: one file's missing-import TS2307s, the modules
+// behind them, and any `// @ts-expect-error` lines they satisfied.
 type MissingImportsFound = (
     Vec<svn_typecheck::CheckDiagnostic>,
     Vec<svn_enhance::StubTarget>,
+    Vec<(PathBuf, u32)>,
 );
 
 /// A component left out of the run, and whether our own parser
@@ -2214,6 +2219,9 @@ fn check_project(
     // imports. Collected during the emit fan-out (below) and merged into
     // the diagnostics stream after tsgo, since it's a `js`-source error.
     let mut missing_import_diags: Vec<svn_typecheck::CheckDiagnostic> = Vec::new();
+    // TSGO-ENHANCEMENT: `// @ts-expect-error` lines (file, 1-based line)
+    // satisfied by suppressed missing-import TS2307s.
+    let mut missing_import_expectations: Vec<(PathBuf, u32)> = Vec::new();
     // TSGO-ENHANCEMENT: the stub files written for those modules, whose
     // TS2306 "is not a module" is dropped after tsgo.
     let mut module_stub_paths: Vec<PathBuf> = Vec::new();
@@ -2275,7 +2283,11 @@ fn check_project(
                 {
                     return (
                         None,
-                        (None, (Vec::new(), Vec::new()), Some((file.clone(), true))),
+                        (
+                            None,
+                            (Vec::new(), Vec::new(), Vec::new()),
+                            Some((file.clone(), true)),
+                        ),
                     );
                 }
                 // Fused native pass: derive fatal/lint diagnostics from
@@ -2320,7 +2332,7 @@ fn check_project(
                         svelte_import_resolver_ref,
                     )
                 } else {
-                    (Vec::new(), Vec::new())
+                    (Vec::new(), Vec::new(), Vec::new())
                 };
                 let summary = svn_analyze::walk_template(&fragment, source);
                 // Overlay extension mirrors upstream svelte-check's
@@ -2345,7 +2357,11 @@ fn check_project(
                 if emitted.rejected_by_svelte2tsx {
                     return (
                         None,
-                        (None, (Vec::new(), Vec::new()), Some((file.clone(), false))),
+                        (
+                            None,
+                            (Vec::new(), Vec::new(), Vec::new()),
+                            Some((file.clone(), false)),
+                        ),
                     );
                 }
                 let kind = if idx < svelte_sources_in_scope_end {
@@ -2378,10 +2394,11 @@ fn check_project(
             Option<DroppedFile>,
         )> = natives;
         native_results = Vec::with_capacity(natives.len());
-        for (native, (missing, modules), dropped) in natives {
+        for (native, (missing, modules, expectations), dropped) in natives {
             native_results.push(native);
             missing_import_diags.extend(missing);
             missing_modules.extend(modules);
+            missing_import_expectations.extend(expectations);
             if let Some((file, by_parser)) = dropped {
                 if by_parser {
                     parser_dropped.insert(file.clone());
@@ -2405,9 +2422,10 @@ fn check_project(
                     ))
                 })
                 .collect();
-            for (missing, modules) in found {
+            for (missing, modules, expectations) in found {
                 missing_import_diags.extend(missing);
                 missing_modules.extend(modules);
+                missing_import_expectations.extend(expectations);
             }
         }
         if native_compat.is_some() {
@@ -2564,6 +2582,14 @@ fn check_project(
                 && stub_names
                     .iter()
                     .any(|name| d.message.contains(name.as_str())))
+        });
+    }
+    if !missing_import_expectations.is_empty() {
+        diagnostics.retain(|d| {
+            !(matches!(d.code, svn_typecheck::DiagnosticCode::Numeric(2578))
+                && missing_import_expectations
+                    .iter()
+                    .any(|(file, line)| *file == d.source_path && *line == d.line))
         });
     }
     if !missing_import_diags.is_empty() {

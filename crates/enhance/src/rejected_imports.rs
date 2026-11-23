@@ -101,7 +101,7 @@ impl RejectedImports {
 /// its scripts. A line comment is one when it starts with two or three
 /// slashes and whitespace; a block comment when its last line starts,
 /// after whitespace, with any `/` and `*` and whitespace.
-fn comment_directives(file: &Path, source: &str) -> HashMap<u32, bool> {
+pub(crate) fn comment_directives(file: &Path, source: &str) -> HashMap<u32, bool> {
     use oxc_ast::CommentKind;
     let mut out = HashMap::new();
     let pm = PositionMap::new(source);
@@ -169,7 +169,7 @@ fn comment_directives(file: &Path, source: &str) -> HashMap<u32, bool> {
 /// TypeScript looks for it: on the line before, or before that across
 /// blank lines and lines that are only a `//` comment. Its 0-based
 /// line, and whether it expects an error.
-fn comment_directive(
+pub(crate) fn comment_directive(
     source: &str,
     directives: &HashMap<u32, bool>,
     offset: u32,

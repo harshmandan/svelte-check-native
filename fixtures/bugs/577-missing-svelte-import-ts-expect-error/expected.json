@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 7,
+            "column": 25,
+            "code": 2307
+        },
+        {
+            "file": "input.svelte",
+            "line": 8,
+            "column": 4,
+            "code": 2578
+        }
+    ],
+    "_note": "`missing_svelte_imports` must honor `// @ts-expect-error`, `/* @ts-expect-error */`, and `// @ts-ignore` on the preceding line in both components and plain `.ts` modules (and suppress the resulting `TS2578` unused-directive error), while still reporting `TS2307` on unsuppressed missing imports (`MissingC.svelte`) and `TS2578` when `@ts-expect-error` sits above an existing component (`src/Real.svelte`)."
+}

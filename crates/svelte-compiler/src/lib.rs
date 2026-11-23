@@ -117,11 +117,29 @@ pub struct Worker {
     _script_dir: tempfile::TempDir,
 }
 
+/// Svelte config overrides forwarded to the compiler bridge.
+#[derive(Debug, Default, Clone)]
+pub struct BridgeConfig {
+    /// Explicit `svelte.config.{js,mjs,cjs}` to dynamically import.
+    pub svelte_config: Option<PathBuf>,
+    /// Statically extracted `compilerOptions` JSON object (e.g. from
+    /// `vite.config.*` inline plugin options or a `.ts` config).
+    pub compiler_options: Option<serde_json::Value>,
+    /// Skip upward `svelte.config.{js,mjs,cjs}` discovery when the caller
+    /// already resolved config (e.g. inline `vite.config.*` or `--config`).
+    pub disable_config_discovery: bool,
+}
+
 impl Worker {
     /// Spawn the bridge subprocess on the `svelte` package `svelte_pkg`
     /// (the directory holding its `package.json`). `workspace` is where
-    /// the Svelte config is looked for.
-    fn spawn_on(svelte_pkg: &Path, workspace: &Path, runtime: &Path) -> Result<Self, BridgeError> {
+    /// the Svelte config is looked for unless overridden by `config`.
+    fn spawn_on(
+        svelte_pkg: &Path,
+        workspace: &Path,
+        runtime: &Path,
+        config: &BridgeConfig,
+    ) -> Result<Self, BridgeError> {
         let (script_dir, bridge_path) = write_script_to_temp("bridge", BRIDGE_JS)?;
 
         // The bridge does `import { compile } from 'svelte/compiler'`.
@@ -157,24 +175,35 @@ impl Worker {
             svelte_pkg.join("compiler.js")
         };
 
-        // Discover the user's svelte.config.{js,mjs,cjs} so the bridge
-        // can dynamic-import it once at startup and fold its
-        // `compilerOptions` into every compile() call. Without this,
-        // projects that rely on experimental rune flags (e.g.
-        // `compilerOptions.experimental.async = true`) get spurious
-        // compiler errors that upstream svelte-check (which does honor
-        // svelte.config.js) does not produce.
-        let svelte_config = locate_svelte_config(workspace);
+        // Discover the user's svelte.config.{js,mjs,cjs} (unless the caller
+        // pinned or suppressed config lookup) and pass any statically
+        // extracted compilerOptions JSON (e.g. from `vite.config.*`) so
+        // experimental flags like `compilerOptions.experimental.async` are
+        // honored by every compile() call.
+        let svelte_config = if config.svelte_config.is_some() {
+            config.svelte_config.clone()
+        } else if config.disable_config_discovery {
+            None
+        } else {
+            locate_svelte_config(workspace)
+        };
 
         let mut cmd = Command::new(runtime);
         cmd.arg(&bridge_path);
         cmd.arg(&svelte_compiler_resolved);
         // Empty string means "no config" — keeps argv positional rather
-        // than introducing a flag-style parser to the bridge for one arg.
+        // than introducing a flag-style parser to the bridge.
         cmd.arg(
             svelte_config
                 .as_deref()
                 .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        );
+        cmd.arg(
+            config
+                .compiler_options
+                .as_ref()
+                .map(serde_json::Value::to_string)
                 .unwrap_or_default(),
         );
         cmd.current_dir(&workspace_for_cwd);
@@ -581,6 +610,15 @@ pub fn compile_batch(
     workspace: &Path,
     inputs: Vec<(PathBuf, String)>,
 ) -> Result<Vec<(PathBuf, Vec<CompilerDiagnostic>)>, BridgeError> {
+    compile_batch_with_config(workspace, inputs, &BridgeConfig::default())
+}
+
+/// [`compile_batch`] with explicit [`BridgeConfig`] overrides.
+pub fn compile_batch_with_config(
+    workspace: &Path,
+    inputs: Vec<(PathBuf, String)>,
+    config: &BridgeConfig,
+) -> Result<Vec<(PathBuf, Vec<CompilerDiagnostic>)>, BridgeError> {
     if inputs.is_empty() {
         return Ok(Vec::new());
     }
@@ -624,7 +662,7 @@ pub fn compile_batch(
                     .spawn_scoped(scope, move || {
                         let (indexes, files): (Vec<usize>, Vec<(PathBuf, String)>) =
                             chunk.into_iter().unzip();
-                        let out = compile_chunk(&pkg, workspace, runtime, files)?;
+                        let out = compile_chunk(&pkg, workspace, runtime, config, files)?;
                         Ok(indexes.into_iter().zip(out).collect())
                     })
                     .map_err(BridgeError::Io)
@@ -660,6 +698,16 @@ pub fn rejections(
     inputs: &[(PathBuf, String)],
     on_node: bool,
 ) -> Result<Vec<(PathBuf, Rejection)>, BridgeError> {
+    rejections_with_config(workspace, inputs, on_node, &BridgeConfig::default())
+}
+
+/// [`rejections`] with explicit [`BridgeConfig`] overrides.
+pub fn rejections_with_config(
+    workspace: &Path,
+    inputs: &[(PathBuf, String)],
+    on_node: bool,
+    config: &BridgeConfig,
+) -> Result<Vec<(PathBuf, Rejection)>, BridgeError> {
     if inputs.is_empty() {
         return Ok(Vec::new());
     }
@@ -668,7 +716,7 @@ pub fn rejections(
     } else {
         pick_runtime()?
     };
-    rejections_on(workspace, inputs, &runtime)
+    rejections_on(workspace, inputs, &runtime, config)
 }
 
 /// Whether the JS runtime the bridge picks is Node.
@@ -681,10 +729,11 @@ fn rejections_on(
     workspace: &Path,
     inputs: &[(PathBuf, String)],
     runtime: &Path,
+    config: &BridgeConfig,
 ) -> Result<Vec<(PathBuf, Rejection)>, BridgeError> {
     let mut out = Vec::with_capacity(inputs.len());
     for (pkg, members) in group_by_svelte(inputs.iter().map(|(p, _)| p.as_path()))? {
-        let mut worker = Worker::spawn_on(&pkg, workspace, runtime)?;
+        let mut worker = Worker::spawn_on(&pkg, workspace, runtime, config)?;
         for (path, source) in members.into_iter().map(|i| &inputs[i]) {
             match worker.rejection(path, source) {
                 Ok(rejection) => out.push((path.clone(), rejection)),
@@ -695,7 +744,7 @@ fn rejections_on(
                 // A reply that could not be read leaves this file out;
                 // a fresh worker keeps it from putting the next file's
                 // reply out of step.
-                Err(_) => worker = Worker::spawn_on(&pkg, workspace, runtime)?,
+                Err(_) => worker = Worker::spawn_on(&pkg, workspace, runtime, config)?,
             }
         }
     }
@@ -708,9 +757,10 @@ fn compile_chunk(
     svelte_pkg: &Path,
     workspace: &Path,
     runtime: &Path,
+    config: &BridgeConfig,
     inputs: Vec<(PathBuf, String)>,
 ) -> Result<Vec<(PathBuf, Vec<CompilerDiagnostic>)>, BridgeError> {
-    let mut worker = Worker::spawn_on(svelte_pkg, workspace, runtime)?;
+    let mut worker = Worker::spawn_on(svelte_pkg, workspace, runtime, config)?;
     let mut out = Vec::with_capacity(inputs.len());
     for (path, source) in inputs {
         match worker.compile_one(&path, &source) {
@@ -730,7 +780,7 @@ fn compile_chunk(
                 );
                 out.push((path, Vec::new()));
                 // The unread reply would otherwise answer the next file.
-                worker = Worker::spawn_on(svelte_pkg, workspace, runtime)?;
+                worker = Worker::spawn_on(svelte_pkg, workspace, runtime, config)?;
             }
         }
     }

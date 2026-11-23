@@ -473,6 +473,7 @@ fn run() -> ExitCode {
     // mirrors upstream `@sveltejs/load-config`, which reads the Vite
     // plugin's `api.options` first and only falls back to
     // `svelte.config.js` when the plugin exposes no inline options).
+    let mut config_from_vite = false;
     let (analysed_config, svelte_config_summary): (
         Option<PathBuf>,
         svelte_config::SvelteConfigSummary,
@@ -493,12 +494,17 @@ fn run() -> ExitCode {
             );
             return ExitCode::from(2);
         }
-        let summary = svelte_config::analyse_vite_config(&resolved)
-            .unwrap_or_else(|| svelte_config::analyse_with_kit_files(&resolved));
+        let summary = if let Some(vite_summary) = svelte_config::analyse_vite_config(&resolved) {
+            config_from_vite = true;
+            vite_summary
+        } else {
+            svelte_config::analyse_with_kit_files(&resolved)
+        };
         (Some(resolved), summary)
     } else if let Some((path, summary)) = svelte_config::find_vite_config(&workspace)
         .and_then(|p| svelte_config::analyse_vite_config(&p).map(|s| (p, s)))
     {
+        config_from_vite = true;
         (Some(path), summary)
     } else if let Some(path) = svelte_config::find_svelte_config(&workspace) {
         let summary = svelte_config::analyse_with_kit_files(&path);
@@ -512,6 +518,25 @@ fn run() -> ExitCode {
                 ..svelte_config::SvelteConfigSummary::default()
             },
         )
+    };
+    let bridge_config = if config_from_vite {
+        svn_svelte_compiler::BridgeConfig {
+            svelte_config: None,
+            compiler_options: svelte_config_summary.compiler_options.clone(),
+            disable_config_discovery: true,
+        }
+    } else if let Some(cfg_path) = &analysed_config {
+        let importable = cfg_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|ext| matches!(ext, "js" | "mjs" | "cjs"));
+        svn_svelte_compiler::BridgeConfig {
+            svelte_config: importable.then(|| cfg_path.clone()),
+            compiler_options: svelte_config_summary.compiler_options.clone(),
+            disable_config_discovery: true,
+        }
+    } else {
+        svn_svelte_compiler::BridgeConfig::default()
     };
     if let Some(cfg) = &analysed_config {
         warn_partial_warning_filter(cfg, &svelte_config_summary.warning_filter_plan);
@@ -578,6 +603,7 @@ fn run() -> ExitCode {
         cli.ignore_node_modules_warnings,
         &mut config_resolver,
         &kit_files_settings,
+        &bridge_config,
         cli.include_suggestions,
         // TSGO-ENHANCEMENT: kill-switch — flag OR env var.
         cli.disable_enhance || std::env::var_os("SVN_DISABLE_ENHANCE").is_some(),
@@ -1864,6 +1890,7 @@ fn run_typecheck(
     ignore_node_modules_warnings: bool,
     config_resolver: &mut svelte_config::ConfigResolver,
     kit_files_settings: &svn_core::sveltekit::KitFilesSettings,
+    bridge_config: &svn_svelte_compiler::BridgeConfig,
     include_suggestions: bool,
     disable_enhance: bool,
 ) -> ExitCode {
@@ -1878,6 +1905,7 @@ fn run_typecheck(
         ignore_node_modules_warnings,
         config_resolver,
         kit_files_settings,
+        bridge_config,
         include_suggestions,
         disable_enhance,
     ) {
@@ -1917,6 +1945,7 @@ fn check_project(
     ignore_node_modules_warnings: bool,
     config_resolver: &mut svelte_config::ConfigResolver,
     kit_files_settings: &svn_core::sveltekit::KitFilesSettings,
+    bridge_config: &svn_svelte_compiler::BridgeConfig,
     include_suggestions: bool,
     disable_enhance: bool,
 ) -> Result<ProjectRun, ExitCode> {
@@ -2777,7 +2806,11 @@ fn check_project(
                 .filter(|(p, _)| !dropped_files.contains(p))
                 .map(|(p, s)| (p, String::from(&*s)))
                 .collect();
-            match svn_svelte_compiler::compile_batch(workspace, bridge_sources) {
+            match svn_svelte_compiler::compile_batch_with_config(
+                workspace,
+                bridge_sources,
+                bridge_config,
+            ) {
                 Ok(per_file) => {
                     for (path, warnings) in per_file {
                         let mut occurrences = std::collections::HashMap::new();

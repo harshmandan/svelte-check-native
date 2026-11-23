@@ -219,6 +219,11 @@ pub struct SvelteConfigSummary {
     /// What the compiler's validation of `compilerOptions` reports, when
     /// the options can be read statically and it reports anything.
     pub compile_options: Option<std::sync::Arc<svn_lint::CompileOptionsCheck>>,
+    /// Statically serialisable subset of `compilerOptions` (booleans,
+    /// strings, finite numbers, nulls, arrays, nested objects) for
+    /// forwarding to `--svelte-warnings bridge` when the config cannot
+    /// be imported directly (e.g. `vite.config.*` inline options).
+    pub compiler_options: Option<serde_json::Value>,
 }
 
 /// The per-file subset of a config — the settings upstream applies PER
@@ -451,6 +456,8 @@ pub fn analyse(config_path: &Path) -> SvelteConfigSummary {
         default_export_config_object(&parsed.program).is_some_and(sets_preprocess);
     summary.compile_options =
         default_export_config_object(&parsed.program).and_then(compile_options_check);
+    summary.compiler_options =
+        default_export_config_object(&parsed.program).and_then(static_compiler_options);
 
     summary
 }
@@ -526,6 +533,7 @@ pub fn analyse_vite_config(config_path: &Path) -> Option<SvelteConfigSummary> {
     summary.ts_scripts_transpiled = preprocess_transpiles_ts(plugin_obj, &parsed.program);
     summary.preprocess_configured = sets_preprocess(plugin_obj);
     summary.compile_options = compile_options_check(plugin_obj);
+    summary.compiler_options = static_compiler_options(plugin_obj);
 
     Some(summary)
 }
@@ -775,6 +783,87 @@ fn experimental_async_in_object(obj: &ObjectExpression<'_>) -> bool {
         lookup_object_property(experimental, "async"),
         Some(Expression::BooleanLiteral(b)) if b.value
     )
+}
+
+/// Statically serialisable subset of `compilerOptions` for the bridge
+/// subprocess (which cannot execute `vite.config.*` plugins directly).
+/// Non-serialisable entries such as `warningFilter` callbacks are skipped
+/// without dropping sibling options like `experimental.async`.
+fn static_compiler_options(obj: &ObjectExpression<'_>) -> Option<serde_json::Value> {
+    let options = compiler_options_in_object(obj)?;
+    let map = json_map_of_object(options);
+    (!map.is_empty()).then_some(serde_json::Value::Object(map))
+}
+
+fn json_map_of_object(obj: &ObjectExpression<'_>) -> serde_json::Map<String, serde_json::Value> {
+    let mut map = serde_json::Map::new();
+    for prop in &obj.properties {
+        let ObjectPropertyKind::ObjectProperty(p) = prop else {
+            continue;
+        };
+        if p.computed || p.method || p.kind != oxc_ast::ast::PropertyKind::Init {
+            continue;
+        }
+        let key = match &p.key {
+            PropertyKey::StaticIdentifier(id) => id.name.to_string(),
+            PropertyKey::StringLiteral(s) => match s.value.as_str() {
+                Some(k) => k.to_string(),
+                None => continue,
+            },
+            _ => continue,
+        };
+        if let Some(val) = json_value_of(&p.value) {
+            map.insert(key, val);
+        }
+    }
+    map
+}
+
+fn json_value_of(expr: &Expression<'_>) -> Option<serde_json::Value> {
+    match expr {
+        Expression::ParenthesizedExpression(p) => json_value_of(&p.expression),
+        Expression::TSAsExpression(t) => json_value_of(&t.expression),
+        Expression::TSSatisfiesExpression(t) => json_value_of(&t.expression),
+        Expression::TSTypeAssertion(t) => json_value_of(&t.expression),
+        Expression::BooleanLiteral(b) => Some(serde_json::Value::Bool(b.value)),
+        Expression::StringLiteral(s) => s
+            .value
+            .as_str()
+            .map(|v| serde_json::Value::String(v.to_string())),
+        Expression::TemplateLiteral(t) if t.expressions.is_empty() => t
+            .quasis
+            .first()
+            .and_then(|q| q.value.cooked.and_then(|c| c.as_str()))
+            .map(|v| serde_json::Value::String(v.to_string())),
+        Expression::NumericLiteral(n) => {
+            serde_json::Number::from_f64(n.value).map(serde_json::Value::Number)
+        }
+        Expression::UnaryExpression(u) if u.operator == UnaryOperator::UnaryNegation => {
+            let Expression::NumericLiteral(n) = &u.argument else {
+                return None;
+            };
+            serde_json::Number::from_f64(-n.value).map(serde_json::Value::Number)
+        }
+        Expression::NullLiteral(_) => Some(serde_json::Value::Null),
+        Expression::ArrayExpression(arr) => {
+            let mut items = Vec::with_capacity(arr.elements.len());
+            for el in &arr.elements {
+                let expr = el.as_expression()?;
+                items.push(json_value_of(expr)?);
+            }
+            Some(serde_json::Value::Array(items))
+        }
+        Expression::ObjectExpression(o) => {
+            let had_props = !o.properties.is_empty();
+            let map = json_map_of_object(o);
+            if had_props && map.is_empty() {
+                None
+            } else {
+                Some(serde_json::Value::Object(map))
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Whether the config-root object's `preprocess` transpiles
@@ -2453,5 +2542,65 @@ export default { compilerOptions: {} };
             "state_referenced_locally",
             Some(Path::new("/app/node_modules/pkg/Foo.svelte"))
         ));
+    }
+
+    #[test]
+    fn vite_config_extracts_static_compiler_options_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join("vite.config.ts");
+        std::fs::write(
+            &cfg,
+            r#"
+import { sveltekit } from '@sveltejs/kit/vite';
+import { defineConfig } from 'vite';
+export default defineConfig({
+  plugins: [
+    sveltekit({
+      compilerOptions: {
+        experimental: { async: true },
+        runes: true,
+        warningFilter: (w) => w.code !== 'a11y_missing_attribute'
+      }
+    })
+  ]
+});
+"#,
+        )
+        .unwrap();
+        let summary = analyse_vite_config(&cfg).expect("vite config parsed");
+        assert_eq!(
+            summary.compiler_options,
+            Some(serde_json::json!({
+                "experimental": { "async": true },
+                "runes": true
+            }))
+        );
+    }
+
+    #[test]
+    fn vite_config_svelte_plugin_extracts_static_compiler_options_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join("vite.config.ts");
+        std::fs::write(
+            &cfg,
+            r#"
+import { svelte } from '@sveltejs/vite-plugin-svelte';
+export default {
+  plugins: [
+    svelte({
+      compilerOptions: {
+        experimental: { async: true }
+      }
+    })
+  ]
+};
+"#,
+        )
+        .unwrap();
+        let summary = analyse_vite_config(&cfg).expect("vite config parsed");
+        assert_eq!(
+            summary.compiler_options,
+            Some(serde_json::json!({ "experimental": { "async": true } }))
+        );
     }
 }

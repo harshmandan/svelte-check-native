@@ -50,12 +50,27 @@ if (typeof compile !== 'function') {
   process.exit(2)
 }
 
-// Optional: absolute path to the user's svelte.config.{js,mjs,cjs}.
-// Empty string when no config was discovered. Loaded once at startup
-// and merged into every compile() call so experimental rune flags
-// (e.g. `compilerOptions.experimental.async = true`) are honored.
+// Optional: absolute path to the user's svelte.config.{js,mjs,cjs}
+// (argv[3]) and statically extracted compilerOptions JSON (argv[4],
+// e.g. from `vite.config.*`). Loaded once at startup and merged into
+// every compile() call so experimental flags (e.g. `experimental.async`)
+// are honored in both SvelteKit 2 and SvelteKit 3 workspaces.
 const svelteConfigPath = process.argv[3] || ''
+const staticCompilerOptionsJson = process.argv[4] || ''
 let userCompilerOptions = {}
+if (staticCompilerOptionsJson) {
+  try {
+    const parsed = JSON.parse(staticCompilerOptionsJson)
+    if (parsed && typeof parsed === 'object') {
+      userCompilerOptions = parsed
+    }
+  } catch (e) {
+    console.error(
+      'bridge: failed to parse static compilerOptions JSON: ' +
+        (e?.message || String(e)) + ' — proceeding with defaults',
+    )
+  }
+}
 if (svelteConfigPath) {
   try {
     const mod = await import(pathToFileURL(svelteConfigPath).href)
@@ -63,7 +78,7 @@ if (svelteConfigPath) {
     // tolerate CJS-style { compilerOptions } at the module root too.
     const cfg = mod.default ?? mod
     if (cfg && typeof cfg === 'object' && cfg.compilerOptions) {
-      userCompilerOptions = cfg.compilerOptions
+      userCompilerOptions = { ...userCompilerOptions, ...cfg.compilerOptions }
     }
   } catch (e) {
     console.error(

@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Inline `compilerOptions.experimental.async: true` inside `vite.config.ts` `sveltekit({ ... })` must be honored in both native mode and `--svelte-warnings bridge` mode (the bridge integration is additionally locked in `crates/cli/tests/bridge_scope.rs`)."
+}

@@ -17,8 +17,18 @@ use std::process::Command;
 
 const MOCK_COMPILER: &str = r#"
 exports.VERSION = '5.55.0';
-exports.compile = (source) => {
+exports.compile = (source, options) => {
     if (source.includes('MOCK_CRASH')) process.exit(3);
+    if (source.includes('MOCK_ASYNC') && !options?.experimental?.async) {
+        const at = source.indexOf('MOCK_ASYNC');
+        const before = source.slice(0, at).split('\n');
+        const start = { line: before.length, column: before[before.length - 1].length };
+        const err = new Error('Cannot use `await` without experimental.async');
+        err.code = 'experimental_async';
+        err.start = start;
+        err.end = { line: start.line, column: start.column + 10 };
+        throw err;
+    }
     const warnings = [];
     const at = source.indexOf('MOCK_WARN');
     if (at >= 0) {
@@ -226,4 +236,94 @@ fn a_bridge_that_stops_answering_fails_the_run() {
     );
     assert!(stderr.contains("svelte-check failed"), "{stderr}");
     assert!(!stdout.contains("COMPLETED"), "{stdout}");
+}
+
+fn check_bridge_with_args(root: &Path, extra_args: &[&str]) -> (i32, String, String) {
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = crate_dir.parent().and_then(Path::parent).unwrap();
+    let tsgo = svn_typecheck::discover(repo_root)
+        .expect("could not locate native TypeScript; install dependencies or set TSGO_BIN");
+    let output = Command::new(env!("CARGO_BIN_EXE_svelte-check-native"))
+        .args(["--workspace", root.to_str().unwrap()])
+        .args(["--output", "machine-verbose"])
+        .args(["--diagnostic-sources", "svelte"])
+        .args(["--svelte-warnings", "bridge"])
+        .args(extra_args)
+        .env("TSGO_BIN", tsgo.path)
+        .env("SVN_BRIDGE_WORKERS", "1")
+        .output()
+        .expect("run svelte-check-native");
+    (
+        output.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+const ASYNC_PROBE: &str = "<script>\n  let x = 1;\n</script>\n<p>{x} MOCK_ASYNC</p>\n";
+
+#[test]
+fn bridge_reads_compiler_options_from_vite_config_sveltekit() {
+    let dir = workspace(&[
+        (
+            "vite.config.ts",
+            "import { sveltekit } from '@sveltejs/kit/vite';\nimport { defineConfig } from 'vite';\nexport default defineConfig({ plugins: [sveltekit({ compilerOptions: { experimental: { async: true } } })] });\n",
+        ),
+        ("src/A.svelte", ASYNC_PROBE),
+    ]);
+    let (code, stdout, stderr) = check_bridge_with_args(dir.path(), &[]);
+    assert_eq!(code, 0, "stdout: {stdout}\nstderr: {stderr}");
+    assert!(
+        stdout.contains("COMPLETED 1 FILES 0 ERRORS 0 WARNINGS 0 FILES_WITH_PROBLEMS"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn bridge_reads_compiler_options_from_vite_config_svelte() {
+    let dir = workspace(&[
+        (
+            "vite.config.ts",
+            "import { svelte } from '@sveltejs/vite-plugin-svelte';\nexport default { plugins: [svelte({ compilerOptions: { experimental: { async: true } } })] };\n",
+        ),
+        ("src/A.svelte", ASYNC_PROBE),
+    ]);
+    let (code, stdout, stderr) = check_bridge_with_args(dir.path(), &[]);
+    assert_eq!(code, 0, "stdout: {stdout}\nstderr: {stderr}");
+    assert!(
+        stdout.contains("COMPLETED 1 FILES 0 ERRORS 0 WARNINGS 0 FILES_WITH_PROBLEMS"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn bridge_honors_explicit_config_flag_for_vite_config() {
+    let dir = workspace(&[
+        (
+            "custom.vite.config.ts",
+            "import { sveltekit } from '@sveltejs/kit/vite';\nexport default { plugins: [sveltekit({ compilerOptions: { experimental: { async: true } } })] };\n",
+        ),
+        ("src/A.svelte", ASYNC_PROBE),
+    ]);
+    let (code, stdout, stderr) =
+        check_bridge_with_args(dir.path(), &["--config", "./custom.vite.config.ts"]);
+    assert_eq!(code, 0, "stdout: {stdout}\nstderr: {stderr}");
+    assert!(
+        stdout.contains("COMPLETED 1 FILES 0 ERRORS 0 WARNINGS 0 FILES_WITH_PROBLEMS"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn bridge_fails_without_experimental_async_in_vite_config() {
+    let dir = workspace(&[
+        (
+            "vite.config.ts",
+            "import { sveltekit } from '@sveltejs/kit/vite';\nexport default { plugins: [sveltekit({})] };\n",
+        ),
+        ("src/A.svelte", ASYNC_PROBE),
+    ]);
+    let (code, stdout, stderr) = check_bridge_with_args(dir.path(), &[]);
+    assert_eq!(code, 1, "stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("experimental_async"), "{stdout}");
 }

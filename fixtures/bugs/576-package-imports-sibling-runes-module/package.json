@@ -1,0 +1,8 @@
+{
+    "name": "fixture-package-imports-sibling-runes-module",
+    "private": true,
+    "type": "module",
+    "imports": {
+        "#lib/*": "./src/lib/*"
+    }
+}

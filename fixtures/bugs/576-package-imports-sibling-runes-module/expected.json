@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A `#lib/Counter.svelte` import (from package.json `imports`) alongside a sibling `Counter.svelte.ts` runes module must resolve to the component's overlay declaration in both `.svelte` and `.ts` consumers, preserving default export, module snippet export (`badge`), and contextual callback parameter typing (`payload`). Because package.json `imports` never probes extensions, overlay `paths` aliases list the overlay mirror before the source tree."
+}

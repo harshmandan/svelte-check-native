@@ -419,11 +419,11 @@ impl CheckSession {
     }
 
     /// Extra `paths` entries — pattern and absolute target, `*` kept —
-    /// for the overlay tsconfig. Each gets the treatment the user's own
-    /// entries get: its target, then that target's mirror in the
-    /// overlay, so a `.svelte` file reached through the alias resolves
-    /// to its generated types. A pattern the user's `paths` already maps
-    /// is left to the user's entry.
+    /// for the overlay tsconfig. Each puts its overlay mirror BEFORE the
+    /// source target so `.svelte` specifiers from `package.json` `imports`
+    /// resolve to generated `.d.svelte.ts` declarations rather than
+    /// probing `.ts` onto a sibling `.svelte.ts` runes module. A pattern
+    /// the user's `paths` already maps is left to the user's entry.
     pub fn set_path_aliases(&mut self, aliases: Vec<(String, PathBuf)>) {
         self.path_aliases = aliases;
     }

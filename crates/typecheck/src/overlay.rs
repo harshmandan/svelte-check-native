@@ -220,14 +220,22 @@ pub fn build(
         }
     }
 
+    let mut overlay_first_patterns: HashSet<String> = HashSet::new();
     // TSGO-ENHANCEMENT: aliases the caller adds (package.json `imports`)
     // join after the user's own, and never replace a pattern the user
     // maps: their `paths` entry is what the compiler would use.
+    // Because package.json `imports` never probes extensions, list the
+    // overlay mirror BEFORE the source tree so `#lib/X.svelte` lands on
+    // `<overlay>/svelte/.../X.d.svelte.ts` instead of probing `.ts` onto
+    // a sibling `X.svelte.ts` runes module (falling back to the source
+    // tree only when no overlay ambient was written, e.g. handwritten
+    // `X.d.svelte.ts`).
     for (pattern, target) in path_aliases {
         if paths_accumulated.contains_key(pattern) {
             continue;
         }
         let s = normalize(target).to_string_lossy().into_owned();
+        overlay_first_patterns.insert(pattern.clone());
         paths_keys_order.push(pattern.clone());
         paths_accumulated.insert(pattern.clone(), (vec![s.clone()], HashSet::from([s])));
     }
@@ -243,14 +251,22 @@ pub fn build(
 
     for pattern in paths_keys_order {
         let (values, _) = paths_accumulated.remove(&pattern).unwrap_or_default();
+        let overlay_first = overlay_first_patterns.contains(&pattern);
         let mut merged: Vec<String> = Vec::with_capacity(values.len() * 2);
         let mut seen: HashSet<String> = HashSet::with_capacity(values.len() * 2);
         for v in values {
             let mirrored = mirror_into_overlay(layout, &v);
+            if overlay_first
+                && let Some(m) = mirrored.as_ref()
+                && seen.insert(m.clone())
+            {
+                merged.push(m.clone());
+            }
             if seen.insert(v.clone()) {
                 merged.push(v);
             }
-            if let Some(m) = mirrored
+            if !overlay_first
+                && let Some(m) = mirrored
                 && seen.insert(m.clone())
             {
                 merged.push(m);
@@ -669,6 +685,9 @@ fn mirror_into_overlay(layout: &CacheLayout, path_str: &str) -> Option<String> {
         layout.workspace.join(p)
     };
     let normalized = normalize(&abs);
+    if normalized.starts_with(&layout.root) {
+        return None;
+    }
     let rel = normalized.strip_prefix(&layout.workspace).ok()?;
     let mirrored = layout.svelte_dir.join(rel);
     Some(mirrored.to_string_lossy().into_owned())
@@ -1263,5 +1282,56 @@ mod tests {
         let inherited = ws.join("src/**/*").to_string_lossy().into_owned();
         assert_eq!(include.first(), Some(&inherited));
         assert!(!include.contains(&ws.join("**/*").to_string_lossy().into_owned()));
+    }
+
+    #[test]
+    fn path_aliases_put_overlay_mirror_before_source() {
+        let tmp = tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        let user_ts = ws.join("tsconfig.json");
+        write_file(
+            &user_ts,
+            r#"{ "compilerOptions": { "paths": { "$lib/*": ["./src/lib/*"] } } }"#,
+        );
+        let layout = CacheLayout::for_workspace(&ws);
+        let aliases = vec![("#lib/*.svelte".to_string(), ws.join("src/lib/*.svelte"))];
+        let overlay = build(&layout, &user_ts, &[], &[], &[], None, &aliases, &[]);
+        let paths = overlay["compilerOptions"]["paths"].as_object().unwrap();
+
+        let expected_src = ws.join("src/lib/*.svelte").to_string_lossy().into_owned();
+        let expected_overlay = layout
+            .svelte_dir
+            .join("src/lib/*.svelte")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            paths["#lib/*.svelte"],
+            json!([expected_overlay, expected_src])
+        );
+
+        let user_src = ws.join("src/lib/*").to_string_lossy().into_owned();
+        let user_overlay = layout
+            .svelte_dir
+            .join("src/lib/*")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(paths["$lib/*"], json!([user_src, user_overlay]));
+    }
+
+    #[test]
+    fn path_aliases_under_cache_root_are_not_double_mirrored() {
+        let tmp = tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        let user_ts = ws.join("tsconfig.json");
+        write_file(&user_ts, "{}");
+        let layout = CacheLayout::for_workspace(&ws);
+        let stub = layout.svelte_dir.join("__svn_missing/0.d.ts");
+        let aliases = vec![("#missing/X.svelte".to_string(), stub.clone())];
+        let overlay = build(&layout, &user_ts, &[], &[], &[], None, &aliases, &[]);
+        let paths = overlay["compilerOptions"]["paths"].as_object().unwrap();
+        assert_eq!(
+            paths["#missing/X.svelte"],
+            json!([stub.to_string_lossy().into_owned()])
+        );
     }
 }

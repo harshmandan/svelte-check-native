@@ -51,26 +51,29 @@ if (typeof compile !== 'function') {
 }
 
 // Optional: absolute path to the user's svelte.config.{js,mjs,cjs}
-// (argv[3]) and statically extracted compilerOptions JSON (argv[4],
-// e.g. from `vite.config.*`). Loaded once at startup and merged into
-// every compile() call so experimental flags (e.g. `experimental.async`)
-// are honored in both SvelteKit 2 and SvelteKit 3 workspaces.
+// (argv[3]) and statically read compilerOptions JSON (argv[4]): the
+// inline options of a `svelte()` / `sveltekit()` Vite plugin, or the
+// options of a config the runtime can't import. Loaded once at startup.
+// The JSON is deep-merged over the imported config's options, objects
+// key by key and anything else replaced, as vite-plugin-svelte merges
+// its inline options over `svelte.config.*`.
 const svelteConfigPath = process.argv[3] || ''
 const staticCompilerOptionsJson = process.argv[4] || ''
-let userCompilerOptions = {}
-if (staticCompilerOptionsJson) {
-  try {
-    const parsed = JSON.parse(staticCompilerOptionsJson)
-    if (parsed && typeof parsed === 'object') {
-      userCompilerOptions = parsed
-    }
-  } catch (e) {
-    console.error(
-      'bridge: failed to parse static compilerOptions JSON: ' +
-        (e?.message || String(e)) + ' — proceeding with defaults',
-    )
-  }
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
+
+function deepMerge(under, over) {
+  if (!isPlainObject(under) || !isPlainObject(over)) return over
+  const out = { ...under }
+  for (const [key, value] of Object.entries(over)) {
+    out[key] = key in out ? deepMerge(out[key], value) : value
+  }
+  return out
+}
+
+let userCompilerOptions = {}
 if (svelteConfigPath) {
   try {
     const mod = await import(pathToFileURL(svelteConfigPath).href)
@@ -78,11 +81,24 @@ if (svelteConfigPath) {
     // tolerate CJS-style { compilerOptions } at the module root too.
     const cfg = mod.default ?? mod
     if (cfg && typeof cfg === 'object' && cfg.compilerOptions) {
-      userCompilerOptions = { ...userCompilerOptions, ...cfg.compilerOptions }
+      userCompilerOptions = cfg.compilerOptions
     }
   } catch (e) {
     console.error(
       'bridge: failed to load svelte.config (' + svelteConfigPath + '): ' +
+        (e?.message || String(e)) + ' — proceeding with defaults',
+    )
+  }
+}
+if (staticCompilerOptionsJson) {
+  try {
+    const parsed = JSON.parse(staticCompilerOptionsJson)
+    if (isPlainObject(parsed)) {
+      userCompilerOptions = deepMerge(userCompilerOptions, parsed)
+    }
+  } catch (e) {
+    console.error(
+      'bridge: failed to parse static compilerOptions JSON: ' +
         (e?.message || String(e)) + ' — proceeding with defaults',
     )
   }

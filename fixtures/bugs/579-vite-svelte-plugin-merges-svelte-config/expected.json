@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "The `svelte()` Vite plugin loads `svelte.config.js` from the Vite root and deep-merges its inline options over it, so `experimental.async: true` set only in `svelte.config.js` still applies when `vite.config.ts` passes other `compilerOptions` inline. The SvelteKit plugin does not merge; see 578."
+}

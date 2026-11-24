@@ -219,11 +219,12 @@ pub struct SvelteConfigSummary {
     /// What the compiler's validation of `compilerOptions` reports, when
     /// the options can be read statically and it reports anything.
     pub compile_options: Option<std::sync::Arc<svn_lint::CompileOptionsCheck>>,
-    /// Statically serialisable subset of `compilerOptions` (booleans,
-    /// strings, finite numbers, nulls, arrays, nested objects) for
-    /// forwarding to `--svelte-warnings bridge` when the config cannot
-    /// be imported directly (e.g. `vite.config.*` inline options).
-    pub compiler_options: Option<serde_json::Value>,
+    /// Where `--svelte-warnings bridge` gets this config's
+    /// `compilerOptions`: a `svelte.config.*` it can import, and the
+    /// statically readable options it deep-merges on top (inline
+    /// `vite.config.*` plugin options, or a config it cannot import).
+    /// The default leaves the bridge to look for a config itself.
+    pub bridge: svn_svelte_compiler::BridgeConfig,
 }
 
 /// The per-file subset of a config — the settings upstream applies PER
@@ -456,10 +457,38 @@ pub fn analyse(config_path: &Path) -> SvelteConfigSummary {
         default_export_config_object(&parsed.program).is_some_and(sets_preprocess);
     summary.compile_options =
         default_export_config_object(&parsed.program).and_then(compile_options_check);
-    summary.compiler_options =
-        default_export_config_object(&parsed.program).and_then(static_compiler_options);
+    summary.bridge = bridge_for_svelte_config(
+        config_path,
+        default_export_config_object(&parsed.program).and_then(static_compiler_options),
+    );
 
     summary
+}
+
+/// A `vite.config.*` file, which `--config` can name in place of a
+/// `svelte.config.*`.
+pub fn is_vite_config_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.starts_with("vite.config."))
+}
+
+/// The bridge's view of a `svelte.config.*`: imported when the JS
+/// runtime can load it as is, otherwise its statically readable
+/// `compilerOptions`.
+fn bridge_for_svelte_config(
+    config_path: &Path,
+    static_options: Option<serde_json::Value>,
+) -> svn_svelte_compiler::BridgeConfig {
+    let importable = config_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| matches!(ext, "js" | "mjs" | "cjs"));
+    svn_svelte_compiler::BridgeConfig {
+        svelte_config: importable.then(|| config_path.to_path_buf()),
+        compiler_options: if importable { None } else { static_options },
+        disable_config_discovery: true,
+    }
 }
 
 /// [`analyse`], plus the kit file settings of a config that can only be
@@ -496,6 +525,16 @@ pub fn analyse_with_kit_files(config_path: &Path) -> SvelteConfigSummary {
 /// vitePlugin, ...kit } = pluginOptions` rest-destructure.
 /// `compilerOptions` keeps the same relative position, so warningFilter
 /// and namespace extraction are shared with the `svelte.config.js` path.
+///
+/// The two plugins treat a `svelte.config.*` beside the inline options
+/// differently, and upstream sees each plugin's final options:
+/// - `sveltekit({ ... })` ignores `svelte.config.*` entirely
+///   (svelte/kit#15944: "it's either-or, not a merge");
+/// - `svelte({ ... })` loads `svelte.config.{js,ts,mjs,mts}` from the
+///   Vite root (or its `configFile` option, or none for
+///   `configFile: false`) and deep-merges the inline options over it,
+///   arrays replaced (vite-plugin-svelte `preResolveOptions` /
+///   `mergeConfigs`). See [`merge_svelte_config_under_plugin`].
 pub fn analyse_vite_config(config_path: &Path) -> Option<SvelteConfigSummary> {
     let source = std::fs::read_to_string(config_path).ok()?;
     let source_type = SourceType::from_path(config_path).unwrap_or_default();
@@ -533,9 +572,172 @@ pub fn analyse_vite_config(config_path: &Path) -> Option<SvelteConfigSummary> {
     summary.ts_scripts_transpiled = preprocess_transpiles_ts(plugin_obj, &parsed.program);
     summary.preprocess_configured = sets_preprocess(plugin_obj);
     summary.compile_options = compile_options_check(plugin_obj);
-    summary.compiler_options = static_compiler_options(plugin_obj);
+    summary.bridge = svn_svelte_compiler::BridgeConfig {
+        svelte_config: None,
+        compiler_options: static_compiler_options(plugin_obj),
+        disable_config_discovery: true,
+    };
+
+    if !is_kit && let Some(base) = svelte_plugin_base_config(config_path, plugin_obj) {
+        merge_svelte_config_under_plugin(&mut summary, &base, plugin_obj);
+    }
 
     Some(summary)
+}
+
+/// The `svelte.config.*` the `svelte()` Vite plugin loads under its
+/// inline options: none for `configFile: false`, the named file for a
+/// string `configFile` (resolved against the Vite root), otherwise the
+/// first of `svelte.config.{js,ts,mjs,mts}` in the Vite root. The Vite
+/// root is the config file's directory — upstream resolves the config
+/// with `root` set to it. A `configFile` we can't read statically
+/// loads nothing here rather than a guessed file.
+fn svelte_plugin_base_config(
+    vite_config: &Path,
+    plugin_obj: &ObjectExpression<'_>,
+) -> Option<PathBuf> {
+    let root = vite_config.parent()?;
+    match lookup_object_property(plugin_obj, "configFile").map(Expression::without_parentheses) {
+        None => ["js", "ts", "mjs", "mts"]
+            .iter()
+            .map(|ext| root.join(format!("svelte.config.{ext}")))
+            .find(|p| p.is_file()),
+        Some(Expression::StringLiteral(s)) => {
+            let named = root.join(s.value.as_str()?);
+            named.is_file().then_some(named)
+        }
+        Some(_) => None,
+    }
+}
+
+/// Fold the `svelte.config.*` at `base` under the inline `svelte()`
+/// plugin options already in `summary`, as vite-plugin-svelte's deep
+/// merge does: a setting the inline object spells out wins, anything it
+/// leaves out comes from `base`, and objects merge key by key. A
+/// setting the inline object only reaches through a non-literal value
+/// can't be read, so `base` keeps it.
+fn merge_svelte_config_under_plugin(
+    summary: &mut SvelteConfigSummary,
+    base: &Path,
+    plugin_obj: &ObjectExpression<'_>,
+) {
+    let under = analyse(base);
+    let inline_compiler = compiler_options_in_object(plugin_obj);
+
+    if warning_filter_in_object(plugin_obj).is_none() {
+        summary.warning_filter_plan = under.warning_filter_plan;
+    }
+    if inline_compiler
+        .and_then(|co| lookup_object_property(co, "runes"))
+        .is_none()
+    {
+        summary.runes = under.runes;
+    }
+    let sets_async = inline_compiler
+        .and_then(|co| lookup_object_property(co, "experimental"))
+        .and_then(|e| match e.without_parentheses() {
+            Expression::ObjectExpression(exp) => lookup_object_property(exp, "async"),
+            _ => None,
+        })
+        .is_some();
+    if !sets_async {
+        summary.experimental_async = under.experimental_async;
+    }
+    if lookup_object_property(plugin_obj, "preprocess").is_none() {
+        summary.ts_scripts_transpiled = under.ts_scripts_transpiled;
+        summary.preprocess_configured = under.preprocess_configured;
+    }
+
+    let under_options = compile_option_value_of_file(base);
+    summary.compile_options = match (under_options, inline_compiler) {
+        (None, _) => summary.compile_options.take(),
+        (Some(_), None) => under.compile_options,
+        (Some(under_value), Some(inline)) => {
+            match merge_option_values(under_value, option_value_of_object(inline)) {
+                svn_lint::OptionValue::Object(entries) => {
+                    let check = svn_lint::check_compile_options(&entries);
+                    (!check.is_empty()).then(|| std::sync::Arc::new(check))
+                }
+                _ => None,
+            }
+        }
+    };
+
+    let inline_static = summary.bridge.compiler_options.take();
+    summary.bridge = match under.bridge.svelte_config {
+        Some(import) => svn_svelte_compiler::BridgeConfig {
+            svelte_config: Some(import),
+            compiler_options: inline_static,
+            disable_config_discovery: true,
+        },
+        None => svn_svelte_compiler::BridgeConfig {
+            svelte_config: None,
+            compiler_options: match (under.bridge.compiler_options, inline_static) {
+                (Some(mut under_json), Some(inline_json)) => {
+                    merge_json(&mut under_json, inline_json);
+                    Some(under_json)
+                }
+                (under_json, inline_json) => inline_json.or(under_json),
+            },
+            disable_config_discovery: true,
+        },
+    };
+}
+
+/// The `compilerOptions` of the config file at `path` as a compile-option
+/// value, when the file exports a config object with a literal
+/// `compilerOptions`.
+fn compile_option_value_of_file(path: &Path) -> Option<svn_lint::OptionValue> {
+    let source = std::fs::read_to_string(path).ok()?;
+    let source_type = SourceType::from_path(path).unwrap_or_default();
+    let alloc = Allocator::default();
+    let parsed = Parser::new(&alloc, &source, source_type).parse();
+    let options = compiler_options_in_object(default_export_config_object(&parsed.program)?)?;
+    Some(option_value_of_object(options))
+}
+
+/// `over` deep-merged onto `under` the way the `deepmerge` package does
+/// it for vite-plugin-svelte: objects merge key by key, anything else in
+/// `over` replaces what `under` had. An object whose keys a static read
+/// can't list stays unknown.
+fn merge_option_values(
+    under: svn_lint::OptionValue,
+    over: svn_lint::OptionValue,
+) -> svn_lint::OptionValue {
+    use svn_lint::OptionValue;
+    match (under, over) {
+        (OptionValue::Object(mut entries), OptionValue::Object(over_entries)) => {
+            for (key, value) in over_entries {
+                match entries.iter().rposition(|(k, _)| *k == key) {
+                    Some(at) => {
+                        let previous = std::mem::replace(&mut entries[at].1, OptionValue::Unknown);
+                        entries[at].1 = merge_option_values(previous, value);
+                    }
+                    None => entries.push((key, value)),
+                }
+            }
+            OptionValue::Object(entries)
+        }
+        (OptionValue::Unknown, OptionValue::Object(_)) => OptionValue::Unknown,
+        (_, over) => over,
+    }
+}
+
+/// [`merge_option_values`] for the bridge's JSON options.
+fn merge_json(under: &mut serde_json::Value, over: serde_json::Value) {
+    match (under, over) {
+        (serde_json::Value::Object(under_map), serde_json::Value::Object(over_map)) => {
+            for (key, value) in over_map {
+                match under_map.get_mut(&key) {
+                    Some(existing) => merge_json(existing, value),
+                    None => {
+                        under_map.insert(key, value);
+                    }
+                }
+            }
+        }
+        (under, over) => *under = over,
+    }
 }
 
 /// Locate the inline options object passed to the `sveltekit(...)` /
@@ -2569,7 +2771,7 @@ export default defineConfig({
         .unwrap();
         let summary = analyse_vite_config(&cfg).expect("vite config parsed");
         assert_eq!(
-            summary.compiler_options,
+            summary.bridge.compiler_options,
             Some(serde_json::json!({
                 "experimental": { "async": true },
                 "runes": true
@@ -2599,8 +2801,178 @@ export default {
         .unwrap();
         let summary = analyse_vite_config(&cfg).expect("vite config parsed");
         assert_eq!(
-            summary.compiler_options,
+            summary.bridge.compiler_options,
             Some(serde_json::json!({ "experimental": { "async": true } }))
+        );
+    }
+
+    fn write(dir: &Path, name: &str, text: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    #[test]
+    fn svelte_plugin_options_merge_over_svelte_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = write(
+            tmp.path(),
+            "svelte.config.js",
+            "import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';\nexport default { preprocess: vitePreprocess(), compilerOptions: { experimental: { async: true } } };\n",
+        );
+        let cfg = write(
+            tmp.path(),
+            "vite.config.ts",
+            "import { svelte } from '@sveltejs/vite-plugin-svelte';\nexport default { plugins: [svelte({ compilerOptions: { runes: true } })] };\n",
+        );
+        let summary = analyse_vite_config(&cfg).expect("vite config parsed");
+        assert!(summary.experimental_async);
+        assert_eq!(summary.runes, Some(true));
+        assert!(summary.preprocess_configured);
+        assert_eq!(summary.bridge.svelte_config, Some(base));
+        assert_eq!(
+            summary.bridge.compiler_options,
+            Some(serde_json::json!({ "runes": true }))
+        );
+    }
+
+    #[test]
+    fn svelte_plugin_inline_setting_wins_over_svelte_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            tmp.path(),
+            "svelte.config.js",
+            "export default { compilerOptions: { runes: false, experimental: { async: true } } };\n",
+        );
+        let cfg = write(
+            tmp.path(),
+            "vite.config.ts",
+            "import { svelte } from '@sveltejs/vite-plugin-svelte';\nexport default { plugins: [svelte({ compilerOptions: { runes: true, experimental: { async: false } } })] };\n",
+        );
+        let summary = analyse_vite_config(&cfg).expect("vite config parsed");
+        assert!(!summary.experimental_async);
+        assert_eq!(summary.runes, Some(true));
+    }
+
+    #[test]
+    fn svelte_plugin_config_file_false_skips_svelte_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            tmp.path(),
+            "svelte.config.js",
+            "export default { compilerOptions: { experimental: { async: true } } };\n",
+        );
+        let cfg = write(
+            tmp.path(),
+            "vite.config.ts",
+            "import { svelte } from '@sveltejs/vite-plugin-svelte';\nexport default { plugins: [svelte({ configFile: false, compilerOptions: { runes: true } })] };\n",
+        );
+        let summary = analyse_vite_config(&cfg).expect("vite config parsed");
+        assert!(!summary.experimental_async);
+        assert_eq!(summary.bridge.svelte_config, None);
+    }
+
+    #[test]
+    fn svelte_plugin_named_config_file_is_merged() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("cfg")).unwrap();
+        let base = write(
+            &tmp.path().join("cfg"),
+            "custom.js",
+            "export default { compilerOptions: { experimental: { async: true } } };\n",
+        );
+        let cfg = write(
+            tmp.path(),
+            "vite.config.ts",
+            "import { svelte } from '@sveltejs/vite-plugin-svelte';\nexport default { plugins: [svelte({ configFile: './cfg/custom.js', compilerOptions: { runes: true } })] };\n",
+        );
+        let summary = analyse_vite_config(&cfg).expect("vite config parsed");
+        assert!(summary.experimental_async);
+        assert_eq!(summary.bridge.svelte_config, Some(base));
+    }
+
+    #[test]
+    fn sveltekit_plugin_options_ignore_svelte_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            tmp.path(),
+            "svelte.config.js",
+            "export default { compilerOptions: { experimental: { async: true } } };\n",
+        );
+        let cfg = write(
+            tmp.path(),
+            "vite.config.ts",
+            "import { sveltekit } from '@sveltejs/kit/vite';\nexport default { plugins: [sveltekit({ compilerOptions: { runes: true } })] };\n",
+        );
+        let summary = analyse_vite_config(&cfg).expect("vite config parsed");
+        assert!(!summary.experimental_async);
+        assert_eq!(summary.bridge.svelte_config, None);
+    }
+
+    #[test]
+    fn svelte_plugin_over_ts_svelte_config_merges_static_options() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            tmp.path(),
+            "svelte.config.ts",
+            "export default { compilerOptions: { runes: false, experimental: { async: true } } };\n",
+        );
+        let cfg = write(
+            tmp.path(),
+            "vite.config.ts",
+            "import { svelte } from '@sveltejs/vite-plugin-svelte';\nexport default { plugins: [svelte({ compilerOptions: { runes: true } })] };\n",
+        );
+        let summary = analyse_vite_config(&cfg).expect("vite config parsed");
+        assert_eq!(summary.bridge.svelte_config, None);
+        assert_eq!(
+            summary.bridge.compiler_options,
+            Some(serde_json::json!({ "runes": true, "experimental": { "async": true } }))
+        );
+    }
+
+    #[test]
+    fn svelte_config_js_is_imported_by_the_bridge_without_static_options() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = write(
+            tmp.path(),
+            "svelte.config.js",
+            "export default { compilerOptions: { experimental: { async: true } } };\n",
+        );
+        let summary = analyse(&cfg);
+        assert_eq!(summary.bridge.svelte_config, Some(cfg));
+        assert_eq!(summary.bridge.compiler_options, None);
+        assert!(summary.bridge.disable_config_discovery);
+    }
+
+    #[test]
+    fn merged_compile_options_are_validated_together() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            tmp.path(),
+            "svelte.config.js",
+            "export default { compilerOptions: { dev: 'yes' } };\n",
+        );
+        let overridden = write(
+            tmp.path(),
+            "vite.config.ts",
+            "import { svelte } from '@sveltejs/vite-plugin-svelte';\nexport default { plugins: [svelte({ compilerOptions: { dev: true } })] };\n",
+        );
+        assert!(
+            analyse_vite_config(&overridden)
+                .unwrap()
+                .compile_options
+                .is_none()
+        );
+        let kept = write(
+            tmp.path(),
+            "vite.config.ts",
+            "import { svelte } from '@sveltejs/vite-plugin-svelte';\nexport default { plugins: [svelte({ compilerOptions: { runes: true } })] };\n",
+        );
+        assert!(
+            analyse_vite_config(&kept)
+                .unwrap()
+                .compile_options
+                .is_some()
         );
     }
 }

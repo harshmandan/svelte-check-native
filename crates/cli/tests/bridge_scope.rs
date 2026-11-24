@@ -327,3 +327,60 @@ fn bridge_fails_without_experimental_async_in_vite_config() {
     assert_eq!(code, 1, "stdout: {stdout}\nstderr: {stderr}");
     assert!(stdout.contains("experimental_async"), "{stdout}");
 }
+
+#[test]
+fn bridge_merges_svelte_plugin_options_over_svelte_config() {
+    let dir = workspace(&[
+        (
+            "vite.config.ts",
+            "import { svelte } from '@sveltejs/vite-plugin-svelte';\nexport default { plugins: [svelte({ compilerOptions: { runes: true } })] };\n",
+        ),
+        (
+            "svelte.config.mjs",
+            "export default { compilerOptions: { experimental: { async: true } } };\n",
+        ),
+        ("src/A.svelte", ASYNC_PROBE),
+    ]);
+    let (code, stdout, stderr) = check_bridge_with_args(dir.path(), &[]);
+    assert_eq!(code, 0, "stdout: {stdout}\nstderr: {stderr}");
+    assert!(
+        stdout.contains("COMPLETED 1 FILES 0 ERRORS 0 WARNINGS 0 FILES_WITH_PROBLEMS"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn bridge_lets_svelte_plugin_options_override_svelte_config() {
+    let dir = workspace(&[
+        (
+            "vite.config.ts",
+            "import { svelte } from '@sveltejs/vite-plugin-svelte';\nexport default { plugins: [svelte({ compilerOptions: { experimental: { async: false } } })] };\n",
+        ),
+        (
+            "svelte.config.mjs",
+            "export default { compilerOptions: { experimental: { async: true } } };\n",
+        ),
+        ("src/A.svelte", ASYNC_PROBE),
+    ]);
+    let (code, stdout, stderr) = check_bridge_with_args(dir.path(), &[]);
+    assert_eq!(code, 1, "stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("experimental_async"), "{stdout}");
+}
+
+#[test]
+fn bridge_ignores_svelte_config_under_sveltekit_plugin_options() {
+    let dir = workspace(&[
+        (
+            "vite.config.ts",
+            "import { sveltekit } from '@sveltejs/kit/vite';\nexport default { plugins: [sveltekit({ compilerOptions: { runes: true } })] };\n",
+        ),
+        (
+            "svelte.config.mjs",
+            "export default { compilerOptions: { experimental: { async: true } } };\n",
+        ),
+        ("src/A.svelte", ASYNC_PROBE),
+    ]);
+    let (code, stdout, stderr) = check_bridge_with_args(dir.path(), &[]);
+    assert_eq!(code, 1, "stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("experimental_async"), "{stdout}");
+}

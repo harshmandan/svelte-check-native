@@ -476,7 +476,6 @@ fn run() -> ExitCode {
     // mirrors upstream `@sveltejs/load-config`, which reads the Vite
     // plugin's `api.options` first and only falls back to
     // `svelte.config.js` when the plugin exposes no inline options).
-    let mut config_from_vite = false;
     let (analysed_config, svelte_config_summary): (
         Option<PathBuf>,
         svelte_config::SvelteConfigSummary,
@@ -497,17 +496,20 @@ fn run() -> ExitCode {
             );
             return ExitCode::from(2);
         }
-        let summary = if let Some(vite_summary) = svelte_config::analyse_vite_config(&resolved) {
-            config_from_vite = true;
-            vite_summary
-        } else {
-            svelte_config::analyse_with_kit_files(&resolved)
-        };
+        let summary = svelte_config::analyse_vite_config(&resolved).unwrap_or_else(|| {
+            let mut summary = svelte_config::analyse_with_kit_files(&resolved);
+            // A vite.config whose plugin options can't be read statically
+            // gives the bridge nothing to import; it looks for a
+            // svelte.config itself, as it does without `--config`.
+            if svelte_config::is_vite_config_file(&resolved) {
+                summary.bridge = svn_svelte_compiler::BridgeConfig::default();
+            }
+            summary
+        });
         (Some(resolved), summary)
     } else if let Some((path, summary)) = svelte_config::find_vite_config(&workspace)
         .and_then(|p| svelte_config::analyse_vite_config(&p).map(|s| (p, s)))
     {
-        config_from_vite = true;
         (Some(path), summary)
     } else if let Some(path) = svelte_config::find_svelte_config(&workspace) {
         let summary = svelte_config::analyse_with_kit_files(&path);
@@ -522,25 +524,9 @@ fn run() -> ExitCode {
             },
         )
     };
-    let bridge_config = if config_from_vite {
-        svn_svelte_compiler::BridgeConfig {
-            svelte_config: None,
-            compiler_options: svelte_config_summary.compiler_options.clone(),
-            disable_config_discovery: true,
-        }
-    } else if let Some(cfg_path) = &analysed_config {
-        let importable = cfg_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|ext| matches!(ext, "js" | "mjs" | "cjs"));
-        svn_svelte_compiler::BridgeConfig {
-            svelte_config: importable.then(|| cfg_path.clone()),
-            compiler_options: svelte_config_summary.compiler_options.clone(),
-            disable_config_discovery: true,
-        }
-    } else {
-        svn_svelte_compiler::BridgeConfig::default()
-    };
+    // What `--svelte-warnings bridge` compiles with: the config the
+    // summary came from, or its own lookup when there is none.
+    let bridge_config = svelte_config_summary.bridge.clone();
     if let Some(cfg) = &analysed_config {
         warn_partial_warning_filter(cfg, &svelte_config_summary.warning_filter_plan);
     }

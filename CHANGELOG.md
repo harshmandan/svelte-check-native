@@ -4,6 +4,41 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.2]
+
+Svelte config read the way the Vite plugins merge it, `@ts-expect-error`
+honored on missing `.svelte` imports, and a clearer notice for
+`--tsgo-experimental-api`.
+
+### Fixed
+
+- **`svelte({ ... })` Vite plugin options merge over
+  `svelte.config.*`**, as vite-plugin-svelte merges them: the config
+  next to `vite.config` (or the plugin's `configFile`, or none for
+  `configFile: false`) supplies every setting the inline options leave
+  out, objects merge key by key, and `compilerOptions` is validated as
+  the merged object. Before, inline options replaced the whole config,
+  so `experimental.async: true` kept in `svelte.config.js` was lost and
+  every top-level `await` was reported. `sveltekit({ ... })` options
+  still replace `svelte.config.*` entirely, as SvelteKit does.
+- **`--svelte-warnings=bridge` reads options passed inline in
+  `vite.config.*`.** The bridge only looked for `svelte.config.js`, so a
+  SvelteKit 3 app configured through `sveltekit({ compilerOptions })`
+  compiled with default options. It now gets the inline options, merged
+  over `svelte.config.*` for the `svelte()` plugin; a `svelte.config.ts`
+  it can't import contributes its statically readable options.
+- **`// @ts-expect-error` and `// @ts-ignore` above an import of a
+  missing `.svelte` file suppress its TS2307**, as they do in the
+  default `svelte-check`. A satisfied `@ts-expect-error` is no longer
+  reported as unused.
+
+### Changed
+
+- `--tsgo-experimental-api` still does nothing, and its notice now says
+  so plainly: results match `svelte-check --tsgo` and can differ from
+  upstream's API mode, which resolves `.svelte` files differently (for
+  example a component beside a `.svelte.ts` module of the same name).
+
 ## [1.12.1]
 
 Fixes found reviewing 1.12.0: bridge mode could fall out of step with

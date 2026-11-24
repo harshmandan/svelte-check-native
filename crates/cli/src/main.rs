@@ -338,7 +338,10 @@ fn run() -> ExitCode {
     }
     if cli.tsgo_experimental_api {
         // Accepted for drop-in compat (upstream's test-sanity.js passes
-        // it), but redundant: there's no alternate engine to select.
+        // it), but it selects nothing: every run checks the way
+        // `svelte-check --tsgo` does. Upstream's API mode serves `.svelte`
+        // types through a filesystem proxy and can report different
+        // results, so the notice says which mode the output matches.
         // Printed in warning yellow (33) — same color the tool uses for
         // WARNING diagnostics — honoring --color/--no-color; Auto checks
         // stderr since the notice goes there.
@@ -347,7 +350,7 @@ fn run() -> ExitCode {
             ColorMode::Never => false,
             ColorMode::Auto => std::io::IsTerminal::is_terminal(&std::io::stderr()),
         };
-        let msg = "svelte-check-native: --tsgo-experimental-api isn't needed — svelte-check-native always type-checks with tsgo.";
+        let msg = "svelte-check-native: --tsgo-experimental-api is ignored — results match `svelte-check --tsgo` and can differ from upstream's API mode.";
         if color {
             eprintln!("\x1b[33m{msg}\x1b[0m");
         } else {
